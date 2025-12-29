@@ -13,6 +13,7 @@ import { useCreateWallet as useCreateSolanaWallet } from "@privy-io/react-auth/s
 import Image from "next/image";
 import { FcGoogle } from "react-icons/fc";
 import { IoMailSharp } from "react-icons/io5";
+import { ChevronDown } from "lucide-react";
 
 // ----------------- Page -----------------
 
@@ -34,19 +35,25 @@ export default function SignInPage() {
   // Guard for wallet creation in StrictMode
   const walletCreationAttemptedRef = useRef(false);
 
-  // 🔗 Referral code state
+  // 🔗 Referral code state (from URL)
   const initialReferralFromLink = searchParams.get("ref") || "";
   const [referralCode, setReferralCode] = useState(initialReferralFromLink);
 
   // 🔗 NEW: personal invite token from URL
   const inviteTokenFromLink = searchParams.get("invite") || "";
 
+  // ✅ Referral dropdown UI state
+  const [referralOpen, setReferralOpen] = useState(false);
+
   useEffect(() => {
     // keep referralCode in sync if the URL changes
-    if (initialReferralFromLink) {
-      setReferralCode(initialReferralFromLink);
+    if (initialReferralFromLink) setReferralCode(initialReferralFromLink);
+
+    // ✅ auto-open referral section if they arrived via referral or invite link
+    if (initialReferralFromLink || inviteTokenFromLink) {
+      setReferralOpen(true);
     }
-  }, [initialReferralFromLink]);
+  }, [initialReferralFromLink, inviteTokenFromLink]);
 
   /* ------------------------------------------------------------------ */
   /* 1) Ensure exactly one Solana wallet for this user                  */
@@ -97,7 +104,6 @@ export default function SignInPage() {
           return existing.address;
         }
 
-        // (optional) some privy shapes store it nested
         const nestedAddr =
           existing?.wallet?.address ||
           existing?.publicAddress ||
@@ -121,7 +127,6 @@ export default function SignInPage() {
       walletCreationAttemptedRef.current = true;
 
       try {
-        // ✅ createWallet returns { wallet: Wallet }
         const created = (await createSolanaWallet()) as CreatedWalletResult;
 
         const addr =
@@ -157,7 +162,7 @@ export default function SignInPage() {
       solanaAddress?: string;
       emailHint?: string;
       referralCode?: string;
-      inviteToken?: string; // NEW
+      inviteToken?: string;
     }) => {
       if (bootstrappedRef.current) return;
       bootstrappedRef.current = true;
@@ -167,15 +172,13 @@ export default function SignInPage() {
 
       try {
         const token = await getAccessToken();
-        if (!token) {
-          throw new Error("No Privy access token");
-        }
+        if (!token) throw new Error("No Privy access token");
 
         console.log("[bootstrapWithPrivy] sending session payload:", {
           solanaAddress: opts?.solanaAddress,
           emailHint: opts?.emailHint,
           referralCode: opts?.referralCode,
-          inviteToken: opts?.inviteToken, // just for logs
+          inviteToken: opts?.inviteToken,
         });
 
         const sessionRes = await fetch("/api/auth/session", {
@@ -217,16 +220,13 @@ export default function SignInPage() {
             cache: "no-store",
           });
 
-          if (meRes.status === 401) {
+          if (meRes.status === 401)
             throw new Error("Not authenticated after creating session.");
-          }
           if (meRes.status === 404) {
             router.replace("/onboard");
             return;
           }
-          if (!meRes.ok) {
-            throw new Error("Failed to load user profile.");
-          }
+          if (!meRes.ok) throw new Error("Failed to load user profile.");
 
           const { user } = (await meRes.json()) as {
             user: { isOnboarded?: boolean };
@@ -236,8 +236,7 @@ export default function SignInPage() {
 
         const isOnboarded = !!finalUser?.isOnboarded;
 
-        // 🔗 NEW: Try to claim personal invite FIRST for *new* users.
-        // If that fails or doesn't exist, fall back to generic referral code.
+        // 🔗 Claim invite/referral for new users
         if (isNewUser) {
           const trimmedInvite = opts?.inviteToken?.trim();
           const trimmedCode = opts?.referralCode?.trim();
@@ -247,13 +246,10 @@ export default function SignInPage() {
             try {
               const claimInviteRes = await fetch("/api/user/invite/claim", {
                 method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 credentials: "include",
                 body: JSON.stringify({
                   inviteToken: trimmedInvite,
-                  // optional safety: make sure this invite and code match
                   referralCode: trimmedCode || undefined,
                 }),
               });
@@ -268,7 +264,6 @@ export default function SignInPage() {
                   inviteData
                 );
               } else {
-                // 404 = token not found/invalid, 409 = already used by someone else
                 console.warn(
                   "[bootstrapWithPrivy] personal invite claim failure:",
                   claimInviteRes.status,
@@ -284,18 +279,13 @@ export default function SignInPage() {
             }
           }
 
-          // If we *didn't* link via personal invite, but we have a referral code, use the generic flow.
           if (!personalInviteLinked && trimmedCode) {
             try {
               const claimRes = await fetch("/api/user/referral/claim", {
                 method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                body: JSON.stringify({
-                  referralCode: trimmedCode,
-                }),
+                body: JSON.stringify({ referralCode: trimmedCode }),
               });
 
               const claimData: { error?: string } = await claimRes
@@ -322,11 +312,8 @@ export default function SignInPage() {
           }
         }
 
-        if (!finalUser || isNewUser || !isOnboarded) {
-          router.replace("/onboard");
-        } else {
-          router.replace("/dashboard");
-        }
+        if (!finalUser || isNewUser || !isOnboarded) router.replace("/onboard");
+        else router.replace("/dashboard");
       } catch (err) {
         console.error("Bootstrap error:", err);
         const msg =
@@ -370,12 +357,11 @@ export default function SignInPage() {
           (user as { email?: string | null })?.email ??
           undefined;
 
-        console.log("[email onComplete] solanaAddress:", solAddr);
         await bootstrapWithPrivy({
           solanaAddress: solAddr,
           emailHint,
           referralCode: referralCode || undefined,
-          inviteToken: inviteTokenFromLink || undefined, // NEW
+          inviteToken: inviteTokenFromLink || undefined,
         });
       } catch (err) {
         console.error("Email onComplete error:", err);
@@ -408,12 +394,11 @@ export default function SignInPage() {
           (user as { email?: string | null })?.email ??
           undefined;
 
-        console.log("[oauth onComplete] solanaAddress:", solAddr);
         await bootstrapWithPrivy({
           solanaAddress: solAddr,
           emailHint,
           referralCode: referralCode || undefined,
-          inviteToken: inviteTokenFromLink || undefined, // NEW
+          inviteToken: inviteTokenFromLink || undefined,
         });
       } catch (err) {
         console.error("OAuth onComplete error:", err);
@@ -444,8 +429,7 @@ export default function SignInPage() {
       await sendCode({ email: email.trim() });
     } catch (err) {
       console.error("Error sending code:", err);
-      const msg = err instanceof Error ? err.message : "Failed to send code";
-      setUiError(msg);
+      setUiError(err instanceof Error ? err.message : "Failed to send code");
     }
   };
 
@@ -455,9 +439,9 @@ export default function SignInPage() {
       await loginWithCode({ code: code.trim() });
     } catch (err) {
       console.error("Error logging in with code:", err);
-      const msg =
-        err instanceof Error ? err.message : "Failed to log in with code";
-      setUiError(msg);
+      setUiError(
+        err instanceof Error ? err.message : "Failed to log in with code"
+      );
     }
   };
 
@@ -467,9 +451,9 @@ export default function SignInPage() {
       await initOAuth({ provider: "google" });
     } catch (err) {
       console.error("OAuth init error:", err);
-      const msg =
-        err instanceof Error ? err.message : "Failed to start Google login";
-      setUiError(msg);
+      setUiError(
+        err instanceof Error ? err.message : "Failed to start Google login"
+      );
     }
   };
 
@@ -564,33 +548,6 @@ export default function SignInPage() {
                 </h2>
               </div>
 
-              {/* 🔗 Referral code field (optional) */}
-              <div className="mb-4 space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-medium text-slate-400">
-                    Referral code{" "}
-                    <span className="text-[10px] text-slate-500">
-                      (optional)
-                    </span>
-                  </label>
-                  {inviteTokenFromLink ? (
-                    <span className="text-[10px] text-emerald-300">
-                      Personal invite link
-                    </span>
-                  ) : initialReferralFromLink ? (
-                    <span className="text-[10px] text-emerald-300">
-                      Loaded from link
-                    </span>
-                  ) : null}
-                </div>
-                <input
-                  value={referralCode}
-                  onChange={(e) => setReferralCode(e.target.value)}
-                  placeholder="Enter referral code"
-                  className="glass-input text-xs"
-                />
-              </div>
-
               {combinedError && (
                 <div className="mb-4 rounded-2xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] text-red-100">
                   {combinedError}
@@ -681,6 +638,76 @@ export default function SignInPage() {
                 Privacy Policy. Haven is non-custodial; you remain in control of
                 your assets at all times.
               </p>
+
+              {/* ✅ Referral dropdown (tucked away at bottom) */}
+              <div className="mt-5 border-t border-white/10 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setReferralOpen((v) => !v)}
+                  className="
+                    flex w-full items-center justify-between
+                    rounded-2xl border border-white/10
+                    bg-white/5 px-3 py-2
+                    text-[11px] text-slate-200/90
+                    hover:bg-white/7
+                    transition
+                  "
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium">Have a referral code?</span>
+                    {(inviteTokenFromLink || initialReferralFromLink) && (
+                      <span className="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] text-emerald-200">
+                        Loaded from link
+                      </span>
+                    )}
+                    {inviteTokenFromLink && (
+                      <span className="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] text-emerald-200">
+                        Personal invite
+                      </span>
+                    )}
+                  </span>
+
+                  <ChevronDown
+                    className={`h-4 w-4 text-slate-300/80 transition ${
+                      referralOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+
+                {referralOpen && (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-medium text-slate-400">
+                        Referral code{" "}
+                        <span className="text-[10px] text-slate-500">
+                          (optional)
+                        </span>
+                      </label>
+
+                      {inviteTokenFromLink ? (
+                        <span className="text-[10px] text-emerald-300">
+                          Personal invite link
+                        </span>
+                      ) : initialReferralFromLink ? (
+                        <span className="text-[10px] text-emerald-300">
+                          Loaded from link
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <input
+                      value={referralCode}
+                      onChange={(e) => setReferralCode(e.target.value)}
+                      placeholder="Enter referral code"
+                      className="glass-input text-xs"
+                    />
+
+                    <p className="text-[10px] text-slate-500">
+                      If you don’t have one, you can leave this blank.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         </div>
