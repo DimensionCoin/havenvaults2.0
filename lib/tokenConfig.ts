@@ -552,7 +552,7 @@ export const TOKENS: TokenMeta[] = [
     name: "Helium",
     symbol: "HNT",
     id: "helium",
-    logo: "/logos/HNT.png",
+    logo: "/logos/hnt.png",
     category: "DePin",
     decimals: 9,
     mints: {
