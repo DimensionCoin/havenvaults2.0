@@ -4,8 +4,8 @@ import {
   tokensForCluster,
   getMintFor,
   getCluster,
-  TokenMeta,
-  TokenCategory,
+  type TokenMeta,
+  type TokenCategory,
 } from "@/lib/tokenConfig";
 
 export const runtime = "nodejs";
@@ -16,7 +16,8 @@ type TokenSummary = {
   symbol: string;
   name: string;
   logoURI: string;
-  category?: TokenCategory;
+  // ✅ NEW: multi-category support
+  categories?: TokenCategory[];
 };
 
 type TokensApiResponse = {
@@ -31,26 +32,34 @@ type TokensApiResponse = {
 
 // ✅ include ALL categories so ordering is stable
 const CATEGORY_ORDER: TokenCategory[] = [
-  "Top 3",
-  "DeFi",
-  "Meme",
+  "Top MC",
   "Stocks",
+  "DeFi",
+  "Infrastructure",
+  "Meme",
   "LST",
   "DePin",
+  "Gaming",
+  "NFT",
+  "Utility",
 ];
 
+// Sort by:
+// 1) primary category order (first category in categories[]), unknown last
+// 2) then by name
 function sortTokens(tokens: TokenMeta[]): TokenMeta[] {
   return [...tokens].sort((a, b) => {
-    // ✅ unknown categories should go LAST (indexOf can return -1)
-    const aiRaw = a.category ? CATEGORY_ORDER.indexOf(a.category) : -1;
-    const biRaw = b.category ? CATEGORY_ORDER.indexOf(b.category) : -1;
+    const aPrimary = a.categories?.[0];
+    const bPrimary = b.categories?.[0];
+
+    const aiRaw = aPrimary ? CATEGORY_ORDER.indexOf(aPrimary) : -1;
+    const biRaw = bPrimary ? CATEGORY_ORDER.indexOf(bPrimary) : -1;
 
     const ai = aiRaw === -1 ? 999 : aiRaw;
     const bi = biRaw === -1 ? 999 : biRaw;
 
     if (ai !== bi) return ai - bi;
 
-    // then by name
     return a.name.localeCompare(b.name);
   });
 }
@@ -63,8 +72,9 @@ export async function GET(req: NextRequest) {
     const pageSizeRaw = searchParams.get("pageSize") || "25";
     const qRaw = (searchParams.get("q") || "").trim();
 
-    // ✅ NEW: server-side category filtering so pagination works per-category
-    const categoryRaw = (searchParams.get("category") || "").trim(); // e.g. "Stocks"
+    // ✅ NEW: server-side category filtering for multi-category tokens
+    // e.g. "Stocks", or "all"
+    const categoryRaw = (searchParams.get("category") || "").trim();
 
     const page = Math.max(1, Number(pageRaw) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(pageSizeRaw) || 25));
@@ -79,25 +89,19 @@ export async function GET(req: NextRequest) {
           const name = t.name.toLowerCase();
           const symbol = t.symbol.toLowerCase();
           const id = (t.id || "").toLowerCase();
-          return (
-            name.includes(q) || symbol.includes(q) || (id && id.includes(q))
-          );
+          return name.includes(q) || symbol.includes(q) || id.includes(q);
         })
       : allForCluster;
 
     // ✅ apply category filter BEFORE pagination
     if (categoryRaw && categoryRaw !== "all") {
-      const allowed: TokenCategory[] = [
-        "Top 3",
-        "DeFi",
-        "Meme",
-        "Stocks",
-        "LST",
-        "DePin",
-      ];
+      const allowed = new Set<TokenCategory>(CATEGORY_ORDER);
 
-      if (allowed.includes(categoryRaw as TokenCategory)) {
-        filtered = filtered.filter((t) => t.category === categoryRaw);
+      if (allowed.has(categoryRaw as TokenCategory)) {
+        const wanted = categoryRaw as TokenCategory;
+        filtered = filtered.filter((t) =>
+          (t.categories ?? []).includes(wanted)
+        );
       }
     }
 
@@ -110,12 +114,13 @@ export async function GET(req: NextRequest) {
       .map((t) => {
         const mint = getMintFor(t, cluster);
         if (!mint) return null;
+
         return {
           mint,
           symbol: t.symbol,
           name: t.name,
           logoURI: t.logo,
-          category: t.category,
+          categories: t.categories ?? [],
         };
       })
       .filter(Boolean) as TokenSummary[];

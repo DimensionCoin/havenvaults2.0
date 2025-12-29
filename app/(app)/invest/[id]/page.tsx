@@ -333,7 +333,7 @@ const CoinPage: React.FC = () => {
   const [txModal, setTxModal] = useState<TxModalState>({ open: false });
   const name = meta?.name || meta?.symbol || "Unknown token";
   const symbol = meta?.symbol || "";
-  const category = (meta?.category || "Uncategorized") as
+  const category = (meta?.categories || "Uncategorized") as
     | TokenCategory
     | string;
   const logo = meta?.logo || null;
@@ -1241,11 +1241,11 @@ const CoinPage: React.FC = () => {
                   </div>
                 )}
 
-                {meta?.category && (
+                {meta?.categories && (
                   <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                     <dt className="text-slate-400">Category</dt>
                     <dd className="font-medium text-emerald-200">
-                      {meta.category}
+                      {meta.categories}
                     </dd>
                   </div>
                 )}

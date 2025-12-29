@@ -16,17 +16,17 @@ import {
 
 const PAGE_SIZE = 25;
 
-// ───────── mint → category map + category list ─────────
+// ───────── mint → categories map + category list ─────────
 
 const CLUSTER = getCluster();
 
-const MINT_TO_CATEGORY: Record<string, TokenCategory> = (() => {
-  const map: Record<string, TokenCategory> = {};
+const MINT_TO_CATEGORIES: Record<string, TokenCategory[]> = (() => {
+  const map: Record<string, TokenCategory[]> = {};
 
   TOKENS.forEach((meta: TokenMeta) => {
     const mint = getMintFor(meta, CLUSTER);
-    if (!mint || !meta.category) return;
-    map[mint] = meta.category;
+    if (!mint) return;
+    map[mint] = meta.categories ?? [];
   });
 
   return map;
@@ -48,7 +48,7 @@ const MINT_TO_META: Record<string, TokenMeta> = (() => {
 })();
 
 const CATEGORY_OPTIONS: TokenCategory[] = Array.from(
-  new Set(Object.values(MINT_TO_CATEGORY))
+  new Set(Object.values(MINT_TO_CATEGORIES).flat())
 );
 
 // ───────── helpers ─────────
@@ -168,9 +168,9 @@ const TokensTable: React.FC<TokensTableProps> = ({
     if (category === "all") return displayedTokens;
 
     return displayedTokens.filter((t) => {
-      const cat = MINT_TO_CATEGORY[t.mint];
-      if (!cat) return false;
-      return cat === category;
+      const cats = MINT_TO_CATEGORIES[t.mint];
+      if (!cats?.length) return false;
+      return cats.includes(category);
     });
   }, [displayedTokens, category]);
 

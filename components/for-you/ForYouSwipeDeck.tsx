@@ -13,13 +13,13 @@ import {
   AnimatePresence,
   useMotionValue,
   useTransform,
-  PanInfo,
+  type PanInfo,
 } from "framer-motion";
 import Image from "next/image";
 import { X, Heart, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TokenRecommendation } from "@/lib/recommendations";
-import { getCluster, getMintFor } from "@/lib/tokenConfig";
+import { getCluster, getMintFor, type TokenCategory } from "@/lib/tokenConfig";
 import toast from "react-hot-toast";
 
 type SwipeAction = "save" | "skip";
@@ -34,12 +34,10 @@ const SWIPE_PX = 110;
 const SWIPE_VELOCITY = 650;
 
 // 🔹 Minimal shape of market data for the deck.
-// This is intentionally simple so it matches whatever your hook returns.
 type MarketSnapshot = {
   price?: number | null;
   priceChange24hPct?: number | null;
   mcap?: number | null;
-  // add more if you want: fdv, liquidity, rank, etc.
 };
 
 export type ForYouSwipeDeckProps = {
@@ -149,7 +147,7 @@ function DecisionBanner({ banner }: { banner: BannerState }) {
 function RecommendationCard({
   symbol,
   name,
-  category,
+  categories,
   logo,
   reasons,
   market,
@@ -161,7 +159,7 @@ function RecommendationCard({
 }: {
   symbol: string;
   name: string;
-  category: string | undefined;
+  categories?: TokenCategory[];
   logo: string;
   reasons: string[];
   market?: MarketSnapshot;
@@ -205,6 +203,10 @@ function RecommendationCard({
 
   const changePositive = typeof change24h === "number" && change24h > 0;
   const changeNegative = typeof change24h === "number" && change24h < 0;
+
+  const cats = categories ?? [];
+  const primaryCat = cats[0]; // for compact display
+  const extraCats = cats.slice(1);
 
   return (
     <motion.div
@@ -312,9 +314,28 @@ function RecommendationCard({
                     <div className="mt-0.5 truncate text-[18px] font-semibold text-zinc-50">
                       {name}
                     </div>
-                    {category && (
-                      <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
-                        {category}
+
+                    {/* ✅ multi-category pills */}
+                    {primaryCat && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <span className="inline-flex items-center rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-300">
+                          {primaryCat}
+                        </span>
+
+                        {extraCats.slice(0, 2).map((c) => (
+                          <span
+                            key={c}
+                            className="inline-flex items-center rounded-full bg-zinc-900/70 px-2 py-0.5 text-[10px] text-zinc-400"
+                          >
+                            {c}
+                          </span>
+                        ))}
+
+                        {extraCats.length > 2 && (
+                          <span className="inline-flex items-center rounded-full bg-zinc-900/70 px-2 py-0.5 text-[10px] text-zinc-500">
+                            +{extraCats.length - 2}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -528,7 +549,7 @@ export const ForYouSwipeDeck: React.FC<ForYouSwipeDeckProps> = ({
   const finished = !active && recommendations.length > 0;
   const empty = recommendations.length === 0;
 
-  // 🔹 Helper to get market data per recommendation
+  // Helper to get market data per recommendation
   const getMarketForRec = (rec?: TokenRecommendation) => {
     if (!rec || !marketDataByMint) return undefined;
     const mint = getMintFor(rec.token, cluster);
@@ -587,7 +608,7 @@ export const ForYouSwipeDeck: React.FC<ForYouSwipeDeckProps> = ({
             <RecommendationCard
               symbol={next.token.symbol}
               name={next.token.name}
-              category={next.token.category}
+              categories={next.token.categories}
               logo={next.token.logo}
               reasons={next.reasons}
               market={nextMarket}
@@ -607,7 +628,7 @@ export const ForYouSwipeDeck: React.FC<ForYouSwipeDeckProps> = ({
               key={active.token.symbol + index}
               symbol={active.token.symbol}
               name={active.token.name}
-              category={active.token.category}
+              categories={active.token.categories}
               logo={active.token.logo}
               reasons={active.reasons}
               market={activeMarket}

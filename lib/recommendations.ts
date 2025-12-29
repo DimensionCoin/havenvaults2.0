@@ -33,13 +33,21 @@ type SegmentConfig = {
 type SegmentCategoryCaps = Partial<Record<TokenCategory, number>>; // 0–1 fraction
 type SegmentPriorityOrder = TokenCategory[];
 
+/**
+ * Labels used for explanation strings.
+ * ✅ Updated to your new category names.
+ */
 const categoryLabels: Record<TokenCategory, string> = {
-  "Top 3": "blue-chip crypto",
-  DeFi: "DeFi",
-  Meme: "memecoins",
+  "Top MC": "blue-chip assets",
   Stocks: "stocks",
+  DeFi: "DeFi",
+  Infrastructure: "infrastructure",
+  Meme: "memecoins",
   LST: "staked SOL (LSTs)",
   DePin: "DePin",
+  Gaming: "gaming",
+  NFT: "NFTs",
+  Utility: "utility tokens",
 };
 
 /* ─────────────────────────────────────────────
@@ -49,13 +57,17 @@ const categoryLabels: Record<TokenCategory, string> = {
 const SEGMENT_CONFIG: Record<Segment, SegmentConfig> = {
   // Low risk + low experience: keep them boring
   conservative: {
-    allowedCategories: ["Stocks", "Top 3"],
+    allowedCategories: ["Stocks", "Top MC"],
     categoryWeights: {
       Stocks: 3,
-      "Top 3": 1.5,
+      "Top MC": 1.5,
       LST: 0,
       DeFi: 0,
       DePin: 0,
+      Infrastructure: 0,
+      Gaming: 0,
+      NFT: 0,
+      Utility: 0,
       Meme: -10,
     },
     includeMemes: false,
@@ -63,27 +75,42 @@ const SEGMENT_CONFIG: Record<Segment, SegmentConfig> = {
 
   // Low risk but some experience; or med risk with low experience
   balanced: {
-    allowedCategories: ["Stocks", "Top 3", "LST"],
+    allowedCategories: ["Stocks", "Top MC", "LST"],
     categoryWeights: {
       Stocks: 3,
-      "Top 3": 2,
+      "Top MC": 2,
       LST: 2,
       DeFi: 0.5,
       DePin: 0.5,
+      Infrastructure: 0.5,
+      Gaming: 0.2,
+      Utility: 0.2,
+      NFT: -0.2,
       Meme: -8,
     },
     includeMemes: false,
   },
 
-  // Medium/high risk with some experience → add DeFi + DePin
+  // Medium/high risk with some experience → add DeFi + DePin (+ infra)
   growth: {
-    allowedCategories: ["Top 3", "LST", "DeFi", "DePin", "Stocks"],
+    allowedCategories: [
+      "Top MC",
+      "LST",
+      "DeFi",
+      "DePin",
+      "Infrastructure",
+      "Stocks",
+    ],
     categoryWeights: {
-      "Top 3": 2,
+      "Top MC": 2,
       LST: 2,
       DeFi: 3,
       DePin: 3,
+      Infrastructure: 2.5,
       Stocks: 1,
+      Gaming: 0.5,
+      Utility: 0.8,
+      NFT: 0,
       Meme: -5,
     },
     includeMemes: false,
@@ -91,13 +118,28 @@ const SEGMENT_CONFIG: Record<Segment, SegmentConfig> = {
 
   // Full send: everything, including memes
   degen: {
-    allowedCategories: ["Top 3", "LST", "DeFi", "DePin", "Stocks", "Meme"],
+    allowedCategories: [
+      "Top MC",
+      "LST",
+      "DeFi",
+      "DePin",
+      "Infrastructure",
+      "Stocks",
+      "Meme",
+      "Gaming",
+      "Utility",
+      "NFT",
+    ],
     categoryWeights: {
-      "Top 3": 2,
+      "Top MC": 2,
       LST: 2,
       DeFi: 3,
       DePin: 3,
+      Infrastructure: 2.5,
       Stocks: 0.5, // still allowed, but background noise
+      Gaming: 2,
+      Utility: 1.5,
+      NFT: 0.8,
       Meme: 3,
     },
     includeMemes: true,
@@ -111,17 +153,18 @@ const SEGMENT_CONFIG: Record<Segment, SegmentConfig> = {
 const SEGMENT_CATEGORY_CAPS: Record<Segment, SegmentCategoryCaps> = {
   conservative: {
     Stocks: 0.8,
-    "Top 3": 0.6,
+    "Top MC": 0.6,
   },
   balanced: {
     Stocks: 0.6,
-    "Top 3": 0.6,
+    "Top MC": 0.6,
     LST: 0.6,
   },
   growth: {
     DeFi: 0.6,
     DePin: 0.6,
-    "Top 3": 0.6,
+    Infrastructure: 0.6,
+    "Top MC": 0.6,
     LST: 0.6,
     Stocks: 0.4,
   },
@@ -131,8 +174,12 @@ const SEGMENT_CATEGORY_CAPS: Record<Segment, SegmentCategoryCaps> = {
     Meme: 0.6,
     DeFi: 0.7,
     DePin: 0.7,
+    Infrastructure: 0.7,
     LST: 0.7,
-    "Top 3": 0.7,
+    "Top MC": 0.7,
+    Gaming: 0.6,
+    Utility: 0.6,
+    NFT: 0.5,
   },
 };
 
@@ -141,10 +188,21 @@ const SEGMENT_CATEGORY_CAPS: Record<Segment, SegmentCategoryCaps> = {
  * This is the “vibe dial”.
  */
 const SEGMENT_PRIORITY_ORDER: Record<Segment, SegmentPriorityOrder> = {
-  conservative: ["Stocks", "Top 3"],
-  balanced: ["Stocks", "Top 3", "LST"],
-  growth: ["DeFi", "DePin", "Top 3", "LST", "Stocks"],
-  degen: ["DeFi", "DePin", "Meme", "LST", "Top 3", "Stocks"],
+  conservative: ["Stocks", "Top MC"],
+  balanced: ["Stocks", "Top MC", "LST"],
+  growth: ["DeFi", "Infrastructure", "DePin", "Top MC", "LST", "Stocks"],
+  degen: [
+    "DeFi",
+    "Infrastructure",
+    "DePin",
+    "Meme",
+    "Gaming",
+    "LST",
+    "Top MC",
+    "Utility",
+    "NFT",
+    "Stocks",
+  ],
 };
 
 /* ─────────────────────────────────────────────
@@ -186,8 +244,26 @@ function pickSegment(risk: RiskLevel, knowledge: KnowledgeLevel): Segment {
 }
 
 /* ─────────────────────────────────────────────
- * Selection with category caps
+ * Selection with category caps (multi-category aware)
  * ─────────────────────────────────────────── */
+
+/**
+ * IMPORTANT:
+ * Your new tokenConfig supports `token.categories: TokenCategory[]`.
+ * For recommendations we need a single “primary category” to bucket by.
+ *
+ * Rule:
+ * - use token.primaryCategory if you have it (optional pattern)
+ * - else categories[0]
+ * - else fallback undefined
+ *
+ * If you don't have primaryCategory in your TokenMeta type, this will
+ * just use categories[0] and work fine.
+ */
+function getPrimaryCategory(token: TokenMeta): TokenCategory | undefined {
+  const anyToken = token as TokenMeta & { primaryCategory?: TokenCategory };
+  return anyToken.primaryCategory ?? token.categories?.[0];
+}
 
 function selectWithCategoryCaps(
   candidates: TokenRecommendation[],
@@ -215,7 +291,7 @@ function selectWithCategoryCaps(
 
   const byCategory: Partial<Record<TokenCategory, TokenRecommendation[]>> = {};
   for (const rec of candidates) {
-    const cat = rec.token.category as TokenCategory | undefined;
+    const cat = getPrimaryCategory(rec.token);
     if (!cat) continue;
     if (!byCategory[cat]) byCategory[cat] = [];
     byCategory[cat]!.push(rec);
@@ -259,7 +335,7 @@ function selectWithCategoryCaps(
 
     for (const rec of remaining) {
       if (result.length >= limit) break;
-      const cat = rec.token.category as TokenCategory | undefined;
+      const cat = getPrimaryCategory(rec.token);
       if (!cat) continue;
       if (isAtCap(cat)) continue;
       result.push(rec);
@@ -271,7 +347,7 @@ function selectWithCategoryCaps(
 }
 
 /* ─────────────────────────────────────────────
- * Main engine
+ * Main engine (multi-category aware)
  * ─────────────────────────────────────────── */
 
 type BuildOpts = {
@@ -279,6 +355,14 @@ type BuildOpts = {
   /** Token mints already wishlisted – don't recommend them */
   wishlistMints?: string[];
 };
+
+function tokenHasCategory(token: TokenMeta, cat: TokenCategory): boolean {
+  return Array.isArray(token.categories) && token.categories.includes(cat);
+}
+
+function tokenIsMeme(token: TokenMeta): boolean {
+  return tokenHasCategory(token, "Meme");
+}
 
 /**
  * Main entry: given a user + their wallet tokens, return a list
@@ -304,13 +388,16 @@ export function buildTokenRecommendations(
   const wishlistSet = new Set((opts?.wishlistMints ?? []).map((m) => m.trim()));
 
   // Rough category exposure in USD
+  // ✅ With multi-category, we count exposure toward ALL categories a token belongs to.
   const categoryExposure: Partial<Record<TokenCategory, number>> = {};
   for (const wt of walletTokens) {
     const meta = findTokenByMint(wt.mint, cluster);
-    if (!meta || !meta.category) continue;
-    const cat = meta.category;
+    if (!meta?.categories?.length) continue;
+
     const usd = wt.usdValue ?? 0;
-    categoryExposure[cat] = (categoryExposure[cat] ?? 0) + usd;
+    for (const cat of meta.categories) {
+      categoryExposure[cat] = (categoryExposure[cat] ?? 0) + usd;
+    }
   }
 
   const totalExposure = Object.values(categoryExposure).reduce(
@@ -328,43 +415,63 @@ export function buildTokenRecommendations(
     if (ownedMints.has(mint)) continue;
     if (wishlistSet.has(mint)) continue;
 
-    const cat = token.category as TokenCategory | undefined;
-    if (!cat) continue;
+    const cats = token.categories ?? [];
+    if (!cats.length) continue;
 
-    // Respect segment allowed categories + meme rules
-    if (!config.allowedCategories.includes(cat)) continue;
-    if (!config.includeMemes && cat === "Meme") continue;
+    // Respect meme rules
+    if (!config.includeMemes && tokenIsMeme(token)) continue;
+
+    // Must match at least ONE allowed category
+    const allowedCats = cats.filter((c) =>
+      config.allowedCategories.includes(c)
+    );
+    if (!allowedCats.length) continue;
+
+    // Pick a primary category (for bucketing + some reasoning)
+    const primaryCat = getPrimaryCategory(token);
+    const primaryAllowed =
+      primaryCat && config.allowedCategories.includes(primaryCat);
+    const usedCat = (
+      primaryAllowed ? primaryCat : allowedCats[0]
+    ) as TokenCategory;
 
     let score = 0;
     const reasons: string[] = [];
 
-    // Category base preference for this segment
-    const catWeight = config.categoryWeights[cat] ?? 0;
-    score += catWeight;
+    // Category preference: sum weights across allowed categories,
+    // with a little bonus if it matches multiple allowed categories.
+    let weightSum = 0;
+    for (const c of allowedCats) {
+      weightSum += config.categoryWeights[c] ?? 0;
+    }
+    score += weightSum;
+    if (allowedCats.length > 1) {
+      score += 0.25; // small "multi-tag relevance" bump
+    }
 
-    // Exposure-based nudge: this just sorts *within* category mostly
-    const exp = categoryExposure[cat] ?? 0;
+    // Exposure-based nudge (use primary/used category for explanations)
+    const exp = categoryExposure[usedCat] ?? 0;
     const expShare = totalExposure > 0 ? exp / totalExposure : 0;
 
     if (totalExposure === 0) {
       score += 0.5;
       reasons.push(
-        `You don't have any ${categoryLabels[cat]} in your Haven wallet yet.`
+        `You don't have any ${categoryLabels[usedCat]} in your Haven wallet yet.`
       );
     } else if (expShare === 0) {
       score += 1.0;
       reasons.push(
-        `You don't have any ${categoryLabels[cat]} exposure yet — this helps you explore it.`
+        `You don't have any ${categoryLabels[usedCat]} exposure yet — this helps you explore it.`
       );
     } else if (expShare < 0.1) {
       score += 0.4;
       reasons.push(
-        `Your ${categoryLabels[cat]} exposure is still small — adding here keeps things balanced.`
+        `Your ${categoryLabels[usedCat]} exposure is still small — adding here keeps things balanced.`
       );
     } else if (expShare > 0.5) {
       score -= 0.5;
       reasons.push(
-        `You're already heavily tilted to ${categoryLabels[cat]} — we slightly down-weight more of it.`
+        `You're already heavily tilted to ${categoryLabels[usedCat]} — we slightly down-weight more of it.`
       );
     }
 
@@ -379,11 +486,11 @@ export function buildTokenRecommendations(
       );
     } else if (segment === "growth") {
       reasons.unshift(
-        "You’re comfortable with more risk, so we bias towards DeFi, DePin, and staked SOL yield."
+        "You’re comfortable with more risk, so we bias towards growth categories like DeFi/DePin/Infrastructure plus core assets."
       );
     } else if (segment === "degen") {
       reasons.unshift(
-        "High risk + strong experience — we prioritise DeFi, DePin, and memecoins, with some LSTs and majors for balance."
+        "High risk + strong experience — we prioritise high-upside categories (DeFi/DePin/Infrastructure/Memes), with core assets for balance."
       );
     }
 
