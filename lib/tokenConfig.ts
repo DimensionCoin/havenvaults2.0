@@ -457,7 +457,7 @@ export const TOKENS: TokenMeta[] = [
     name: "Jito Staked SOL",
     symbol: "JITOSOL",
     id: "jito-staked-sol",
-    logo: "/logos/jitosol.png",
+    logo: "/logos/sol.png",
     category: "LST",
     decimals: 9,
     mints: {
