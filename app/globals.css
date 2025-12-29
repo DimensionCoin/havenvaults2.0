@@ -1,26 +1,208 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Base radius + light mode (rarely used) */
+:root {
+  --radius: 0.9rem;
+
+  --background: #0b1114;
+  --foreground: #020617;
+
+  --card: #ffffff;
+  --card-foreground: #020617;
+  --popover: #ffffff;
+  --popover-foreground: #020617;
+
+  /* Mint from the Haven logo */
+  --primary: #29c668;
+  --primary-foreground: #000000;
+
+  --secondary: #f3f4f6;
+  --secondary-foreground: #020617;
+
+  --muted: #f3f4f6;
+  --muted-foreground: #050606;
+
+  --accent: #e5f7ee;
+  --accent-foreground: #020617;
+
+  --destructive: #f97373;
+
+  --border: #e5e7eb;
+  --input: #e5e7eb;
+  --ring: rgb(30, 178, 89);
+
+  /* Charts – all green / neutral, no blue/purple */
+  --chart-1: #2ac166;
+  --chart-2: #2ac166;
+  --chart-3: #2ac166;
+  --chart-4: #2ac166;
+  --chart-5: #2ac166;
+
+  --sidebar: #f9fafb;
+  --sidebar-foreground: #020617;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: #020617;
+  --sidebar-accent: #e5f7ee;
+  --sidebar-accent-foreground: #020617;
+  --sidebar-border: #e5e7eb;
+  --sidebar-ring: var(--ring);
+}
+
+/* 🌚 Haven lives in dark mode – black + mint only */
+.dark {
+  --background: #02010a;              /* near-black */
+  --foreground: #f9fafb;
+
+  --card: rgba(3, 7, 18, 0.9);        /* black glass */
+  --card-foreground: #f9fafb;
+  --popover: rgba(3, 7, 18, 0.96);
+  --popover-foreground: #f9fafb;
+
+  /* Mint core */
+  --primary: #3ff387;                 /* main mint */
+  --primary-foreground: #031702;
+  --secondary: rgb(0, 0, 0);
+  --secondary-foreground: #e5e7eb;
+
+  --muted: rgb(11, 30, 4);
+  --muted-foreground: #9ca3af;
+
+  /* Soft mint accent wash */
+  --accent: rgb(84, 187, 122);
+  --accent-foreground: #e5f7ee;
+
+  --destructive: #f97373;
+
+  --border: rgba(148, 163, 184, 0.28);
+  --input: rgba(3, 7, 18, 0.9);
+  --ring: rgba(111, 178, 138, 0.85);
+
+  /* Charts – different greens, no blue/purple/orange */
+  --chart-1: #3ff387;
+  --chart-2: #3ff387;
+  --chart-3: #3ff387;
+  --chart-4: #3ff387;
+  --chart-5: #3ff387;
+
+  --sidebar: rgba(3, 7, 18, 0.96);
+  --sidebar-foreground: #f9fafb;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: #020617;
+  --sidebar-accent: rgba(15, 23, 42, 0.96);
+  --sidebar-accent-foreground: #e5f7ee;
+  --sidebar-border: rgba(148, 163, 184, 0.28);
+  --sidebar-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    /* subtle mint glow, no blue */
+    background-image:
+      radial-gradient(circle at top, rgb(0, 34, 12), transparent 55%),
+      radial-gradient(circle at bottom, rgba(0, 58, 21), #02010a 65%);
+    background-attachment: fixed;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* 🧊 Glass + motion primitives */
+@layer components {
+  .glass-panel {
+    @apply rounded-3xl border border-white/8 bg-white/5
+           shadow-[0_24px_80px_rgba(0,0,0,0.85)]
+           backdrop-blur-2xl;
+  }
+
+  .glass-panel-soft {
+    @apply rounded-3xl border border-white/6 bg-white/4
+           shadow-[0_18px_60px_rgba(0,0,0,0.75)]
+           backdrop-blur-2xl;
+  }
+
+  .glass-input {
+    @apply w-full rounded-2xl border border-white/12 bg-black/40
+           px-3.5 py-2.5 text-sm text-slate-50
+           placeholder:text-slate-400/70
+           focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-primary/80
+           focus-visible:border-primary/80;
+  }
+
+  .glass-pill {
+    @apply inline-flex items-center gap-2 rounded-full border border-white/10
+           bg-white/5 px-3 py-1.5 text-[10px] font-semibold uppercase
+           tracking-[0.25em] text-slate-200/80;
+  }
+
+  .haven-primary-btn {
+    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
+           bg-gradient-to-tr from-[#04aa44] to-[#4ddb81]
+           px-4 py-2.5 text-sm font-semibold text-primary-foreground
+           shadow-[0_18px_40px_rgba(111,178,138,0.65)]
+           transition-all hover:scale-[1.01] hover:shadow-[0_22px_55px_rgba(111,178,138,0.9)]
+           disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-none;
+  }
+
+  .haven-secondary-btn {
+    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
+           border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-medium
+           text-slate-100/85 transition hover:bg-white/10;
+  }
+}
+
+/* Hide scrollbar but keep scroll */
+.trending-scroll {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+
+.trending-scroll::-webkit-scrollbar {
+  display: none;             /* Chrome, Safari, Opera */
 }
