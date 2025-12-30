@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { Minus, ArrowUpRight, ArrowDownLeft } from "lucide-react";
+import { Minus, ArrowUpRight, ArrowDownLeft, } from "lucide-react";
 
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
@@ -119,7 +119,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           {/* Header row */}
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
                 Portfolio
               </p>
               <p className="mt-0.5 truncate text-sm font-medium text-slate-100">
@@ -145,7 +145,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           </div>
 
           {/* Big balance */}
-          <div className="mt-4">
+          <div className="mt-2">
             {loading ? (
               <div className="h-10 w-44 animate-pulse rounded-2xl bg-white/10" />
             ) : (
@@ -171,23 +171,23 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           </div>
 
           {/* ───────────────────────── Centered 3 Actions ───────────────────────── */}
-          <div className="mt-5 flex items-center justify-center">
-            <div className="grid w-full max-w-md grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-black/35 p-2">
+          <div className="mt-2 flex justify-between text-xs">
+            <div className="grid w-full max-w-md grid-cols-3  rounded-2xl border border-white/10 bg-black/35 p-2">
               <button
                 type="button"
                 onClick={onSell}
-                className="group flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
+                className="group flex items-center justify-center gap-2 rounded-xl px-1 py-3  font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-full border border-white/12 bg-black/50 transition group-hover:bg-white/5">
                   <Minus className="h-4 w-4" />
                 </span>
-                <span>Sell</span>
+                <span>Swap</span>
               </button>
 
               <button
                 type="button"
                 onClick={onSend}
-                className="group flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
+                className="group flex items-center justify-center gap-2 rounded-xl px-1 py-3 font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-full border border-white/12 bg-black/50 transition group-hover:bg-white/5">
                   <ArrowUpRight className="h-4 w-4" />
@@ -198,7 +198,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
               <button
                 type="button"
                 onClick={onReceive}
-                className="group flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
+                className="group flex items-center justify-center gap-2 rounded-xl px-1 py-3  font-semibold text-slate-100 transition hover:bg-white/5 active:scale-[0.99]"
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-full border border-white/12 bg-black/50 transition group-hover:bg-white/5">
                   <ArrowDownLeft className="h-4 w-4" />
