@@ -86,7 +86,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
             onClick={onOpenAccount}
             className="w-full rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
           >
-            Open account
+            Coming Soon!
           </button>
         </div>
       </div>

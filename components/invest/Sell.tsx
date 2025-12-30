@@ -679,16 +679,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
         ].join(" ")}
       >
-        {/* Close X */}
-        <DialogClose asChild>
-          <button
-            type="button"
-            aria-label="Close"
-            className="absolute right-2 top-2 z-[10] rounded-full border border-zinc-800 bg-zinc-950/70 p-2 text-zinc-200 hover:bg-zinc-900 sm:right-4 sm:top-4"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </DialogClose>
+       
+        
 
         <div className="flex h-full flex-col">
           {/* Scrollable body */}

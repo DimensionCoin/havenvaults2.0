@@ -2,22 +2,34 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerDescription,
-  DrawerFooter,
-} from "@/components/ui/drawer";
-import { useBalance } from "@/providers/BalanceProvider";
-import { useSponsoredCryptoTransfer } from "@/hooks/useSponsoredCryptoTransfer";
+import Image from "next/image";
+import { X, ChevronDown } from "lucide-react";
 import { PublicKey } from "@solana/web3.js";
 
+import { useBalance } from "@/providers/BalanceProvider";
+import { useSponsoredCryptoTransfer } from "@/hooks/useSponsoredCryptoTransfer";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+
 type TransferSPLProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+
   /** Sender’s Solana address (Haven wallet) */
   walletAddress: string;
+
   /** Optional: pre-select this token mint from the user’s holdings */
   initialMint?: string;
+
   onSuccess?: () => void | Promise<void>;
 };
 
@@ -49,6 +61,8 @@ type WalletAsset = {
   usdValue: number;
 };
 
+type PickerSide = "asset" | null;
+
 const ENV_USDC_MINT = (process.env.NEXT_PUBLIC_USDC_MINT || "").toLowerCase();
 
 const isEmail = (s: string) => /\S+@\S+\.\S+/.test(s.trim().toLowerCase());
@@ -66,12 +80,14 @@ const isValidSolanaAddress = (s: string) => {
 
 const formatTokenAmount = (n: number | null | undefined, symbol: string) => {
   if (n == null || !Number.isFinite(n)) return `— ${symbol}`;
-  return `${n.toLocaleString("en-US", {
-    maximumFractionDigits: 6,
-  })} ${symbol}`;
+  return `${n.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${symbol}`;
 };
 
+const sanitizeAmountInput = (s: string) => s.replace(/[^\d.]/g, "");
+
 const TransferSPL: React.FC<TransferSPLProps> = ({
+  open,
+  onOpenChange,
   walletAddress,
   initialMint,
   onSuccess,
@@ -87,11 +103,11 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       const mintLower = t.mint.toLowerCase();
       const isUsdcMint = ENV_USDC_MINT && mintLower === ENV_USDC_MINT;
       const isUsdcSymbol = (t.symbol ?? "").toUpperCase() === "USDC";
-      if (isUsdcMint || isUsdcSymbol) continue; // skip USDC here
+      if (isUsdcMint || isUsdcSymbol) continue;
 
       list.push({
         id: t.mint,
-        mint: t.mint, // SPL only (includes wSOL)
+        mint: t.mint,
         symbol: t.symbol || t.name || t.mint.slice(0, 4),
         name: t.name || t.symbol || "Unknown token",
         decimals: t.decimals,
@@ -101,15 +117,12 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       });
     }
 
-    // Sort by portfolio weight (USD value, desc)
     list.sort((a, b) => b.usdValue - a.usdValue);
-
     return list;
   }, [tokens]);
 
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
 
-  // ensure we have a valid selected asset (optionally seed from initialMint)
   useEffect(() => {
     if (!assets.length) {
       setSelectedAssetId(null);
@@ -144,7 +157,9 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
   const [showAllContacts, setShowAllContacts] = useState(false);
 
   useEffect(() => {
+    if (!open) return;
     let cancelled = false;
+
     (async () => {
       setContactsLoading(true);
       setContactsError(null);
@@ -169,17 +184,15 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
         if (!cancelled) setContactsLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [open]);
 
   const handlePickContact = (c: Contact) => {
-    if (c.email) {
-      setRecipientInput(c.email);
-    } else if (c.walletAddress) {
-      setRecipientInput(c.walletAddress);
-    }
+    if (c.email) setRecipientInput(c.email);
+    else if (c.walletAddress) setRecipientInput(c.walletAddress);
   };
 
   /* ───────────────── Recipient state ───────────────── */
@@ -191,7 +204,9 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
     useState<ResolvedRecipient | null>(null);
 
   useEffect(() => {
-    // whenever the recipient input changes, we logically reset to step 1
+    if (!open) return;
+
+    // whenever recipient changes, reset step 1
     setStep(1);
     setResolvedRecipient(null);
     setResolveError(null);
@@ -202,7 +217,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
     const lower = raw.toLowerCase();
 
-    // 1) Email → resolve through contacts API (Haven recipient)
+    // 1) Email resolve
     if (isEmail(lower)) {
       let cancelled = false;
       const timeout = setTimeout(async () => {
@@ -231,6 +246,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
             status?: string;
             error?: string;
           } | null = await res.json().catch(() => null);
+
           if (!res.ok || !data?.walletAddress) {
             setResolveState("error");
             setResolveError(
@@ -263,20 +279,15 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       };
     }
 
-    // 2) Raw Solana address → treat as external wallet
+    // 2) Solana address
     if (isValidSolanaAddress(raw)) {
-      setResolvedRecipient({
-        walletAddress: raw,
-        status: "external",
-      });
+      setResolvedRecipient({ walletAddress: raw, status: "external" });
       setResolveState("resolved");
       return;
     }
+  }, [open, recipientInput]);
 
-    // Otherwise: invalid → stay idle (with hint text)
-  }, [recipientInput]);
-
-  /* ───────────────── Quick add contact (email only) ──────────── */
+  /* ───────────────── Quick add contact ───────────────── */
 
   const [addingContact, setAddingContact] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -296,9 +307,11 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+
       const data: { contacts?: Contact[]; error?: string } | null = await res
         .json()
         .catch(() => null);
+
       if (!res.ok) {
         throw new Error(
           typeof data?.error === "string"
@@ -306,9 +319,8 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
             : `Failed to save contact (${res.status})`
         );
       }
-      if (Array.isArray(data?.contacts)) {
-        setContacts(data.contacts);
-      }
+
+      if (Array.isArray(data?.contacts)) setContacts(data.contacts);
     } catch (e) {
       console.error("[TransferSPL] add contact failed:", e);
       setAddError(
@@ -321,7 +333,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
   /* ───────────────── Amount + fees ───────────────── */
 
-  const [amountInput, setAmountInput] = useState(""); // token units, e.g. "1.23"
+  const [amountInput, setAmountInput] = useState(""); // ui units
 
   const amountUi = useMemo(() => {
     const n = Number(amountInput);
@@ -344,7 +356,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
     amountUi > 0 &&
     totalDebited <= (selectedAsset.amountUi || 0) + 1e-9;
 
-  // keypad like USDC transfer
+  // keypad like before
   const pressKey = (k: string) => {
     setAmountInput((prev) => {
       if (k === "DEL") return prev.slice(0, -1);
@@ -356,9 +368,8 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       }
       const next = (prev || "") + k;
       const [, dec] = next.split(".");
-      if (dec && selectedAsset && dec.length > selectedAsset.decimals) {
+      if (dec && selectedAsset && dec.length > selectedAsset.decimals)
         return prev;
-      }
       if (!prev && k === "0") return "0";
       return next.length > 18 ? prev : next;
     });
@@ -391,16 +402,12 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const handleSend = useCallback(async () => {
-    if (sendDisabled || !resolvedRecipient?.walletAddress || !selectedAsset) {
+    if (sendDisabled || !resolvedRecipient?.walletAddress || !selectedAsset)
       return;
-    }
+
     setSuccessMsg(null);
 
     try {
-      if (!selectedAsset.mint) {
-        throw new Error("Missing token mint for SPL transfer");
-      }
-
       const sig = await send({
         fromOwnerBase58: walletAddress,
         toOwnerBase58: resolvedRecipient.walletAddress,
@@ -415,8 +422,8 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
       setSuccessMsg(
         sig
-          ? `${selectedAsset.symbol} transfer sent. Tx: ${shortSig}`
-          : `${selectedAsset.symbol} transfer sent successfully.`
+          ? `${selectedAsset.symbol} sent. Tx: ${shortSig}`
+          : `${selectedAsset.symbol} sent successfully.`
       );
 
       try {
@@ -430,7 +437,6 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       if (onSuccess) await onSuccess();
     } catch (e) {
       console.error("[TransferSPL] send failed:", e);
-      // errors shown below
     }
   }, [
     sendDisabled,
@@ -452,469 +458,591 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
   const hasMoreContacts = contacts.length > 3;
 
-  const [showAssetList, setShowAssetList] = useState(false);
+  /* ───────────────── Asset picker (Sell-style) ───────────────── */
 
-  /* ───────────────── Render ───────────────── */
+  const [pickerSide, setPickerSide] = useState<PickerSide>(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+
+  const currentPickerAssets = useMemo(() => {
+    if (!pickerSearch.trim()) return assets;
+    const q = pickerSearch.trim().toLowerCase();
+    return assets.filter(
+      (a) =>
+        a.symbol.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)
+    );
+  }, [assets, pickerSearch]);
+
+  const openPicker = () => {
+    setPickerSide("asset");
+    setPickerSearch("");
+  };
+
+  const closePicker = () => {
+    setPickerSide(null);
+    setPickerSearch("");
+  };
+
+  const pickAsset = (a: WalletAsset) => {
+    setSelectedAssetId(a.id);
+    // reset amount when switching token (prevents accidental over-send)
+    setAmountInput("");
+    setStep(1);
+    closePicker();
+  };
+
+  /* ───────────────── Reset on close ───────────────── */
+
+  useEffect(() => {
+    if (open) return;
+    setStep(1);
+    setRecipientInput("");
+    setResolvedRecipient(null);
+    setResolveState("idle");
+    setResolveError(null);
+    setAmountInput("");
+    setSuccessMsg(null);
+    setAddError(null);
+    setPickerSide(null);
+    setPickerSearch("");
+    // keep selectedAssetId as-is so reopening feels faster
+  }, [open]);
 
   const symbol = selectedAsset?.symbol ?? "TOKEN";
 
   return (
-    <DrawerContent
-      className="
-        border-t border-zinc-800 bg-[#03180051] backdrop-blur-xl text-zinc-50
-        flex flex-col max-h-[90vh]
-      "
-    >
-      <DrawerHeader className="shrink-0">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <DrawerTitle className="text-base font-semibold">
-              Transfer tokens
-            </DrawerTitle>
-            <DrawerDescription className="text-[10px] text-zinc-400">
-              Send SPL tokens (including wrapped SOL) from your Haven wallet to
-              a contact or wallet address.
-            </DrawerDescription>
-          </div>
-          <div className="text-[10px] px-2 py-1 rounded-full bg-black/40 border border-white/10 text-white/60">
-            Step {step} of 2
-          </div>
-        </div>
-      </DrawerHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className={[
+          // ✅ Production layout: flex column + real height constraint (scroll works on all screens)
+          "p-0 overflow-hidden border border-zinc-800 bg-zinc-950",
+          "flex flex-col",
 
-      {/* Scrollable body */}
-      <div className="px-4 pb-4 flex-1 overflow-y-auto space-y-5">
-        {/* STEP 1: Recipient + asset choice */}
-        {step === 1 && (
-          <div className="rounded-3xl bg-black/60 border border-white/10 px-4 py-4 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-medium text-white/80">
-                  Who are you sending to?
-                </p>
-                <p className="text-[11px] text-white/50">
-                  Enter a Haven email or Solana wallet address.
-                </p>
+          // Desktop sizing
+          "sm:w-[min(92vw,420px)] sm:max-w-[420px]",
+          "sm:max-h-[90vh] sm:rounded-[28px]",
+          "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
+
+          // Mobile fullscreen
+          "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
+          "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
+          "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
+        ].join(" ")}
+      >
+        
+        {/* ✅ min-h-0 is REQUIRED so the scroll area can actually scroll */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* Scrollable body */}
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-2 pb-2 pt-[calc(env(safe-area-inset-top)+10px)] sm:px-4 sm:pb-4 sm:pt-4">
+            <DialogHeader className="pb-3">
+              <div className="flex items-start justify-between gap-2 pr-10">
+                <div>
+                  <DialogTitle className="text-sm font-semibold text-zinc-50">
+                    Transfer tokens
+                  </DialogTitle>
+                  <DialogDescription className="text-[11px] text-zinc-400">
+                    Send SPL tokens from your Haven wallet to a contact or
+                    wallet.
+                  </DialogDescription>
+                </div>
+
+                <div className="shrink-0 rounded-full border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[10px] text-zinc-400">
+                  Step {step} of 2
+                </div>
               </div>
-            </div>
+            </DialogHeader>
 
-            {/* Recipient input */}
-            <div className="space-y-1 mt-1">
-              <label className="text-[11px] font-medium text-zinc-300">
-                Recipient
-              </label>
-              <input
-                value={recipientInput}
-                onChange={(e) => setRecipientInput(e.target.value)}
-                placeholder="friend@example.com or 8x2Z… wallet address"
-                className={`
-                  w-full rounded-xl bg-white/5 border px-3 py-2.5 text-sm
-                  text-white placeholder-white/40 outline-none transition
-                  ${
-                    resolveState === "error" || resolveState === "not_found"
-                      ? "border-red-500/50 focus:ring-2 focus:ring-red-500/30"
-                      : "border-white/10 focus:ring-2 focus:ring-white/15 hover:border-white/20"
-                  }
-                `}
-              />
-              <div className="flex items-center justify-between text-[10px] mt-0.5">
-                <span className="text-zinc-500">
-                  {resolveState === "checking" && "Looking up recipient…"}
-                  {resolveState === "resolved" &&
-                    resolvedRecipient &&
-                    (resolvedRecipient.email
-                      ? `Sending to ${
-                          resolvedRecipient.name || resolvedRecipient.email
-                        }`
-                      : "Sending to external wallet")}
-                  {resolveState === "not_found" &&
-                    "No Haven account found for this email yet."}
-                  {resolveState === "idle" &&
-                    "We’ll verify Haven accounts automatically when you use an email."}
-                  {resolveState === "error" &&
-                    (resolveError || "Lookup failed.")}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={handleAddContact}
-                  disabled={addingContact || !isEmail(recipientInput)}
-                  className="
-                    rounded-full border border-white/15 bg-white/5
-                    px-2.5 py-1 text-[10px] text-white/80
-                    hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed
-                    transition
-                  "
-                >
-                  {addingContact ? "Saving…" : "Save contact"}
-                </button>
+            {assets.length === 0 ? (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 px-3 py-3 text-[11px] text-zinc-300">
+                No non-USDC tokens detected in your wallet yet.
               </div>
-              {addError && (
-                <p className="text-[10px] text-red-400 mt-0.5">{addError}</p>
-              )}
-            </div>
+            ) : (
+              <div className="flex flex-col gap-3 text-xs text-zinc-100">
+                {/* STEP 1 */}
+                {step === 1 && (
+                  <div className="rounded-2xl bg-zinc-900/90 px-3.5 py-3.5">
+                    {/* Recipient */}
+                    <div className="mb-2 text-[11px]">
+                      <p className="text-zinc-200 font-medium">
+                        Who are you sending to?
+                      </p>
+                      <p className="text-zinc-500">
+                        Enter a Haven email or Solana wallet address.
+                      </p>
+                    </div>
 
-            {/* Contacts list */}
-            <div className="space-y-1 mt-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] text-zinc-400">Your contacts</p>
-                {contactsLoading && (
-                  <span className="text-[10px] text-zinc-500">Loading…</span>
-                )}
-              </div>
-              {contactsError && (
-                <p className="text-[10px] text-red-400">{contactsError}</p>
-              )}
-              {contacts.length > 0 ? (
-                <>
-                  <div className="flex flex-wrap gap-1.5">
-                    {visibleContacts.map((c, idx) => (
-                      <button
-                        key={c.id ?? c.email ?? c.walletAddress ?? idx}
-                        type="button"
-                        onClick={() => handlePickContact(c)}
-                        className="
-                          rounded-full border border-white/10 bg-white/5
-                          px-2.5 py-1 text-[10px] text-white/80
-                          hover:bg-white/10 transition
-                        "
-                      >
-                        {c.name ||
-                          c.email ||
-                          (c.walletAddress
-                            ? `${c.walletAddress.slice(
-                                0,
-                                4
-                              )}…${c.walletAddress.slice(-4)}`
-                            : "Contact")}
-                      </button>
-                    ))}
-                  </div>
-                  {hasMoreContacts && (
-                    <button
-                      type="button"
-                      onClick={() => setShowAllContacts((v) => !v)}
-                      className="
-                        mt-1 text-[10px] text-zinc-400 hover:text-zinc-200
-                        underline underline-offset-2
-                      "
-                    >
-                      {showAllContacts
-                        ? "Show fewer"
-                        : `Show all ${contacts.length} contacts`}
-                    </button>
-                  )}
-                </>
-              ) : !contactsLoading ? (
-                <p className="text-[10px] text-zinc-500">
-                  You don&apos;t have any contacts yet.
-                </p>
-              ) : null}
-            </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-400">
+                        Recipient
+                      </label>
+                      <input
+                        value={recipientInput}
+                        onChange={(e) => setRecipientInput(e.target.value)}
+                        placeholder="friend@example.com or 8x2Z…"
+                        className={[
+                          "w-full rounded-xl border bg-zinc-950/40 px-3 py-2 text-[12px] text-zinc-100 outline-none placeholder:text-zinc-600",
+                          resolveState === "error" ||
+                          resolveState === "not_found"
+                            ? "border-red-500/40 focus:border-red-500 focus:ring-1 focus:ring-red-500/30"
+                            : "border-zinc-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30",
+                        ].join(" ")}
+                      />
 
-            {/* Asset selector */}
-            <div className="mt-4 space-y-1">
-              <p className="text-[11px] font-medium text-zinc-300">
-                Asset you&apos;ll send
-              </p>
-              {assets.length === 0 ? (
-                <p className="text-[10px] text-zinc-500">
-                  No non-USDC tokens detected in your wallet yet.
-                </p>
-              ) : (
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setShowAssetList((v) => !v)}
-                    className="
-                      flex w-full items-center justify-between
-                      rounded-xl border border-white/10 bg-white/5
-                      px-3 py-2 text-sm
-                    "
-                  >
-                    <span className="flex flex-col text-left">
-                      <span className="text-xs font-semibold">
-                        {selectedAsset?.symbol}
-                      </span>
-                      <span className="text-[10px] text-zinc-400">
-                        {selectedAsset?.name}
-                      </span>
-                    </span>
-                    <span className="text-[10px] text-zinc-500">
-                      Available:{" "}
-                      {selectedAsset
-                        ? formatTokenAmount(
-                            selectedAsset.amountUi,
-                            selectedAsset.symbol
-                          )
-                        : "—"}
-                    </span>
-                  </button>
+                      <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
+                        <span className="text-zinc-500">
+                          {resolveState === "checking" &&
+                            "Looking up recipient…"}
+                          {resolveState === "resolved" &&
+                            resolvedRecipient &&
+                            (resolvedRecipient.email
+                              ? `Sending to ${
+                                  resolvedRecipient.name ||
+                                  resolvedRecipient.email
+                                }`
+                              : "Sending to external wallet")}
+                          {resolveState === "not_found" &&
+                            "No Haven account found for this email yet."}
+                          {resolveState === "idle" &&
+                            "We’ll verify Haven accounts when you enter an email."}
+                          {resolveState === "error" &&
+                            (resolveError || "Lookup failed.")}
+                        </span>
 
-                  {showAssetList && (
-                    <div className="absolute z-30 mt-2 w-full max-h-60 overflow-y-auto rounded-2xl border border-white/10 bg-black/95 p-1 text-[11px] shadow-xl">
-                      {assets.map((a) => (
                         <button
-                          key={a.id}
                           type="button"
-                          onClick={() => {
-                            setSelectedAssetId(a.id);
-                            setShowAssetList(false);
-                          }}
-                          className={`flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-left hover:bg-white/5 ${
-                            a.id === selectedAssetId ? "bg-white/10" : ""
-                          }`}
+                          onClick={handleAddContact}
+                          disabled={addingContact || !isEmail(recipientInput)}
+                          className="shrink-0 rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          <div className="flex flex-col">
-                            <span className="font-medium">{a.symbol}</span>
+                          {addingContact ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+
+                      {addError && (
+                        <p className="text-[10px] text-red-300">{addError}</p>
+                      )}
+                    </div>
+
+                    {/* Contacts */}
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] text-zinc-500">
+                          Your contacts
+                        </p>
+                        {contactsLoading && (
+                          <span className="text-[10px] text-zinc-500">
+                            Loading…
+                          </span>
+                        )}
+                      </div>
+
+                      {contactsError && (
+                        <p className="mt-1 text-[10px] text-red-300">
+                          {contactsError}
+                        </p>
+                      )}
+
+                      {contacts.length > 0 ? (
+                        <>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {visibleContacts.map((c, idx) => (
+                              <button
+                                key={c.id ?? c.email ?? c.walletAddress ?? idx}
+                                type="button"
+                                onClick={() => handlePickContact(c)}
+                                className="rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900"
+                              >
+                                {c.name ||
+                                  c.email ||
+                                  (c.walletAddress
+                                    ? `${c.walletAddress.slice(
+                                        0,
+                                        4
+                                      )}…${c.walletAddress.slice(-4)}`
+                                    : "Contact")}
+                              </button>
+                            ))}
+                          </div>
+
+                          {hasMoreContacts && (
+                            <button
+                              type="button"
+                              onClick={() => setShowAllContacts((v) => !v)}
+                              className="mt-2 text-[10px] text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
+                            >
+                              {showAllContacts
+                                ? "Show fewer"
+                                : `Show all ${contacts.length} contacts`}
+                            </button>
+                          )}
+                        </>
+                      ) : !contactsLoading ? (
+                        <p className="mt-2 text-[10px] text-zinc-500">
+                          You don&apos;t have any contacts yet.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    {/* Asset */}
+                    <div className="mt-4">
+                      <p className="mb-2 text-[11px] text-zinc-500">
+                        Asset you&apos;ll send
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={openPicker}
+                        className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <AssetAvatar
+                            logo={selectedAsset?.logoURI ?? null}
+                            symbol={selectedAsset?.symbol ?? "?"}
+                            name={selectedAsset?.name ?? ""}
+                          />
+                          <div className="flex flex-col text-left">
+                            <span className="text-[11px] font-semibold">
+                              {selectedAsset?.symbol}
+                            </span>
                             <span className="text-[10px] text-zinc-500">
-                              {a.name}
+                              {selectedAsset?.name}
                             </span>
                           </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
                           <span className="text-[10px] text-zinc-500">
-                            {formatTokenAmount(a.amountUi, a.symbol)}
+                            {selectedAsset
+                              ? `Avail: ${formatTokenAmount(
+                                  selectedAsset.amountUi,
+                                  selectedAsset.symbol
+                                )}`
+                              : "—"}
                           </span>
-                        </button>
-                      ))}
+                          <ChevronDown className="h-3 w-3 text-zinc-500" />
+                        </div>
+                      </button>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                  </div>
+                )}
+
+                {/* STEP 2 */}
+                {step === 2 && selectedAsset && (
+                  <div className="rounded-2xl bg-zinc-900/90 overflow-hidden">
+                    {/* Summary header */}
+                    <div className="px-3.5 py-3 border-b border-zinc-800">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] text-zinc-500">
+                            Sending to
+                          </p>
+                          <p className="text-[11px] font-semibold text-zinc-100">
+                            {resolvedRecipient?.name ||
+                              resolvedRecipient?.email ||
+                              (resolvedRecipient?.walletAddress
+                                ? `${resolvedRecipient.walletAddress.slice(
+                                    0,
+                                    4
+                                  )}…${resolvedRecipient.walletAddress.slice(
+                                    -4
+                                  )}`
+                                : "Recipient")}
+                          </p>
+                          <p className="text-[10px] text-zinc-500">
+                            {resolvedRecipient?.email
+                              ? "Haven recipient"
+                              : "External Solana wallet"}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setStep(1)}
+                          className="rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900"
+                        >
+                          Change
+                        </button>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AssetAvatar
+                            logo={selectedAsset.logoURI ?? null}
+                            symbol={selectedAsset.symbol}
+                            name={selectedAsset.name}
+                          />
+                          <div className="flex flex-col">
+                            <span className="text-[11px] font-semibold text-zinc-100">
+                              {selectedAsset.symbol}
+                            </span>
+                            <span className="text-[10px] text-zinc-500">
+                              {selectedAsset.name}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-right text-[10px] text-zinc-500">
+                          Available:{" "}
+                          <span className="text-zinc-200">
+                            {formatTokenAmount(
+                              selectedAsset.amountUi,
+                              selectedAsset.symbol
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Amount area */}
+                    <div className="px-3.5 py-3.5">
+                      <div className="mb-2 flex items-center justify-between text-[11px]">
+                        <span className="text-zinc-500">Amount</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const max = Math.max(
+                              0,
+                              (selectedAsset.amountUi || 0) /
+                                (1 + (effectiveFeePct || 0))
+                            );
+                            const safe =
+                              max > 0
+                                ? Math.floor(
+                                    max * 10 ** selectedAsset.decimals
+                                  ) /
+                                  10 ** selectedAsset.decimals
+                                : 0;
+                            setAmountInput(safe > 0 ? String(safe) : "");
+                          }}
+                          className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-40"
+                          disabled={!selectedAsset.amountUi}
+                        >
+                          Max
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={amountInput}
+                        onChange={(e) => {
+                          const next = sanitizeAmountInput(e.target.value);
+                          const [, dec = ""] = next.split(".");
+                          if (dec.length > selectedAsset.decimals) return;
+                          setAmountInput(next);
+                        }}
+                        placeholder="0.00"
+                        className="w-full bg-transparent text-left text-2xl font-semibold text-zinc-50 outline-none placeholder:text-zinc-600"
+                      />
+
+                      <p className="mt-2 text-[10px] text-zinc-500">
+                        You pay (incl.{" "}
+                        {feePctDisplay
+                          ? `${feePctDisplay.toFixed(2)}% fee`
+                          : "fee"}
+                        ):{" "}
+                        <span className="text-zinc-200">
+                          {formatTokenAmount(
+                            amountUi > 0 ? totalDebited : 0,
+                            symbol
+                          )}
+                        </span>
+                      </p>
+
+                      <p className="mt-1 text-[10px] text-zinc-500">
+                        They receive:{" "}
+                        <span className="text-zinc-200">
+                          {formatTokenAmount(amountUi || 0, symbol)}
+                        </span>
+                      </p>
+
+                      {amountUi > 0 && !hasEnoughBalance && (
+                        <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                          Not enough {symbol} to cover amount + fee.
+                        </div>
+                      )}
+
+                      {(sendError ||
+                        (resolveState === "error" && resolveError)) && (
+                        <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                          {sendError || resolveError}
+                        </div>
+                      )}
+
+                      {successMsg && (
+                        <div className="mt-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">
+                          {successMsg}
+                        </div>
+                      )}
+
+                      {/* keypad */}
+                      <div className="mt-3">
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            "1",
+                            "2",
+                            "3",
+                            "4",
+                            "5",
+                            "6",
+                            "7",
+                            "8",
+                            "9",
+                            ".",
+                            "0",
+                            "DEL",
+                          ].map((k) => (
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => pressKey(k)}
+                              className={[
+                                "rounded-2xl border py-3 text-base font-semibold transition",
+                                k === "DEL"
+                                  ? "border-zinc-700 bg-zinc-950/30 text-zinc-200 hover:bg-zinc-900"
+                                  : "border-zinc-800 bg-zinc-950/20 text-zinc-50 hover:bg-zinc-900",
+                              ].join(" ")}
+                            >
+                              {k === "DEL" ? "⌫" : k}
+                            </button>
+                          ))}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => pressKey("CLR")}
+                          className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/20 py-2 text-[11px] text-zinc-300 hover:bg-zinc-900"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        )}
 
-        {/* STEP 2: Amount */}
-        {step === 2 && selectedAsset && (
-          <div className="rounded-3xl bg-black/60 border border-white/10 overflow-hidden">
-            {/* Recipient summary */}
-            <div className="px-5 pt-4 pb-2 border-b border-white/10 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] text-zinc-400">Sending to</p>
-                <p className="text-xs text-white/90 font-medium">
-                  {resolvedRecipient?.name ||
-                    resolvedRecipient?.email ||
-                    (resolvedRecipient?.walletAddress
-                      ? `${resolvedRecipient.walletAddress.slice(
-                          0,
-                          4
-                        )}…${resolvedRecipient.walletAddress.slice(-4)}`
-                      : "Recipient")}
-                </p>
-                <p className="text-[10px] text-zinc-500">
-                  {resolvedRecipient?.email
-                    ? `Haven recipient • ${resolvedRecipient.email}`
-                    : "External Solana wallet"}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="
-                  text-[10px] px-2 py-1 rounded-full border border-white/10
-                  bg-white/5 text-white/70 hover:bg-white/10 transition
-                "
+          {/* Pinned footer */}
+          <DialogFooter className="shrink-0 border-t border-zinc-800 bg-zinc-950/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
+            {step === 1 ? (
+              <Button
+                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400"
+                disabled={!canContinueToAmount}
+                onClick={handleContinueToAmount}
               >
-                Change
-              </button>
-            </div>
-
-            {/* Asset summary */}
-            <div className="px-5 pt-3 pb-1 border-b border-white/10 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] text-zinc-400">Asset</p>
-                <p className="text-xs font-medium text-white">
-                  {selectedAsset.symbol}
-                </p>
-                <p className="text-[10px] text-zinc-500">
-                  {selectedAsset.name}
-                </p>
-              </div>
-              <div className="text-[10px] text-zinc-500 text-right">
-                Available:{" "}
-                <span className="text-white/80">
-                  {formatTokenAmount(
-                    selectedAsset.amountUi,
-                    selectedAsset.symbol
-                  )}
-                </span>
-              </div>
-            </div>
-
-            {/* Amount display */}
-            <div className="px-6 pt-6 pb-2">
-              <div className="text-center">
-                <input
-                  readOnly
-                  value={amountInput}
-                  placeholder="0"
-                  className="
-                    w-full text-center bg-transparent outline-none border-0
-                    text-5xl font-semibold tracking-tight text-white
-                    placeholder-white/20
-                  "
-                />
-                <p className="mt-2 text-[11px] text-zinc-500">
-                  Amount in {symbol}
-                </p>
-              </div>
-            </div>
-
-            {/* Available + Max */}
-            <div className="px-6 pb-3 flex items-center justify-between text-[11px]">
-              <div className="text-white/60">
-                Available:{" "}
-                <span className="text-white/80">
-                  {formatTokenAmount(
-                    selectedAsset.amountUi,
-                    selectedAsset.symbol
-                  )}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const max = Math.max(
-                    0,
-                    (selectedAsset.amountUi || 0) / (1 + (effectiveFeePct || 0))
-                  );
-                  const safe =
-                    max > 0
-                      ? Math.floor(max * 10 ** selectedAsset.decimals) /
-                        10 ** selectedAsset.decimals
-                      : 0;
-                  setAmountInput(safe > 0 ? safe.toString() : "");
-                }}
-                className="text-white/80 hover:text-white underline underline-offset-2 disabled:opacity-40"
-                disabled={!selectedAsset.amountUi}
+                Continue
+              </Button>
+            ) : (
+              <Button
+                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400"
+                disabled={sendDisabled}
+                onClick={handleSend}
               >
-                Use max
-              </button>
-            </div>
+                {sending ? `Sending ${symbol}…` : `Send ${symbol}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </div>
 
-            {/* Keypad */}
-            <div className="px-4 pb-5">
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  "1",
-                  "2",
-                  "3",
-                  "4",
-                  "5",
-                  "6",
-                  "7",
-                  "8",
-                  "9",
-                  ".",
-                  "0",
-                  "DEL",
-                ].map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => pressKey(k)}
-                    className={`
-                      rounded-2xl py-4 text-lg font-semibold border transition
-                      ${
-                        k === "DEL"
-                          ? "border-white/15 bg-white/5 text-white/80 hover:bg-white/10"
-                          : "border-white/10 bg-white/5 text-white hover:bg-white/10"
-                      }
-                    `}
-                  >
-                    {k === "DEL" ? "⌫" : k}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3">
+        {/* Asset picker modal */}
+        {pickerSide && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
+            <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 px-3.5 py-3.5 shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-zinc-50">
+                  Choose asset to send
+                </h2>
                 <button
                   type="button"
-                  onClick={() => pressKey("CLR")}
-                  className="
-                    w-full rounded-xl py-2 text-[11px] text-white/60
-                    hover:text-white/80 hover:bg-white/5 border border-white/10
-                  "
+                  onClick={closePicker}
+                  className="text-[11px] text-zinc-400 hover:text-zinc-200"
                 >
-                  Clear
+                  Close
                 </button>
               </div>
-            </div>
 
-            {/* Summary + errors */}
-            <div className="px-6 pb-4 space-y-2">
-              <div className="rounded-xl bg-white/5 border border-white/10 p-3 text-[11px]">
-                <div className="flex items-center justify-between">
-                  <span className="text-white/60">They receive</span>
-                  <span className="font-semibold text-white">
-                    {formatTokenAmount(amountUi || 0, symbol)}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="text-white/60">
-                    You pay (incl.{" "}
-                    {feePctDisplay ? `${feePctDisplay.toFixed(2)}%` : "fee"})
-                  </span>
-                  <span className="font-semibold text-white">
-                    {formatTokenAmount(amountUi > 0 ? totalDebited : 0, symbol)}
-                  </span>
-                </div>
+              <div className="mb-2">
+                <input
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  placeholder="Search by name or symbol"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40"
+                />
               </div>
 
-              {amountUi > 0 && !hasEnoughBalance && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                  Not enough {symbol} to cover amount + fee.
-                </div>
-              )}
+              <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
+                {currentPickerAssets.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => pickAsset(a)}
+                    className={[
+                      "flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-zinc-900",
+                      a.id === selectedAssetId ? "bg-zinc-900/90" : "",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AssetAvatar
+                        logo={a.logoURI ?? null}
+                        symbol={a.symbol}
+                        name={a.name}
+                      />
+                      <div className="flex flex-col">
+                        <span className="font-medium text-zinc-100">
+                          {a.symbol}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          {a.name}
+                        </span>
+                      </div>
+                    </div>
 
-              {(sendError || (resolveState === "error" && resolveError)) && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                  {sendError || resolveError}
-                </div>
-              )}
+                    <span className="text-[10px] text-zinc-500">
+                      {a.amountUi.toLocaleString("en-US", {
+                        maximumFractionDigits: 6,
+                      })}
+                    </span>
+                  </button>
+                ))}
 
-              {successMsg && (
-                <div className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">
-                  {successMsg}
-                </div>
-              )}
+                {currentPickerAssets.length === 0 && (
+                  <p className="pt-4 text-center text-[11px] text-zinc-500">
+                    No assets found.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
-      </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
-      {/* Footer */}
-      <DrawerFooter className="flex justify-end px-4 pb-4 pt-0 shrink-0 gap-2">
-        {step === 1 ? (
-          <button
-            type="button"
-            disabled={!canContinueToAmount}
-            onClick={handleContinueToAmount}
-            className="
-              rounded-xl bg-[rgb(182,255,62)] hover:bg-[rgb(182,255,62)]/90
-              text-black text-xs font-semibold px-4 py-2
-              shadow-[0_0_18px_rgba(190,242,100,0.6)]
-              transition disabled:opacity-50 disabled:cursor-not-allowed
-            "
-          >
-            Continue
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={sendDisabled}
-            onClick={handleSend}
-            className="
-              rounded-xl bg-[rgb(182,255,62)] hover:bg-[rgb(182,255,62)]/90
-              text-black text-xs font-semibold px-4 py-2
-              shadow-[0_0_18px_rgba(190,242,100,0.6)]
-              transition disabled:opacity-50 disabled:cursor-not-allowed
-            "
-          >
-            {sending ? `Sending ${symbol}…` : `Send ${symbol}`}
-          </button>
-        )}
-      </DrawerFooter>
-    </DrawerContent>
+/* -------------------- avatar -------------------- */
+
+const AssetAvatar: React.FC<{
+  logo: string | null;
+  symbol: string;
+  name: string;
+}> = ({ logo, symbol, name }) => {
+  if (logo) {
+    return (
+      <div className="relative h-7 w-7 overflow-hidden rounded-full border border-zinc-700 bg-zinc-900">
+        <Image
+          src={logo}
+          alt={name}
+          fill
+          sizes="28px"
+          className="object-cover"
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] font-semibold text-zinc-100">
+      {symbol.slice(0, 3).toUpperCase()}
+    </div>
   );
 };
 

@@ -8,7 +8,7 @@ import { usePathname } from "next/navigation";
 import {
   LineChart, // Invest
   Zap, // Amplify
-  Sparkles, // For You
+  ArrowDownUp, // For You
   User2Icon, // Swap
 } from "lucide-react";
 
@@ -21,9 +21,14 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { href: "/invest", label: "Invest", Icon: LineChart, center: false },
-  { href: "/amplify", label: "Amplify", Icon: Zap, center: false },
+  {
+    href: "/exchange",
+    label: "Exchange",
+    Icon: ArrowDownUp,
+    center: false,
+  },
   { href: "/dashboard", label: "Home", Icon: null, center: true },
-  { href: "/for-you", label: "For you", Icon: Sparkles, center: false },
+  { href: "/amplify", label: "Amplify", Icon: Zap, center: false },
   { href: "/profile", label: "Profile", Icon: User2Icon, center: false },
 ];
 
@@ -31,8 +36,8 @@ const BottomBar: React.FC = () => {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-zinc-800 bg-black/40 backdrop-blur-xl rounded-lg md:hidden">
-      <div className="mx-auto flex max-w-md items-center justify-between px-4 py-2">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 border-t  border-zinc-800 bg-black/40 backdrop-blur-xl rounded-lg md:hidden">
+      <div className="mx-auto flex max-w-md items-center justify-between px-4 py-2 mb-6 sm:mb-1">
         {navItems.map(({ href, label, Icon, center }) => {
           const isActive =
             href === "/dashboard"

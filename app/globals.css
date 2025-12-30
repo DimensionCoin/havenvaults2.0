@@ -206,3 +206,12 @@
 .trending-scroll::-webkit-scrollbar {
   display: none;             /* Chrome, Safari, Opera */
 }
+
+/* Hide scrollbar but keep scrolling */
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Edge */
+}
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE/old Edge */
+  scrollbar-width: none; /* Firefox */
+}

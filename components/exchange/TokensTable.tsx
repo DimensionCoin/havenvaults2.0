@@ -10,50 +10,27 @@ import {
   TOKENS,
   getCluster,
   getMintFor,
-  type TokenCategory,
   type TokenMeta,
+  type TokenCategory,
 } from "@/lib/tokenConfig";
 
 const PAGE_SIZE = 25;
-
-// ───────── mint → categories map + category list ─────────
-
 const CLUSTER = getCluster();
-
-const MINT_TO_CATEGORIES: Record<string, TokenCategory[]> = (() => {
-  const map: Record<string, TokenCategory[]> = {};
-
-  TOKENS.forEach((meta: TokenMeta) => {
-    const mint = getMintFor(meta, CLUSTER);
-    if (!mint) return;
-    map[mint] = meta.categories ?? [];
-  });
-
-  return map;
-})();
 
 /**
  * Mint -> TokenMeta map so we can derive slugs (id / symbol) from tokenConfig
  */
 const MINT_TO_META: Record<string, TokenMeta> = (() => {
   const map: Record<string, TokenMeta> = {};
-
   TOKENS.forEach((meta: TokenMeta) => {
     const mint = getMintFor(meta, CLUSTER);
     if (!mint) return;
     map[mint] = meta;
   });
-
   return map;
 })();
 
-const CATEGORY_OPTIONS: TokenCategory[] = Array.from(
-  new Set(Object.values(MINT_TO_CATEGORIES).flat())
-);
-
-// ───────── helpers ─────────
-
-// ⭐ NEW: generic currency formatter
+// ⭐ Currency formatter
 const formatCurrency = (
   value?: number | null,
   currency: string = "USD"
@@ -80,33 +57,21 @@ const formatPct = (value?: number | null) => {
 };
 
 /**
- * 🔑 Slug strategy:
- *  - Prefer tokenConfig.id (your CoinGecko id)
+ * Slug strategy:
+ *  - Prefer tokenConfig.id
  *  - else tokenConfig.symbol
  *  - else API token.symbol or mint
- *
- * /invest/[id] page already resolves by id | symbol | mint,
- * so all of these will work.
  */
 const getTokenSlug = (token: Token) => {
   const meta = MINT_TO_META[token.mint];
-
-  if (meta?.id) {
-    return meta.id.toLowerCase();
-  }
-
-  if (meta?.symbol) {
-    return meta.symbol.toLowerCase();
-  }
-
+  if (meta?.id) return meta.id.toLowerCase();
+  if (meta?.symbol) return meta.symbol.toLowerCase();
   return (token.symbol || token.mint).toLowerCase();
 };
 
-// ───────── props ─────────
-
 type TokensTableProps = {
-  tokens: Token[];
-  displayedTokens: Token[]; // already filtered by search / wishlist from parent
+  tokens: Token[]; // raw page tokens
+  displayedTokens: Token[]; // already filtered in parent (wishlist + server category/search)
   prices: Record<string, PriceEntry>;
   wishlistSet: Set<string>;
   wishlistCount: number;
@@ -123,11 +88,10 @@ type TokensTableProps = {
 
   onToggleWishlist: (mint: string, isCurrentlyWishlisted: boolean) => void;
 
-  // 🔑 Controlled category filter
+  // kept for compatibility (parent is the source of truth)
   category: "all" | TokenCategory;
   onCategoryChange: (category: "all" | TokenCategory) => void;
 
-  // ⭐ NEW: FX/display currency
   displayCurrency: string;
   fxRate: number; // USD -> displayCurrency
 };
@@ -149,114 +113,74 @@ const TokensTable: React.FC<TokensTableProps> = ({
   onPageChange,
   onToggleWishlist,
   category,
-  onCategoryChange,
   displayCurrency,
   fxRate,
 }) => {
   const isLoading = loadingTokens || (tokens.length > 0 && loadingPrices);
 
-  // central handler so we always:
-  // - update category (in parent)
-  // - reset page to 1
-  const handleCategoryClick = (next: "all" | TokenCategory) => {
-    onCategoryChange(next);
-    onPageChange(1);
-  };
-
-  // category filter on top of parent filters
-  const categoryFilteredTokens = React.useMemo(() => {
-    if (category === "all") return displayedTokens;
-
-    return displayedTokens.filter((t) => {
-      const cats = MINT_TO_CATEGORIES[t.mint];
-      if (!cats?.length) return false;
-      return cats.includes(category);
-    });
-  }, [displayedTokens, category]);
-
-  // sort by price desc (still in USD; fxRate is constant factor)
+  // sort by price desc (USD; fx is constant multiplier)
   const sortedTokens = React.useMemo(() => {
-    return [...categoryFilteredTokens].sort((a, b) => {
-      const priceA = prices[a.mint]?.price ?? 0; // USD
-      const priceB = prices[b.mint]?.price ?? 0; // USD
+    return [...displayedTokens].sort((a, b) => {
+      const priceA = prices[a.mint]?.price ?? 0;
+      const priceB = prices[b.mint]?.price ?? 0;
       return priceB - priceA;
     });
-  }, [categoryFilteredTokens, prices]);
+  }, [displayedTokens, prices]);
 
-  // Pagination visibility — same logic as before
   const shouldShowPagination =
     totalPages > 1 && (page > 1 || sortedTokens.length >= PAGE_SIZE);
 
   return (
     <>
-      {/* Meta row + category tabs */}
+      {/* Meta row (clean + exchange-like) */}
       <div className="mb-3 flex flex-col gap-2 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
-        {/* Left: summary */}
-        <span>
-          {total > 0 ? (
-            <>
-              Showing{" "}
-              <span className="text-zinc-200">{sortedTokens.length}</span> of{" "}
-              <span className="text-zinc-200">
-                {onlyWishlist ? wishlistCount : total}
-              </span>{" "}
-              tokens
-              {category !== "all" && (
-                <>
-                  {" "}
-                  · <span className="text-emerald-300">{category}</span>
-                </>
-              )}
-            </>
-          ) : loadingTokens ? (
-            "Loading tokens..."
-          ) : (
-            "No tokens found"
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            {total > 0 ? (
+              <>
+                Showing{" "}
+                <span className="text-zinc-200">{sortedTokens.length}</span> of{" "}
+                <span className="text-zinc-200">
+                  {onlyWishlist ? wishlistCount : total}
+                </span>
+                {category !== "all" && (
+                  <>
+                    {" "}
+                    · <span className="text-emerald-300">{category}</span>
+                  </>
+                )}
+              </>
+            ) : loadingTokens ? (
+              "Loading markets…"
+            ) : (
+              "No markets found"
+            )}
+          </span>
+
+          {/* small hint like a real exchange */}
+          <span className="hidden sm:inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-950/60 px-2 py-0.5 text-[11px] text-zinc-400">
+            Sorted by price · {displayCurrency}
+          </span>
+        </div>
+
+        {/* Optional right-side status */}
+        <div className="flex items-center gap-2 sm:justify-end">
+          {loadingPrices && (
+            <span className="rounded-full border border-zinc-800 bg-zinc-950/60 px-2 py-0.5 text-[11px] text-zinc-400">
+              Updating prices…
+            </span>
           )}
-        </span>
-
-        {/* Right: category pills from tokenConfig */}
-        {CATEGORY_OPTIONS.length > 0 && (
-          <div className="flex flex-wrap gap-1 sm:justify-end">
-            {/* All */}
-            <button
-              type="button"
-              onClick={() => handleCategoryClick("all")}
-              className={`rounded-full border px-2.5 py-0.5 text-[11px] transition ${
-                category === "all"
-                  ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
-                  : "border-zinc-800 bg-zinc-950/70 text-zinc-400 hover:border-emerald-500/50 hover:text-emerald-200"
-              }`}
-            >
-              All
-            </button>
-
-            {CATEGORY_OPTIONS.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => handleCategoryClick(cat)}
-                className={`rounded-full border px-2.5 py-0.5 text-[11px] transition ${
-                  category === cat
-                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
-                    : "border-zinc-800 bg-zinc-950/70 text-zinc-400 hover:border-emerald-500/50 hover:text-emerald-200"
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        )}
+        </div>
       </div>
 
-      {/* Table header (desktop) */}
-      <div className="hidden border-b border-zinc-800/70 pb-2 text-[11px] text-zinc-500 sm:grid sm:grid-cols-[minmax(0,2fr)_100px_100px] sm:gap-4">
+      {/* Table header (desktop only) */}
+      <div className="hidden border-b border-zinc-800/70 pb-2 text-[11px] text-zinc-500 sm:grid sm:grid-cols-[minmax(0,2fr)_120px_100px] sm:gap-4">
         <div className="text-left">Token</div>
         <div className="text-right">
           Price{" "}
           <span className="text-[10px] text-zinc-500">({displayCurrency})</span>
         </div>
-        <div className="text-right">24h Change</div>
+        <div className="text-right">24h</div>
       </div>
 
       {/* Content */}
@@ -267,12 +191,13 @@ const TokensTable: React.FC<TokensTableProps> = ({
           </div>
         )}
 
+        {/* skeletons */}
         {isLoading && !tokens.length ? (
           <>
-            {Array.from({ length: 4 }).map((_, i) => (
+            {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="flex animate-pulse flex-col rounded-2xl border border-zinc-900 bg-zinc-950/90 px-3 py-3 sm:grid sm:grid-cols-[minmax(0,2fr)_100px_100px] sm:items-center sm:gap-4"
+                className="flex animate-pulse flex-col rounded-2xl border border-zinc-900 bg-zinc-950/90 px-3 py-3 sm:grid sm:grid-cols-[minmax(0,2fr)_120px_100px] sm:items-center sm:gap-4"
               >
                 <div className="flex items-center gap-3">
                   <div className="h-9 w-9 rounded-full bg-zinc-900" />
@@ -287,16 +212,23 @@ const TokensTable: React.FC<TokensTableProps> = ({
             ))}
           </>
         ) : sortedTokens.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/80 px-4 py-6 text-center text-sm text-zinc-500">
-            No tokens available to trade yet.
+          <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/80 px-4 py-8 text-center">
+            <p className="text-sm font-medium text-zinc-200">
+              No markets match your filters
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Try clearing search, changing category, or turning off favorites.
+            </p>
           </div>
         ) : (
           sortedTokens.map((token) => {
             const priceEntry = prices[token.mint];
-            const rawPriceUsd = priceEntry?.price; // USD
+            const rawPriceUsd = priceEntry?.price;
             const pctChange = priceEntry?.priceChange24hPct ?? null;
+
             const isUp = (pctChange ?? 0) > 0;
             const isDown = (pctChange ?? 0) < 0;
+
             const changeColor = isUp
               ? "text-emerald-400"
               : isDown
@@ -306,7 +238,6 @@ const TokensTable: React.FC<TokensTableProps> = ({
             const isWishlisted = wishlistSet.has(token.mint);
             const slug = getTokenSlug(token);
 
-            // ⭐ NEW: convert for display
             const priceDisplay =
               typeof rawPriceUsd === "number" && fxRate
                 ? rawPriceUsd * fxRate
@@ -326,7 +257,7 @@ const TokensTable: React.FC<TokensTableProps> = ({
                 href={`/invest/${slug}`}
                 className="block rounded-2xl border border-zinc-900 bg-zinc-950/80 px-3 py-3 transition hover:border-emerald-500/50 hover:bg-zinc-950 sm:px-4 sm:py-3"
               >
-                <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,2fr)_100px_100px] sm:items-center sm:gap-4">
+                <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,2fr)_120px_100px] sm:items-center sm:gap-4">
                   {/* Token info */}
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-zinc-800 bg-zinc-950 text-[11px] font-semibold text-zinc-200">
@@ -340,15 +271,17 @@ const TokensTable: React.FC<TokensTableProps> = ({
                       ) : (
                         (token.symbol || "???").slice(0, 3).toUpperCase()
                       )}
+
                       {isWishlisted && (
                         <span className="absolute -right-1 -top-1 rounded-full bg-black/80 p-0.5">
                           <Star className="h-3 w-3 fill-emerald-400 text-emerald-400" />
                         </span>
                       )}
                     </div>
+
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-medium">
+                        <p className="truncate text-sm font-medium text-zinc-50">
                           {token.name || token.symbol || "Unknown token"}
                         </p>
                         {token.symbol && (
@@ -357,24 +290,32 @@ const TokensTable: React.FC<TokensTableProps> = ({
                           </span>
                         )}
                       </div>
+
+                      {/* subtle hint (mobile) */}
+                      <p className="mt-0.5 text-[11px] text-zinc-500 sm:hidden">
+                        Tap to buy
+                      </p>
                     </div>
 
-                    {/* Wishlist star button */}
+                    {/* Wishlist */}
                     <button
                       type="button"
                       onClick={handleStarClick}
-                      className={`ml-auto inline-flex h-7 w-7 items-center justify-center rounded-full border transition ${
+                      aria-label={isWishlisted ? "Unfavorite" : "Favorite"}
+                      className={[
+                        "ml-auto inline-flex h-8 w-8 items-center justify-center rounded-full border transition",
                         isWishlisted
                           ? "border-emerald-500/70 bg-emerald-500/10"
-                          : "border-zinc-800 bg-zinc-950 hover:border-emerald-500/60"
-                      }`}
+                          : "border-zinc-800 bg-zinc-950 hover:border-emerald-500/60",
+                      ].join(" ")}
                     >
                       <Star
-                        className={`h-3.5 w-3.5 ${
+                        className={[
+                          "h-4 w-4",
                           isWishlisted
                             ? "fill-emerald-400 text-emerald-400"
-                            : "text-zinc-400"
-                        }`}
+                            : "text-zinc-400",
+                        ].join(" ")}
                       />
                     </button>
                   </div>
@@ -387,33 +328,23 @@ const TokensTable: React.FC<TokensTableProps> = ({
                       </span>
                       <span className="text-sm font-medium text-zinc-50 sm:block">
                         {loadingPrices && priceDisplay === undefined
-                          ? "Loading..."
+                          ? "Loading…"
                           : formatCurrency(priceDisplay, displayCurrency)}
                       </span>
                     </div>
                   </div>
 
-                  {/* 24h change */}
+                  {/* 24h */}
                   <div className="sm:text-right">
                     <div className="flex items-center justify-between sm:block">
                       <span className="text-[11px] text-zinc-500 sm:hidden">
                         24h
                       </span>
-                      <span
-                        className={`text-sm font-medium ${changeColor} sm:block`}
-                      >
+                      <span className={`text-sm font-medium ${changeColor}`}>
                         {formatPct(pctChange)}
                       </span>
                     </div>
                   </div>
-                </div>
-
-                {/* Mobile hint */}
-                <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-500 sm:hidden">
-                  <span>Tap to open buy flow</span>
-                  <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-[10px] text-zinc-300">
-                    Buy
-                  </span>
                 </div>
               </Link>
             );
@@ -428,11 +359,12 @@ const TokensTable: React.FC<TokensTableProps> = ({
             type="button"
             disabled={page <= 1}
             onClick={() => onPageChange(Math.max(1, page - 1))}
-            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 transition ${
+            className={[
+              "inline-flex items-center gap-1 rounded-full border px-3 py-1 transition",
               page <= 1
                 ? "cursor-not-allowed border-zinc-800 text-zinc-600"
-                : "border-zinc-700 hover:border-emerald-500/60 hover:text-emerald-200"
-            }`}
+                : "border-zinc-700 hover:border-emerald-500/60 hover:text-emerald-200",
+            ].join(" ")}
           >
             <ChevronLeft className="h-3 w-3" />
             Prev
@@ -452,11 +384,12 @@ const TokensTable: React.FC<TokensTableProps> = ({
             onClick={() =>
               onPageChange(!hasMore || page >= totalPages ? page : page + 1)
             }
-            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 transition ${
+            className={[
+              "inline-flex items-center gap-1 rounded-full border px-3 py-1 transition",
               !hasMore || page >= totalPages
                 ? "cursor-not-allowed border-zinc-800 text-zinc-600"
-                : "border-zinc-700 hover:border-emerald-500/60 hover:text-emerald-200"
-            }`}
+                : "border-zinc-700 hover:border-emerald-500/60 hover:text-emerald-200",
+            ].join(" ")}
           >
             Next
             <ChevronRight className="h-3 w-3" />

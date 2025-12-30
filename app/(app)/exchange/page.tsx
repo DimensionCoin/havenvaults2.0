@@ -2,12 +2,14 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Star } from "lucide-react";
+import { Search, Star, X } from "lucide-react";
 import { IoIosArrowBack } from "react-icons/io";
+import Link from "next/link";
+
 import TokensTable from "@/components/exchange/TokensTable";
-import AdsCarousel from "@/components/exchange/advertisement/AdsCarousel";
-import LSTYieldAd from "@/components/exchange/advertisement/adds/LSTYieldAd";
 import TrendingStrip from "@/components/exchange/TrendingStrip";
+
+import LSTYieldAd from "@/components/exchange/advertisement/adds/LSTYieldAd";
 import InstantTradesAd from "@/components/exchange/advertisement/adds/InstantTradesAd";
 import AmplifyTop3Ad from "@/components/exchange/advertisement/adds/AmplifyTop3Ad";
 
@@ -17,46 +19,72 @@ import type {
   TokensApiResponse,
   PricesResponse,
 } from "@/components/exchange/types";
-import type { TokenCategory } from "@/lib/tokenConfig";
-import Link from "next/link";
+
+import {
+  TOKENS,
+  getCluster,
+  getMintFor,
+  type TokenCategory,
+  type TokenMeta,
+} from "@/lib/tokenConfig";
 
 import { useBalance } from "@/providers/BalanceProvider";
+
+// shadcn
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type WishlistResponse = {
   wishlist: string[];
 };
 
+const CLUSTER = getCluster();
+
+// derive category list once (from tokenConfig)
+const CATEGORY_OPTIONS: TokenCategory[] = Array.from(
+  new Set(
+    TOKENS.flatMap((meta: TokenMeta) => meta.categories ?? []).filter(Boolean)
+  )
+).sort((a, b) => a.localeCompare(b));
+
 const Exchange: React.FC = () => {
   const [wishlist, setWishlist] = useState<string[]>([]);
   const [wishlistLoading, setWishlistLoading] = useState(true);
 
-  // main table tokens (paged + searchable)
+  // main tokens
   const [tokens, setTokens] = useState<Token[]>([]);
   const [loadingTokens, setLoadingTokens] = useState(true);
 
-  // trending tokens (independent of search)
+  // trending tokens
   const [trendingTokens, setTrendingTokens] = useState<Token[]>([]);
   const [loadingTrendingTokens, setLoadingTrendingTokens] = useState(true);
 
-  // shared prices map (covers both tokens + trendingTokens)
+  // prices map
   const [prices, setPrices] = useState<Record<string, PriceEntry>>({});
   const [loadingPrices, setLoadingPrices] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
+  // pagination
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [pageSize] = useState(25);
 
+  // filters
   const [search, setSearch] = useState("");
   const [onlyWishlist, setOnlyWishlist] = useState(false);
-
-  // 🔑 Category filter (“all”, “LST”, “DeFi”, “Stocks”, etc.)
   const [category, setCategory] = useState<"all" | TokenCategory>("all");
 
   // FX
   const { displayCurrency, fxRate } = useBalance();
+
+  const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
 
   // ───────────────── Wishlist load ─────────────────
   useEffect(() => {
@@ -68,15 +96,13 @@ const Exchange: React.FC = () => {
         });
 
         if (!res.ok) {
-          console.error("Wishlist load failed:", res.status);
           setWishlist([]);
           return;
         }
 
         const data: WishlistResponse = await res.json();
         setWishlist(data.wishlist ?? []);
-      } catch (err) {
-        console.error("Error loading wishlist:", err);
+      } catch {
         setWishlist([]);
       } finally {
         setWishlistLoading(false);
@@ -86,7 +112,7 @@ const Exchange: React.FC = () => {
     loadWishlist();
   }, []);
 
-  // ───────────────── Tokens load (paged + searchable + ✅ category-aware) ─────────────────
+  // ───────────────── Tokens load (paged + searchable + category-aware) ─────────────────
   useEffect(() => {
     const controller = new AbortController();
 
@@ -100,14 +126,8 @@ const Exchange: React.FC = () => {
           pageSize: String(pageSize),
         });
 
-        if (search.trim()) {
-          params.set("q", search.trim());
-        }
-
-        // ✅ NEW: send category to API so pagination/total works per category
-        if (category !== "all") {
-          params.set("category", String(category));
-        }
+        if (search.trim()) params.set("q", search.trim());
+        if (category !== "all") params.set("category", String(category));
 
         const res = await fetch(`/api/tokens?${params.toString()}`, {
           method: "GET",
@@ -125,22 +145,17 @@ const Exchange: React.FC = () => {
         setTotal(data.pagination?.total || 0);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Error loading tokens:", err);
-        const message =
-          err instanceof Error ? err.message : "Something went wrong loading tokens";
-        setError(message);
+        setError(err instanceof Error ? err.message : "Failed to load tokens");
       } finally {
         setLoadingTokens(false);
       }
     };
 
     loadTokens();
-
     return () => controller.abort();
-    // ✅ NEW: include category so we refetch when filter changes
   }, [page, pageSize, search, category]);
 
-  // ───────────────── Trending tokens load (keep global; ignore category) ─────────────────
+  // ───────────────── Trending tokens (global) ─────────────────
   useEffect(() => {
     const controller = new AbortController();
 
@@ -148,22 +163,13 @@ const Exchange: React.FC = () => {
       try {
         setLoadingTrendingTokens(true);
 
-        const params = new URLSearchParams({
-          page: "1",
-          pageSize: "100",
-        });
-
+        const params = new URLSearchParams({ page: "1", pageSize: "100" });
         const res = await fetch(`/api/tokens?${params.toString()}`, {
           method: "GET",
           signal: controller.signal,
         });
 
         if (!res.ok) {
-          console.error(
-            "Trending tokens load failed:",
-            res.status,
-            await res.text().catch(() => "")
-          );
           setTrendingTokens([]);
           return;
         }
@@ -172,7 +178,6 @@ const Exchange: React.FC = () => {
         setTrendingTokens(data.tokens || []);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Error loading trending tokens:", err);
         setTrendingTokens([]);
       } finally {
         setLoadingTrendingTokens(false);
@@ -180,11 +185,10 @@ const Exchange: React.FC = () => {
     };
 
     loadTrendingTokens();
-
     return () => controller.abort();
   }, []);
 
-  // ───────────────── Prices (USD) ─────────────────
+  // ───────────────── Prices ─────────────────
   useEffect(() => {
     const controller = new AbortController();
 
@@ -205,14 +209,11 @@ const Exchange: React.FC = () => {
         const res = await fetch("/api/prices/jup", {
           method: "POST",
           signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mints: uniqueMints }),
         });
 
         if (!res.ok) {
-          console.error("Failed to load prices from Jup:", res.status);
           setPrices({});
           return;
         }
@@ -221,20 +222,30 @@ const Exchange: React.FC = () => {
         setPrices(data.prices || {});
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Error loading prices:", err);
       } finally {
         setLoadingPrices(false);
       }
     };
 
     loadPrices();
-
     return () => controller.abort();
   }, [tokens, trendingTokens]);
 
-  // ───────────────── Derived data ─────────────────
-  const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
+  // ───────────────── Derived ─────────────────
+  const displayedTokens = useMemo(() => {
+    let base = tokens;
+    if (onlyWishlist) base = base.filter((t) => wishlistSet.has(t.mint));
+    return base;
+  }, [tokens, onlyWishlist, wishlistSet]);
 
+  const totalPages = useMemo(
+    () => (total && pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1),
+    [total, pageSize]
+  );
+
+  const isTrendingLoading = loadingTrendingTokens || loadingPrices;
+
+  // LST list for ad
   const lstTokens = useMemo(() => {
     const all = [...tokens, ...trendingTokens];
     const uniqueByMint = new Map<string, Token>();
@@ -246,18 +257,6 @@ const Exchange: React.FC = () => {
 
     return Array.from(uniqueByMint.values());
   }, [tokens, trendingTokens]);
-
-  // ✅ Now that server filters by category, displayedTokens should only handle wishlist
-  const displayedTokens = useMemo(() => {
-    let base = tokens;
-    if (onlyWishlist) base = base.filter((t) => wishlistSet.has(t.mint));
-    return base;
-  }, [tokens, onlyWishlist, wishlistSet]);
-
-  const totalPages = useMemo(
-    () => (total && pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1),
-    [total, pageSize]
-  );
 
   // ───────────────── Wishlist toggle ─────────────────
   const handleToggleWishlist = async (
@@ -280,17 +279,9 @@ const Exchange: React.FC = () => {
       });
 
       if (!res.ok) {
-        console.error(
-          "Wishlist update failed:",
-          res.status,
-          await res.text().catch(() => "")
-        );
         // revert
         setWishlist((prev) => {
-          if (isCurrentlyWishlisted) {
-            if (prev.includes(mint)) return prev;
-            return [...prev, mint];
-          }
+          if (isCurrentlyWishlisted) return [...prev, mint];
           return prev.filter((m) => m !== mint);
         });
         return;
@@ -299,53 +290,31 @@ const Exchange: React.FC = () => {
       const data = (await res
         .json()
         .catch(() => null)) as WishlistResponse | null;
-
       if (data?.wishlist) setWishlist(data.wishlist);
-    } catch (err) {
-      console.error("Error toggling wishlist:", err);
+    } catch {
       // revert
       setWishlist((prev) => {
-        if (isCurrentlyWishlisted) {
-          if (prev.includes(mint)) return prev;
-          return [...prev, mint];
-        }
+        if (isCurrentlyWishlisted) return [...prev, mint];
         return prev.filter((m) => m !== mint);
       });
     }
   };
 
-  // when user taps the LST ad: set category + reset to page 1
+  // quick “LST” ad tap
   const handleFilterLSTs = useCallback(() => {
     setCategory("LST" as TokenCategory);
     setPage(1);
   }, []);
 
-  // when user hits a category pill inside TokensTable
-  const handleCategoryChange = useCallback((cat: "all" | TokenCategory) => {
-    setCategory(cat);
+  const clearFilters = () => {
+    setSearch("");
+    setCategory("all");
+    setOnlyWishlist(false);
     setPage(1);
-  }, []);
+  };
 
-  const ads = useMemo(
-    () => [
-      <LSTYieldAd
-        key="lst-yield"
-        lstTokens={lstTokens}
-        onFilterLSTs={handleFilterLSTs}
-      />,
-      <InstantTradesAd
-        key="instant-trades"
-        tokens={trendingTokens.length ? trendingTokens : tokens}
-      />,
-      <AmplifyTop3Ad
-        key="amplify-top3"
-        tokens={trendingTokens.length ? trendingTokens : tokens}
-      />,
-    ],
-    [lstTokens, handleFilterLSTs, trendingTokens, tokens]
-  );
-
-  const isTrendingLoading = loadingTrendingTokens || loadingPrices;
+  const hasActiveFilters =
+    !!search.trim() || category !== "all" || onlyWishlist;
 
   return (
     <div className="min-h-screen text-zinc-50">
@@ -360,15 +329,14 @@ const Exchange: React.FC = () => {
             </h1>
           </div>
           <p className="mt-1 text-sm text-zinc-400">
-            Track markets, discover top movers, and buy Solana tokens directly
-            from your Haven vault.
+            Track markets, discover top movers, and buy tokens directly from
+            your Haven vault.
           </p>
         </header>
 
         <main className="rounded-3xl bg-black/25 p-1 sm:p-2">
-          <AdsCarousel items={ads} />
-
-          <section className="mt-6 sm:mt-8">
+          {/* ───────── Trending ───────── */}
+          <section className="mt-3 sm:mt-4">
             <div className="mb-2 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-zinc-100 sm:text-base">
@@ -394,20 +362,22 @@ const Exchange: React.FC = () => {
             />
           </section>
 
+          {/* ───────── All markets ───────── */}
           <section className="mt-6 sm:mt-8">
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-zinc-100 sm:text-base">
-                  All markets
-                </h2>
-                <p className="text-[11px] text-zinc-500 sm:text-xs">
-                  Search Solana tokens, star your favorites, and tap to open the
-                  buy flow.
-                </p>
-              </div>
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-zinc-100 sm:text-base">
+                All markets
+              </h2>
+              <p className="text-[11px] text-zinc-500 sm:text-xs">
+                Search, filter, star favorites, and tap a token to buy.
+              </p>
+            </div>
 
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-                <div className="relative flex-1 sm:w-64">
+            {/* ✅ NEW: Compact sticky filter bar */}
+            <div className="sticky top-2 z-10 mb-3">
+              <div className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-2 backdrop-blur-xl">
+                {/* Row 1: search */}
+                <div className="relative">
                   <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
                     <Search className="h-4 w-4 text-zinc-500" />
                   </span>
@@ -417,33 +387,111 @@ const Exchange: React.FC = () => {
                       setPage(1);
                       setSearch(e.target.value);
                     }}
-                    placeholder="Search by name or symbol"
-                    className="w-full rounded-full border border-zinc-800 bg-zinc-950/80 py-2 pl-9 pr-3 text-sm text-zinc-100 outline-none ring-emerald-500/30 placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-2"
+                    placeholder="Search token (e.g. SOL, JUP, BONK)"
+                    className="w-full rounded-full border border-zinc-800 bg-zinc-950/80 py-2 pl-9 pr-10 text-sm text-zinc-100 outline-none ring-emerald-500/30 placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-2"
                   />
+
+                  {search.trim() && (
+                    <button
+                      type="button"
+                      aria-label="Clear search"
+                      onClick={() => {
+                        setSearch("");
+                        setPage(1);
+                      }}
+                      className="absolute inset-y-0 right-2 flex items-center rounded-full border border-zinc-800 bg-zinc-950/60 px-2 text-zinc-300 hover:bg-zinc-900"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  disabled={wishlistLoading || !wishlist.length}
-                  onClick={() => setOnlyWishlist((v) => !v)}
-                  className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs font-medium transition ${
-                    onlyWishlist
-                      ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-                      : "border-zinc-800 bg-zinc-950/60 text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-200"
-                  } ${wishlistLoading ? "opacity-60" : ""}`}
-                >
-                  <Star className="mr-1 h-3 w-3" />
-                  {wishlistLoading
-                    ? "Loading wishlist..."
-                    : wishlist.length
-                    ? onlyWishlist
-                      ? "Showing wishlist"
-                      : "Wishlist only"
-                    : "Wishlist (empty)"}
-                </button>
+                {/* Row 2: dropdown + favorites + clear */}
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  {/* Category */}
+                  <div className="flex-1">
+                    <Select
+                      value={category}
+                      onValueChange={(v) => {
+                        setCategory(v as "all" | TokenCategory);
+                        setPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="h-10 w-full rounded-2xl border border-zinc-800 bg-zinc-950/70 text-sm text-zinc-100">
+                        <SelectValue placeholder="Category" />
+                      </SelectTrigger>
+                      <SelectContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                        <SelectItem value="all">All categories</SelectItem>
+                        {CATEGORY_OPTIONS.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Favorites */}
+                  <button
+                    type="button"
+                    disabled={wishlistLoading}
+                    onClick={() => {
+                      setOnlyWishlist((v) => !v);
+                      setPage(1);
+                    }}
+                    className={[
+                      "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-medium transition",
+                      onlyWishlist
+                        ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
+                        : "border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-200",
+                      wishlistLoading ? "opacity-60" : "",
+                    ].join(" ")}
+                  >
+                    <Star className="h-4 w-4" />
+                    Favorites
+                    {!wishlistLoading && wishlist.length > 0 && (
+                      <span className="ml-1 rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-200">
+                        {wishlist.length}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Clear */}
+                  {hasActiveFilters && (
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="inline-flex h-10 items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-950/70 px-4 text-sm text-zinc-300 hover:border-zinc-600 hover:text-zinc-100"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {/* Small “what’s active” hint (grandma-friendly) */}
+                {hasActiveFilters && (
+                  <div className="mt-2 flex flex-wrap gap-2 px-1 text-[11px] text-zinc-400">
+                    {category !== "all" && (
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-200">
+                        Category: {category}
+                      </span>
+                    )}
+                    {onlyWishlist && (
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-200">
+                        Favorites only
+                      </span>
+                    )}
+                    {!!search.trim() && (
+                      <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-200">
+                        Search: “{search.trim()}”
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
+            {/* Your existing table */}
             <TokensTable
               tokens={tokens}
               displayedTokens={displayedTokens}
@@ -460,12 +508,18 @@ const Exchange: React.FC = () => {
               hasMore={hasMore}
               onPageChange={setPage}
               onToggleWishlist={handleToggleWishlist}
+              // keep these props so your table API doesn’t break
               category={category}
-              onCategoryChange={handleCategoryChange}
+              onCategoryChange={(c) => {
+                setCategory(c);
+                setPage(1);
+              }}
               displayCurrency={displayCurrency}
               fxRate={fxRate}
             />
           </section>
+
+         
         </main>
       </div>
     </div>

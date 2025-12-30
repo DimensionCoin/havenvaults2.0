@@ -1,18 +1,19 @@
 "use client";
 
 import React, { useState } from "react";
-import BuyButton from "@/components/invest/BuyButton";
+
 import HoldingsTable from "@/components/invest/HoldingsTable";
 import SellDrawer from "@/components/invest/Sell";
 import TransferSPL from "@/components/invest/TransferSPL";
-import Receive from "@/components/invest/Receive"; // ✅ import it
+import Receive from "@/components/invest/Receive";
+
 import { Drawer } from "@/components/ui/drawer";
 import { useUser } from "@/providers/UserProvider";
 
 const Invest: React.FC = () => {
   const [sellOpen, setSellOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
-  const [receiveOpen, setReceiveOpen] = useState(false); // ✅ new state
+  const [receiveOpen, setReceiveOpen] = useState(false);
 
   const { user } = useUser();
   const walletAddress = user?.walletAddress || "";
@@ -34,25 +35,23 @@ const Invest: React.FC = () => {
               }}
             />
           </div>
-
-          <BuyButton />
         </div>
       </div>
 
-      {/* Sell modal (it owns its own Dialog internally) */}
+      {/* Sell modal (Dialog inside Sell.tsx) */}
       <SellDrawer open={sellOpen} onOpenChange={setSellOpen} />
 
-      {/* SPL / SOL transfer drawer (parent owns <Drawer>) */}
+      {/* ✅ Transfer modal (Dialog inside TransferSPL.tsx) */}
       {walletAddress && (
-        <Drawer open={transferOpen} onOpenChange={setTransferOpen}>
-          <TransferSPL
-            walletAddress={walletAddress}
-            onSuccess={() => setTransferOpen(false)}
-          />
-        </Drawer>
+        <TransferSPL
+          open={transferOpen}
+          onOpenChange={setTransferOpen}
+          walletAddress={walletAddress}
+          onSuccess={() => setTransferOpen(false)}
+        />
       )}
 
-      {/* ✅ Receive drawer (parent owns <Drawer>) */}
+      {/* ✅ Receive drawer (parent owns Drawer; Receive is DrawerContent) */}
       {walletAddress && (
         <Drawer open={receiveOpen} onOpenChange={setReceiveOpen}>
           <Receive
