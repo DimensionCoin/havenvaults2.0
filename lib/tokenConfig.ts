@@ -578,6 +578,28 @@ export const TOKENS: TokenMeta[] = [
     decimals: 6,
     mints: { mainnet: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3" },
   },
+  {
+    name: "Switchboard",
+    symbol: "SWTCH",
+    id: "switchboard",
+    logo: "/logos/swtch.png",
+    kind: "crypto",
+    categories: ["DeFi", "Infrastructure"],
+    tags: ["Oracles"],
+    decimals: 9,
+    mints: { mainnet: "SW1TCHLmRGTfW5xZknqQdpdarB8PD95sJYWpNp9TbFx" },
+  },
+  {
+    name: "HYPE",
+    symbol: "HYPE",
+    id: "wormhole-bridged-hype",
+    logo: "/logos/hype.png",
+    kind: "crypto",
+    categories: ["DeFi", "Infrastructure"],
+    tags: ["DEX"],
+    decimals: 9,
+    mints: { mainnet: "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g" },
+  },
 ];
 
 /* ------------------------------- Finders -------------------------------- */
