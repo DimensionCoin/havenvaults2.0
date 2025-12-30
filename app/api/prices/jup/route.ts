@@ -8,14 +8,6 @@ type JupPriceRequest = {
   mints: string[];
 };
 
-const JUP_API_KEY = process.env.JUP_API_KEY;
-
-if (!JUP_API_KEY) {
-  console.warn(
-    "[JUP PRICE] Missing JUP_API_KEY env var – price API will not work."
-  );
-}
-
 type JupToken = {
   id: string; // mint
   usdPrice: number | null;
@@ -42,9 +34,31 @@ type NormalizedToken = {
   marketCapRank: number | null;
 };
 
+const JUP_API_KEY = process.env.JUP_API_KEY;
+
+if (!JUP_API_KEY) {
+  console.warn(
+    "[JUP PRICE] Missing JUP_API_KEY env var – price API will not work."
+  );
+}
+
+function safeJsonParse<T>(
+  raw: string
+): { ok: true; value: T } | { ok: false; error: string } {
+  if (!raw || !raw.trim()) return { ok: false, error: "Empty body" };
+  try {
+    return { ok: true, value: JSON.parse(raw) as T };
+  } catch {
+    return { ok: false, error: "Invalid JSON" };
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as JupPriceRequest;
+    // ✅ Avoid req.json() crashing when client aborts mid-stream (truncated JSON)
+    const raw = await req.text();
+    const parsed = safeJsonParse<Partial<JupPriceRequest>>(raw);
+    const body = parsed.ok ? parsed.value : {};
 
     if (!body?.mints || !Array.isArray(body.mints) || body.mints.length === 0) {
       return NextResponse.json(
@@ -53,8 +67,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // dedupe + respect Jupiter docs (limit 100 mint addresses)
-    const uniqueMints = Array.from(new Set(body.mints)).slice(0, 100);
+    // ✅ sanitize + dedupe + Jupiter cap
+    const uniqueMints = Array.from(
+      new Set(
+        body.mints.filter(
+          (m): m is string => typeof m === "string" && m.trim().length > 0
+        )
+      )
+    )
+      .map((m) => m.trim())
+      .slice(0, 100);
+
+    if (uniqueMints.length === 0) {
+      return NextResponse.json(
+        { error: "mints array is required" },
+        { status: 400 }
+      );
+    }
 
     if (!JUP_API_KEY) {
       return NextResponse.json(
@@ -72,9 +101,7 @@ export async function POST(req: NextRequest) {
 
     const res = await fetch(url, {
       method: "GET",
-      headers: {
-        "x-api-key": JUP_API_KEY,
-      },
+      headers: { "x-api-key": JUP_API_KEY },
       next: { revalidate: 15 }, // light cache
     });
 
@@ -93,24 +120,19 @@ export async function POST(req: NextRequest) {
 
     const tokens = (await res.json()) as JupToken[];
 
-    // Map mint -> raw token
     const byMint = new Map<string, JupToken>();
     for (const t of tokens) {
       if (!t?.id) continue;
       byMint.set(t.id, t);
     }
 
-    /**
-     * Normalize into:
-     *   mint -> { price, priceChange24hPct, mcap, fdv, liquidity, volume24h, marketCapRank }
-     */
     const prices: Record<string, NormalizedToken> = {};
 
     for (const mint of uniqueMints) {
       const entry = byMint.get(mint);
       if (!entry) continue;
 
-      const price = entry.usdPrice ?? 0;
+      const price = typeof entry.usdPrice === "number" ? entry.usdPrice : 0;
       const pct =
         typeof entry.stats24h?.priceChange === "number"
           ? entry.stats24h.priceChange
