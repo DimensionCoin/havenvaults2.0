@@ -1,26 +1,24 @@
-// app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
 import PrivyProviders from "@/providers/PrivyProvider";
 import { Inter, DM_Sans } from "next/font/google";
 import { UserProvider } from "@/providers/UserProvider";
+import PwaRegister from "@/components/PwaRegister";
 
 export const metadata: Metadata = {
   title: "Haven Vaults",
   description: "Best app for financial growth.",
+  manifest: "/manifest.webmanifest",
+  themeColor: "#000000",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Haven",
+  },
 };
 
-// Professional, readable UI font
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-sans",
-});
-
-// Friendly but clean heading font
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-heading",
-});
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
+const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-heading" });
 
 export default function RootLayout({
   children,
@@ -29,18 +27,20 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
+      <head>
+        {/* iOS home screen icon (use your best 180x180 if you have it) */}
+        <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
+        {/* Optional: iOS splash screens are separate (can add later) */}
+      </head>
+
       <body
-        className={`
-          ${inter.variable}
-          ${dmSans.variable}
-          min-h-screen
-          bg-background
-          text-foreground
-          antialiased
-        `}
+        className={`${inter.variable} ${dmSans.variable} min-h-screen bg-background text-foreground antialiased`}
       >
         <PrivyProviders>
-          <UserProvider>{children}</UserProvider>
+          <UserProvider>
+            <PwaRegister />
+            {children}
+          </UserProvider>
         </PrivyProviders>
       </body>
     </html>

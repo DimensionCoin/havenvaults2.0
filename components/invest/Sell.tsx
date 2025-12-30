@@ -9,7 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import Image from "next/image";
-import { ArrowDown, ChevronDown, X } from "lucide-react";
+import { ArrowDown, ChevronDown } from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
 
 import { useBalance } from "@/providers/BalanceProvider";

@@ -1,7 +1,7 @@
 // app/(app)/invest/exchange/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Search, Star, X } from "lucide-react";
 import { IoIosArrowBack } from "react-icons/io";
 import Link from "next/link";
@@ -9,9 +9,6 @@ import Link from "next/link";
 import TokensTable from "@/components/exchange/TokensTable";
 import TrendingStrip from "@/components/exchange/TrendingStrip";
 
-import LSTYieldAd from "@/components/exchange/advertisement/adds/LSTYieldAd";
-import InstantTradesAd from "@/components/exchange/advertisement/adds/InstantTradesAd";
-import AmplifyTop3Ad from "@/components/exchange/advertisement/adds/AmplifyTop3Ad";
 
 import type {
   Token,
@@ -22,8 +19,6 @@ import type {
 
 import {
   TOKENS,
-  getCluster,
-  getMintFor,
   type TokenCategory,
   type TokenMeta,
 } from "@/lib/tokenConfig";
@@ -43,7 +38,6 @@ type WishlistResponse = {
   wishlist: string[];
 };
 
-const CLUSTER = getCluster();
 
 // derive category list once (from tokenConfig)
 const CATEGORY_OPTIONS: TokenCategory[] = Array.from(
@@ -245,19 +239,7 @@ const Exchange: React.FC = () => {
 
   const isTrendingLoading = loadingTrendingTokens || loadingPrices;
 
-  // LST list for ad
-  const lstTokens = useMemo(() => {
-    const all = [...tokens, ...trendingTokens];
-    const uniqueByMint = new Map<string, Token>();
-
-    for (const t of all) {
-      if ((t.category || "").toUpperCase() !== "LST") continue;
-      if (!uniqueByMint.has(t.mint)) uniqueByMint.set(t.mint, t);
-    }
-
-    return Array.from(uniqueByMint.values());
-  }, [tokens, trendingTokens]);
-
+  
   // ───────────────── Wishlist toggle ─────────────────
   const handleToggleWishlist = async (
     mint: string,
@@ -300,12 +282,7 @@ const Exchange: React.FC = () => {
     }
   };
 
-  // quick “LST” ad tap
-  const handleFilterLSTs = useCallback(() => {
-    setCategory("LST" as TokenCategory);
-    setPage(1);
-  }, []);
-
+  
   const clearFilters = () => {
     setSearch("");
     setCategory("all");
