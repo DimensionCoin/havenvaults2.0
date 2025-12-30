@@ -405,6 +405,17 @@ export const TOKENS: TokenMeta[] = [
     decimals: 8,
     mints: { mainnet: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm" },
   },
+  {
+    name: "FARTCOIN",
+    symbol: "FART",
+    id: "fartcoin",
+    logo: "/logos/fart.png",
+    kind: "crypto",
+    categories: ["Meme"],
+    tags: ["Community"],
+    decimals: 8,
+    mints: { mainnet: "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump" },
+  },
 
   // LSTs
   {
@@ -599,6 +610,17 @@ export const TOKENS: TokenMeta[] = [
     tags: ["DEX"],
     decimals: 9,
     mints: { mainnet: "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g" },
+  },
+  {
+    name: "Jito",
+    symbol: "JTO",
+    id: "jito-governance-token",
+    logo: "/logos/jto.png",
+    kind: "crypto",
+    categories: ["DeFi", "Infrastructure"],
+    tags: ["DEX"],
+    decimals: 9,
+    mints: { mainnet: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL" },
   },
 ];
 
