@@ -5,15 +5,12 @@ import React, { useState } from "react";
 import HoldingsTable from "@/components/invest/HoldingsTable";
 import SellDrawer from "@/components/invest/Sell";
 import TransferSPL from "@/components/invest/TransferSPL";
-import Receive from "@/components/invest/Receive";
 
-import { Drawer } from "@/components/ui/drawer";
 import { useUser } from "@/providers/UserProvider";
 
 const Invest: React.FC = () => {
   const [sellOpen, setSellOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
-  const [receiveOpen, setReceiveOpen] = useState(false);
 
   const { user } = useUser();
   const walletAddress = user?.walletAddress || "";
@@ -28,10 +25,6 @@ const Invest: React.FC = () => {
               onSend={() => {
                 if (!walletAddress) return;
                 setTransferOpen(true);
-              }}
-              onReceive={() => {
-                if (!walletAddress) return;
-                setReceiveOpen(true);
               }}
             />
           </div>
@@ -51,15 +44,7 @@ const Invest: React.FC = () => {
         />
       )}
 
-      {/* ✅ Receive drawer (parent owns Drawer; Receive is DrawerContent) */}
-      {walletAddress && (
-        <Drawer open={receiveOpen} onOpenChange={setReceiveOpen}>
-          <Receive
-            walletAddress={walletAddress}
-            onSuccess={() => setReceiveOpen(false)}
-          />
-        </Drawer>
-      )}
+      
     </>
   );
 };
