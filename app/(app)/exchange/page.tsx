@@ -1,14 +1,13 @@
-// app/(app)/invest/exchange/page.tsx
+// app/(app)/exchange/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { Search, Star, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Search, Star, X, ArrowUpDown } from "lucide-react";
 import { IoIosArrowBack } from "react-icons/io";
 import Link from "next/link";
 
 import TokensTable from "@/components/exchange/TokensTable";
 import TrendingStrip from "@/components/exchange/TrendingStrip";
-
 
 import type {
   Token,
@@ -19,13 +18,14 @@ import type {
 
 import {
   TOKENS,
+  getCluster,
+  getMintFor,
   type TokenCategory,
   type TokenMeta,
 } from "@/lib/tokenConfig";
 
 import { useBalance } from "@/providers/BalanceProvider";
 
-// shadcn
 import {
   Select,
   SelectContent,
@@ -34,51 +34,60 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type WishlistResponse = {
-  wishlist: string[];
-};
+type WishlistResponse = { wishlist: string[] };
+type SortKey = "trending" | "change24h" | "price" | "az" | "za";
 
+const CLUSTER = getCluster();
+const PRICE_CHUNK = 120; // safe chunk size for your /api/prices/jup
 
-// derive category list once (from tokenConfig)
 const CATEGORY_OPTIONS: TokenCategory[] = Array.from(
   new Set(
-    TOKENS.flatMap((meta: TokenMeta) => meta.categories ?? []).filter(Boolean)
+    TOKENS.flatMap((meta: TokenMeta) => meta.categories ?? []).filter(
+      (c): c is TokenCategory => Boolean(c)
+    )
   )
 ).sort((a, b) => a.localeCompare(b));
+
+const toTokenFromMeta = (meta: TokenMeta): Token | null => {
+  const mint = getMintFor(meta, CLUSTER);
+  if (!mint) return null;
+  return {
+    mint,
+    symbol: meta.symbol ?? "",
+    name: meta.name ?? meta.symbol ?? "Unknown",
+    logoURI: meta.logo ?? null,
+  };
+};
 
 const Exchange: React.FC = () => {
   const [wishlist, setWishlist] = useState<string[]>([]);
   const [wishlistLoading, setWishlistLoading] = useState(true);
 
-  // main tokens
-  const [tokens, setTokens] = useState<Token[]>([]);
-  const [loadingTokens, setLoadingTokens] = useState(true);
-
-  // trending tokens
   const [trendingTokens, setTrendingTokens] = useState<Token[]>([]);
   const [loadingTrendingTokens, setLoadingTrendingTokens] = useState(true);
 
-  // prices map
   const [prices, setPrices] = useState<Record<string, PriceEntry>>({});
   const [loadingPrices, setLoadingPrices] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
-  // pagination
+  // client pagination (global)
   const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [total, setTotal] = useState(0);
   const [pageSize] = useState(25);
 
   // filters
   const [search, setSearch] = useState("");
   const [onlyWishlist, setOnlyWishlist] = useState(false);
   const [category, setCategory] = useState<"all" | TokenCategory>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("trending");
 
-  // FX
   const { displayCurrency, fxRate } = useBalance();
-
   const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
+
+  // FULL catalog (this is your “Amazon catalog”)
+  const catalog: Token[] = useMemo(() => {
+    return TOKENS.map(toTokenFromMeta).filter((t): t is Token => Boolean(t));
+  }, []);
 
   // ───────────────── Wishlist load ─────────────────
   useEffect(() => {
@@ -88,12 +97,10 @@ const Exchange: React.FC = () => {
           method: "GET",
           credentials: "include",
         });
-
         if (!res.ok) {
           setWishlist([]);
           return;
         }
-
         const data: WishlistResponse = await res.json();
         setWishlist(data.wishlist ?? []);
       } catch {
@@ -102,72 +109,24 @@ const Exchange: React.FC = () => {
         setWishlistLoading(false);
       }
     };
-
     loadWishlist();
   }, []);
 
-  // ───────────────── Tokens load (paged + searchable + category-aware) ─────────────────
+  // ───────────────── Trending tokens (still from API) ─────────────────
   useEffect(() => {
     const controller = new AbortController();
-
-    const loadTokens = async () => {
-      try {
-        setLoadingTokens(true);
-        setError(null);
-
-        const params = new URLSearchParams({
-          page: String(page),
-          pageSize: String(pageSize),
-        });
-
-        if (search.trim()) params.set("q", search.trim());
-        if (category !== "all") params.set("category", String(category));
-
-        const res = await fetch(`/api/tokens?${params.toString()}`, {
-          method: "GET",
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => null);
-          throw new Error(data?.error || "Failed to load tokens");
-        }
-
-        const data: TokensApiResponse = await res.json();
-        setTokens(data.tokens || []);
-        setHasMore(data.pagination?.hasMore || false);
-        setTotal(data.pagination?.total || 0);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Failed to load tokens");
-      } finally {
-        setLoadingTokens(false);
-      }
-    };
-
-    loadTokens();
-    return () => controller.abort();
-  }, [page, pageSize, search, category]);
-
-  // ───────────────── Trending tokens (global) ─────────────────
-  useEffect(() => {
-    const controller = new AbortController();
-
     const loadTrendingTokens = async () => {
       try {
         setLoadingTrendingTokens(true);
-
         const params = new URLSearchParams({ page: "1", pageSize: "100" });
         const res = await fetch(`/api/tokens?${params.toString()}`, {
           method: "GET",
           signal: controller.signal,
         });
-
         if (!res.ok) {
           setTrendingTokens([]);
           return;
         }
-
         const data: TokensApiResponse = await res.json();
         setTrendingTokens(data.tokens || []);
       } catch (err) {
@@ -177,121 +136,199 @@ const Exchange: React.FC = () => {
         setLoadingTrendingTokens(false);
       }
     };
-
     loadTrendingTokens();
     return () => controller.abort();
   }, []);
 
-  // ───────────────── Prices ─────────────────
+  const handleToggleWishlist = async (mint: string, isWishlisted: boolean) => {
+    try {
+      const res = await fetch("/api/user/wishlist", {
+        method: isWishlisted ? "DELETE" : "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mint }),
+      });
+
+      if (!res.ok) return;
+
+      setWishlist((prev) =>
+        isWishlisted ? prev.filter((m) => m !== mint) : [...prev, mint]
+      );
+    } catch {
+      // silent fail – UX shouldn’t break
+    }
+  };
+
+
+  // ───────────────── Filter catalog globally ─────────────────
+  const filtered: Token[] = useMemo(() => {
+    let list = catalog;
+
+    if (onlyWishlist) list = list.filter((t) => wishlistSet.has(t.mint));
+
+    if (category !== "all") {
+      // category is narrowed to TokenCategory here (no `any`)
+      const allowedMints = new Set(
+        TOKENS.filter((m) => (m.categories ?? []).includes(category))
+          .map((m) => getMintFor(m, CLUSTER))
+          .filter((x): x is string => Boolean(x))
+      );
+      list = list.filter((t) => allowedMints.has(t.mint));
+    }
+
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter((t) => {
+        const sym = (t.symbol || "").toLowerCase();
+        const nm = (t.name || "").toLowerCase();
+        const mint = (t.mint || "").toLowerCase();
+        return sym.includes(q) || nm.includes(q) || mint.includes(q);
+      });
+    }
+
+    return list;
+  }, [catalog, onlyWishlist, wishlistSet, category, search]);
+
+  // If you change filters/sort, always go back to page 1
   useEffect(() => {
-    const controller = new AbortController();
+    setPage(1);
+  }, [search, category, onlyWishlist, sortKey]);
 
-    const loadPrices = async () => {
-      const allTokensForPricing = [...tokens, ...trendingTokens];
-      if (!allTokensForPricing.length) {
-        setPrices({});
-        return;
-      }
+  // ───────────────── Price loading for sorting across WHOLE list ─────────────────
+  const priceReqId = useRef(0);
 
-      try {
-        setLoadingPrices(true);
+  useEffect(() => {
+    const needsPricesForSort =
+      sortKey === "price" || sortKey === "change24h" || sortKey === "trending";
+    const mints = filtered.map((t) => t.mint);
 
-        const uniqueMints = Array.from(
-          new Set(allTokensForPricing.map((t) => t.mint))
+    const requiredMints = Array.from(
+      new Set([...mints, ...trendingTokens.map((t) => t.mint)])
+    );
+
+    if (requiredMints.length === 0) {
+      setPrices({});
+      return;
+    }
+
+    const targetMints = needsPricesForSort
+      ? requiredMints
+      : Array.from(
+          new Set([
+            ...trendingTokens.map((t) => t.mint),
+            ...filtered
+              .slice((page - 1) * pageSize, page * pageSize)
+              .map((t) => t.mint),
+          ])
         );
 
-        const res = await fetch("/api/prices/jup", {
-          method: "POST",
-          signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mints: uniqueMints }),
-        });
+    const myReq = ++priceReqId.current;
+    const controller = new AbortController();
 
-        if (!res.ok) {
-          setPrices({});
-          return;
+    const fetchChunk = async (chunk: string[]) => {
+      const res = await fetch("/api/prices/jup", {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mints: chunk }),
+      });
+      if (!res.ok) return {} as Record<string, PriceEntry>;
+      const data: PricesResponse = await res.json();
+      return data.prices || {};
+    };
+
+    const loadPrices = async () => {
+      try {
+        setLoadingPrices(true);
+        setError(null);
+
+        const next: Record<string, PriceEntry> = needsPricesForSort
+          ? {}
+          : { ...prices };
+
+        for (let i = 0; i < targetMints.length; i += PRICE_CHUNK) {
+          if (priceReqId.current !== myReq) return;
+          const chunk = targetMints.slice(i, i + PRICE_CHUNK);
+          const got = await fetchChunk(chunk);
+          Object.assign(next, got);
         }
 
-        const data: PricesResponse = await res.json();
-        setPrices(data.prices || {});
+        if (priceReqId.current !== myReq) return;
+        setPrices(next);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        // don’t hard fail UI for pricing issues
       } finally {
-        setLoadingPrices(false);
+        if (priceReqId.current === myReq) setLoadingPrices(false);
       }
     };
 
     loadPrices();
     return () => controller.abort();
-  }, [tokens, trendingTokens]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, trendingTokens, sortKey, page, pageSize]);
 
-  // ───────────────── Derived ─────────────────
-  const displayedTokens = useMemo(() => {
-    let base = tokens;
-    if (onlyWishlist) base = base.filter((t) => wishlistSet.has(t.mint));
-    return base;
-  }, [tokens, onlyWishlist, wishlistSet]);
+  // ───────────────── Global sort (entire filtered list) ─────────────────
+  const sorted: Token[] = useMemo(() => {
+    const list = [...filtered];
 
-  const totalPages = useMemo(
-    () => (total && pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1),
-    [total, pageSize]
-  );
+    const getPrice = (mint: string) => prices[mint]?.price ?? -Infinity;
+    const getChg = (mint: string) =>
+      prices[mint]?.priceChange24hPct ?? -Infinity;
 
-  const isTrendingLoading = loadingTrendingTokens || loadingPrices;
-
-  
-  // ───────────────── Wishlist toggle ─────────────────
-  const handleToggleWishlist = async (
-    mint: string,
-    isCurrentlyWishlisted: boolean
-  ) => {
-    setWishlist((prev) => {
-      if (isCurrentlyWishlisted) return prev.filter((m) => m !== mint);
-      if (prev.includes(mint)) return prev;
-      return [...prev, mint];
-    });
-
-    try {
-      const method = isCurrentlyWishlisted ? "DELETE" : "POST";
-      const res = await fetch("/api/user/wishlist", {
-        method,
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ mint }),
-      });
-
-      if (!res.ok) {
-        // revert
-        setWishlist((prev) => {
-          if (isCurrentlyWishlisted) return [...prev, mint];
-          return prev.filter((m) => m !== mint);
-        });
-        return;
+    list.sort((a, b) => {
+      if (sortKey === "az") {
+        return (a.symbol || a.name || "").localeCompare(
+          b.symbol || b.name || ""
+        );
+      }
+      if (sortKey === "za") {
+        return (b.symbol || b.name || "").localeCompare(
+          a.symbol || a.name || ""
+        );
+      }
+      if (sortKey === "price") {
+        return getPrice(b.mint) - getPrice(a.mint);
+      }
+      if (sortKey === "change24h") {
+        return getChg(b.mint) - getChg(a.mint);
       }
 
-      const data = (await res
-        .json()
-        .catch(() => null)) as WishlistResponse | null;
-      if (data?.wishlist) setWishlist(data.wishlist);
-    } catch {
-      // revert
-      setWishlist((prev) => {
-        if (isCurrentlyWishlisted) return [...prev, mint];
-        return prev.filter((m) => m !== mint);
-      });
-    }
-  };
+      // trending: abs change desc, then price desc
+      const absA = Math.abs(getChg(a.mint));
+      const absB = Math.abs(getChg(b.mint));
+      if (absB !== absA) return absB - absA;
+      return getPrice(b.mint) - getPrice(a.mint);
+    });
 
-  
+    return list;
+  }, [filtered, prices, sortKey]);
+
+  // ───────────────── Client pagination AFTER global sort ─────────────────
+  const total = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const pageClamped = Math.min(Math.max(1, page), totalPages);
+
+  const rows = useMemo(() => {
+    const start = (pageClamped - 1) * pageSize;
+    return sorted.slice(start, start + pageSize);
+  }, [sorted, pageClamped, pageSize]);
+
   const clearFilters = () => {
     setSearch("");
     setCategory("all");
     setOnlyWishlist(false);
+    setSortKey("trending");
     setPage(1);
   };
 
   const hasActiveFilters =
-    !!search.trim() || category !== "all" || onlyWishlist;
+    !!search.trim() ||
+    category !== "all" ||
+    onlyWishlist ||
+    sortKey !== "trending";
+
+  const isTrendingLoading = loadingTrendingTokens || loadingPrices;
 
   return (
     <div className="min-h-screen text-zinc-50">
@@ -306,13 +343,12 @@ const Exchange: React.FC = () => {
             </h1>
           </div>
           <p className="mt-1 text-sm text-zinc-400">
-            Track markets, discover top movers, and buy tokens directly from
-            your Haven vault.
+            Discover markets, favorite assets, and trade with your Cash balance.
           </p>
         </header>
 
         <main className="rounded-3xl bg-black/25 p-1 sm:p-2">
-          {/* ───────── Trending ───────── */}
+          {/* Trending */}
           <section className="mt-3 sm:mt-4">
             <div className="mb-2 flex items-center justify-between">
               <div>
@@ -320,7 +356,7 @@ const Exchange: React.FC = () => {
                   Trending
                 </h2>
                 <p className="text-[11px] text-zinc-500">
-                  Top movers across Haven markets (24h change)
+                  Top movers across markets (24h change)
                 </p>
               </div>
               <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
@@ -339,43 +375,35 @@ const Exchange: React.FC = () => {
             />
           </section>
 
-          {/* ───────── All markets ───────── */}
+          {/* Markets */}
           <section className="mt-6 sm:mt-8">
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-zinc-100 sm:text-base">
-                All markets
+                Markets
               </h2>
               <p className="text-[11px] text-zinc-500 sm:text-xs">
-                Search, filter, star favorites, and tap a token to buy.
+                Search, filter, favorite, and tap a market to trade.
               </p>
             </div>
 
-            {/* ✅ NEW: Compact sticky filter bar */}
+            {/* Filter bar */}
             <div className="sticky top-2 z-10 mb-3">
               <div className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-2 backdrop-blur-xl">
-                {/* Row 1: search */}
                 <div className="relative">
                   <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
                     <Search className="h-4 w-4 text-zinc-500" />
                   </span>
                   <input
                     value={search}
-                    onChange={(e) => {
-                      setPage(1);
-                      setSearch(e.target.value);
-                    }}
-                    placeholder="Search token (e.g. SOL, JUP, BONK)"
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search (SOL, JUP, BONK, …)"
                     className="w-full rounded-full border border-zinc-800 bg-zinc-950/80 py-2 pl-9 pr-10 text-sm text-zinc-100 outline-none ring-emerald-500/30 placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-2"
                   />
-
                   {search.trim() && (
                     <button
                       type="button"
                       aria-label="Clear search"
-                      onClick={() => {
-                        setSearch("");
-                        setPage(1);
-                      }}
+                      onClick={() => setSearch("")}
                       className="absolute inset-y-0 right-2 flex items-center rounded-full border border-zinc-800 bg-zinc-950/60 px-2 text-zinc-300 hover:bg-zinc-900"
                     >
                       <X className="h-4 w-4" />
@@ -383,16 +411,13 @@ const Exchange: React.FC = () => {
                   )}
                 </div>
 
-                {/* Row 2: dropdown + favorites + clear */}
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                  {/* Category */}
                   <div className="flex-1">
                     <Select
                       value={category}
-                      onValueChange={(v) => {
-                        setCategory(v as "all" | TokenCategory);
-                        setPage(1);
-                      }}
+                      onValueChange={(v: string) =>
+                        setCategory(v === "all" ? "all" : (v as TokenCategory))
+                      }
                     >
                       <SelectTrigger className="h-10 w-full rounded-2xl border border-zinc-800 bg-zinc-950/70 text-sm text-zinc-100">
                         <SelectValue placeholder="Category" />
@@ -408,14 +433,31 @@ const Exchange: React.FC = () => {
                     </Select>
                   </div>
 
-                  {/* Favorites */}
+                  <div className="flex-1 sm:max-w-[220px]">
+                    <Select
+                      value={sortKey}
+                      onValueChange={(v: string) => setSortKey(v as SortKey)}
+                    >
+                      <SelectTrigger className="h-10 w-full rounded-2xl border border-zinc-800 bg-zinc-950/70 text-sm text-zinc-100">
+                        <span className="mr-2 inline-flex items-center gap-2 text-zinc-300">
+                          <ArrowUpDown className="h-4 w-4" />
+                        </span>
+                        <SelectValue placeholder="Sort" />
+                      </SelectTrigger>
+                      <SelectContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                        <SelectItem value="trending">Trending</SelectItem>
+                        <SelectItem value="change24h">24h change</SelectItem>
+                        <SelectItem value="price">Price</SelectItem>
+                        <SelectItem value="az">A → Z</SelectItem>
+                        <SelectItem value="za">Z → A</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <button
                     type="button"
                     disabled={wishlistLoading}
-                    onClick={() => {
-                      setOnlyWishlist((v) => !v);
-                      setPage(1);
-                    }}
+                    onClick={() => setOnlyWishlist((v) => !v)}
                     className={[
                       "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-medium transition",
                       onlyWishlist
@@ -433,7 +475,6 @@ const Exchange: React.FC = () => {
                     )}
                   </button>
 
-                  {/* Clear */}
                   {hasActiveFilters && (
                     <button
                       type="button"
@@ -444,59 +485,28 @@ const Exchange: React.FC = () => {
                     </button>
                   )}
                 </div>
-
-                {/* Small “what’s active” hint (grandma-friendly) */}
-                {hasActiveFilters && (
-                  <div className="mt-2 flex flex-wrap gap-2 px-1 text-[11px] text-zinc-400">
-                    {category !== "all" && (
-                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-200">
-                        Category: {category}
-                      </span>
-                    )}
-                    {onlyWishlist && (
-                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-200">
-                        Favorites only
-                      </span>
-                    )}
-                    {!!search.trim() && (
-                      <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-200">
-                        Search: “{search.trim()}”
-                      </span>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* Your existing table */}
             <TokensTable
-              tokens={tokens}
-              displayedTokens={displayedTokens}
+              rows={rows}
               prices={prices}
               wishlistSet={wishlistSet}
               wishlistCount={wishlist.length}
               total={total}
               onlyWishlist={onlyWishlist}
-              loadingTokens={loadingTokens}
+              loading={wishlistLoading}
               loadingPrices={loadingPrices}
               error={error}
-              page={page}
+              page={pageClamped}
               totalPages={totalPages}
-              hasMore={hasMore}
               onPageChange={setPage}
-              onToggleWishlist={handleToggleWishlist}
-              // keep these props so your table API doesn’t break
+              onToggleWishlist={() => {}}
               category={category}
-              onCategoryChange={(c) => {
-                setCategory(c);
-                setPage(1);
-              }}
               displayCurrency={displayCurrency}
-              fxRate={fxRate}
+              fxRate={fxRate ?? 1}
             />
           </section>
-
-         
         </main>
       </div>
     </div>

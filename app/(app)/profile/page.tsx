@@ -6,7 +6,6 @@ import Link from "next/link";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 import { LogoutButton } from "@/components/shared/LogoutButton";
-import InviteLink from "@/components/profile/InviteLink";
 import {
   ArrowLeft,
   Calendar,
@@ -30,14 +29,6 @@ type Contact = {
   joinedAt: string | null;
 };
 
-type Invite = {
-  email?: string | null;
-  sentAt?: string | null;
-  status?: "sent" | "clicked" | "signed_up";
-  invitedUserId?: string | null;
-  isPersonal?: boolean;
-};
-
 type Referral = {
   id: string;
   firstName: string | null;
@@ -48,6 +39,12 @@ type Referral = {
   profileImageUrl: string | null;
   joinedAt: string | null;
 };
+
+type UserWithSocial = {
+  contacts?: unknown;
+  referrals?: unknown;
+};
+
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -94,8 +91,12 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
-// ✅ avoid `any` for iOS standalone detection
 type IOSNavigator = Navigator & { standalone?: boolean };
+
+// ✅ tiny safe helper: normalize contacts/referrals to arrays
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
 
 const ProfilePage: React.FC = () => {
   const { user, refresh } = useUser();
@@ -117,7 +118,6 @@ const ProfilePage: React.FC = () => {
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
 
-  // ✅ hooks must run every render (no conditional return before this)
   useEffect(() => {
     const ua = navigator.userAgent || "";
     const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
@@ -151,41 +151,20 @@ const ProfilePage: React.FC = () => {
     };
   }, []);
 
-  const contacts: Contact[] = useMemo(
-    () => (user?.contacts ?? []) as Contact[],
-    [user?.contacts]
-  );
-  const invites: Invite[] = useMemo(
-    () => (user?.invites ?? []) as Invite[],
-    [user?.invites]
-  );
-  const referrals: Referral[] = useMemo(
-    () => (user?.referrals ?? []) as Referral[],
-    [user?.referrals]
-  );
+  // ✅ contacts pulling fix (no provider changes): tolerate non-array shapes
+  const contacts: Contact[] = useMemo(() => {
+    const social = user as unknown as UserWithSocial;
+    return asArray<Contact>(social?.contacts);
+  }, [user]);
 
-  const personalInvites = useMemo(
-    () => invites.filter((i) => i.isPersonal),
-    [invites]
-  );
+  const referrals: Referral[] = useMemo(() => {
+    const social = user as unknown as UserWithSocial;
+    return asArray<Referral>(social?.referrals);
+  }, [user]);
 
-  const pendingPersonalInvites = useMemo(
-    () => personalInvites.filter((i) => i.status !== "signed_up"),
-    [personalInvites]
-  );
 
-  const totalInvited = personalInvites.length;
-  const openedInvites = personalInvites.filter(
-    (i) => i.status === "clicked"
-  ).length;
-  const joinedFromInvites = personalInvites.filter(
-    (i) => i.status === "signed_up"
-  ).length;
-
-  const activeReferrals = referrals.length;
-  const externalContacts = contacts.filter(
-    (c) => c.status === "external"
-  ).length;
+  const referralsCount = referrals.length;
+  const contactsCount = contacts.length;
 
   const membershipSince = user?.createdAt || user?.lastLoginAt || null;
   const memberDuration = formatMembershipDuration(user?.createdAt || null);
@@ -258,7 +237,6 @@ const ProfilePage: React.FC = () => {
     }
   };
 
-  // ✅ now it’s safe to return early
   if (!user) return null;
 
   return (
@@ -282,7 +260,7 @@ const ProfilePage: React.FC = () => {
                     Profile
                   </h1>
                   <p className="truncate text-[11px] text-zinc-400">
-                    Account, invites, and your Haven identity.
+                    Account and your Haven identity.
                   </p>
                 </div>
               </div>
@@ -304,7 +282,7 @@ const ProfilePage: React.FC = () => {
 
             {/* Content */}
             <div className="p-3 sm:p-4">
-              {/* ✅ PWA install banner: mobile-only, hidden inside installed app */}
+              {/* PWA install banner */}
               {isMobile && !isStandalone && (
                 <div className="mb-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 sm:px-4">
                   <div className="flex items-start justify-between gap-3">
@@ -424,7 +402,7 @@ const ProfilePage: React.FC = () => {
                       </p>
                     )}
 
-                    {/* Small stats */}
+                    {/* Small stats (unchanged) */}
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                       <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
                         <div className="min-w-0">
@@ -491,13 +469,11 @@ const ProfilePage: React.FC = () => {
                       </button>
                     </div>
                   </div>
-
-                  <InviteLink className="w-full max-w-full overflow-hidden" />
                 </section>
 
                 {/* RIGHT */}
                 <section className="min-w-0 space-y-3">
-                  {/* Overview */}
+                  {/* Overview (NO invites now) */}
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
                     <div>
                       <h3 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -505,44 +481,17 @@ const ProfilePage: React.FC = () => {
                         Network overview
                       </h3>
                       <p className="mt-0.5 text-[11px] text-zinc-400">
-                        Invites + your referral network at a glance.
+                        Your referrals and saved contacts.
                       </p>
                     </div>
 
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                       <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
                         <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                          Invites
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-zinc-50">
-                          {totalInvited}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-2.5 py-2">
-                        <p className="text-[9px] uppercase tracking-[0.16em] text-sky-100/80">
-                          Opened
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-sky-50">
-                          {openedInvites}
-                        </p>
-                      </div>
-
-                      <div className="col-span-2 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-2">
-                        <p className="text-[9px] uppercase tracking-[0.16em] text-emerald-100/80">
-                          Signed up
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-emerald-50">
-                          {joinedFromInvites}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                        <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
                           Referrals
                         </p>
                         <p className="mt-1 text-base font-semibold text-zinc-50">
-                          {activeReferrals}
+                          {referralsCount}
                         </p>
                       </div>
 
@@ -551,25 +500,25 @@ const ProfilePage: React.FC = () => {
                           Contacts
                         </p>
                         <p className="mt-1 text-base font-semibold text-zinc-50">
-                          {externalContacts}
+                          {contactsCount}
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  {/* People */}
+                  {/* People (NO pending invites now) */}
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
                     <div className="mb-3">
                       <h3 className="text-sm font-semibold">People</h3>
                       <p className="text-[11px] text-zinc-400">
-                        Friends who joined + pending personal invites.
+                        Who joined from your referrals + your saved contacts.
                       </p>
                     </div>
 
-                    {/* Joined */}
+                    {/* Joined referrals */}
                     <div>
                       <p className="mb-2 text-[11px] font-medium text-emerald-200">
-                        Joined
+                        Referred
                       </p>
                       {referrals.length === 0 ? (
                         <p className="text-[11px] text-zinc-500">
@@ -581,7 +530,9 @@ const ProfilePage: React.FC = () => {
                             const label =
                               r.fullName ||
                               r.email ||
-                              shortAddress(r.walletAddress);
+                              shortAddress(r.walletAddress) ||
+                              "Referral";
+
                             return (
                               <div
                                 key={r.id}
@@ -597,8 +548,9 @@ const ProfilePage: React.FC = () => {
                                           r.email
                                         }`
                                       : r.email ||
-                                        shortAddress(r.walletAddress) ||
-                                        ""}
+                                        (r.walletAddress
+                                          ? shortAddress(r.walletAddress)
+                                          : "")}
                                   </span>
                                   <span className="mt-0.5 block text-[10px] text-emerald-100/70">
                                     Joined {formatDate(r.joinedAt)}
@@ -614,59 +566,22 @@ const ProfilePage: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Pending */}
-                    <div className="mt-4">
-                      <p className="mb-2 text-[11px] font-medium text-zinc-200">
-                        Pending invites
-                      </p>
-                      {pendingPersonalInvites.length === 0 ? (
-                        <p className="text-[11px] text-zinc-500">
-                          No pending invites right now.
-                        </p>
-                      ) : (
-                        <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
-                          {pendingPersonalInvites.map((inv, idx) => {
-                            const status = inv.status || "sent";
-                            const chip =
-                              status === "clicked" ? (
-                                <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-100">
-                                  Opened
-                                </span>
-                              ) : (
-                                <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-100">
-                                  Sent
-                                </span>
-                              );
-
-                            return (
-                              <div
-                                key={`${inv.email ?? "unknown"}-${
-                                  inv.sentAt ?? idx
-                                }`}
-                                className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <span className="block truncate text-xs font-medium text-zinc-50">
-                                    {inv.email ?? "unknown"}
-                                  </span>
-                                  <span className="block text-[10px] text-zinc-500">
-                                    Invited {formatDate(inv.sentAt ?? null)}
-                                  </span>
-                                </div>
-                                <div className="shrink-0">{chip}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
                     {/* Contacts */}
-                    {contacts.length > 0 && (
-                      <div className="mt-4 border-t border-white/10 pt-4">
-                        <p className="mb-2 text-[11px] font-medium text-zinc-300">
+                    <div className="mt-4 border-t border-white/10 pt-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-[11px] font-medium text-zinc-300">
                           Saved contacts
                         </p>
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
+                          {contactsCount}
+                        </span>
+                      </div>
+
+                      {contacts.length === 0 ? (
+                        <p className="text-[11px] text-zinc-500">
+                          No contacts saved yet.
+                        </p>
+                      ) : (
                         <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
                           {contacts.map((c, idx) => {
                             const label =
@@ -704,8 +619,8 @@ const ProfilePage: React.FC = () => {
                             );
                           })}
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </section>
               </div>

@@ -37,7 +37,7 @@ const BottomBar: React.FC = () => {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 border-t  border-zinc-800 bg-black/40 backdrop-blur-xl rounded-lg md:hidden">
-      <div className="mx-auto flex max-w-md items-center justify-between px-4 py-2 mb-6 sm:mb-1">
+      <div className="mx-auto flex max-w-md items-center justify-between px-6 py-2 mb-7 sm:mb-1">
         {navItems.map(({ href, label, Icon, center }) => {
           const isActive =
             href === "/dashboard"

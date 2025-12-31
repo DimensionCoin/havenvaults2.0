@@ -10,12 +10,12 @@ import {
   Copy,
   Check,
   AlertCircle,
-  Globe,
+  Globe2,
   Info,
-  Link2,
-  Share2,
   KeyRound,
   ShieldAlert,
+  UserRound,
+  Wallet,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
@@ -133,6 +133,12 @@ const KNOWLEDGE_OPTIONS: {
   },
 ];
 
+const shortAddress = (addr?: string | null) => {
+  if (!addr) return "";
+  if (addr.length <= 10) return addr;
+  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
+};
+
 const SettingsPage: React.FC = () => {
   const router = useRouter();
   const { user, refresh, loading: userLoading } = useUser();
@@ -147,7 +153,7 @@ const SettingsPage: React.FC = () => {
       (account): account is WalletWithMetadata =>
         account.type === "wallet" &&
         account.walletClientType === "privy" &&
-        (account.chainType === "solana")
+        account.chainType === "solana"
     );
   }, [privyUser]);
 
@@ -175,22 +181,47 @@ const SettingsPage: React.FC = () => {
   const [copiedWallet, setCopiedWallet] = useState(false);
   const [copiedReferral, setCopiedReferral] = useState(false);
 
-  // ------ referral link state ------
-  const [referralLink, setReferralLink] = useState("");
-  const [copiedReferralLink, setCopiedReferralLink] = useState(false);
-
   // ------ wallet export modal state ------
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportAcknowledged, setExportAcknowledged] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-    const resetExportModal = () => {
-      setExportModalOpen(false);
-      setExportAcknowledged(false);
-      setExporting(false);
-      setExportError(null);
+  const resetExportModal = () => {
+    setExportModalOpen(false);
+    setExportAcknowledged(false);
+    setExporting(false);
+    setExportError(null);
+  };
+
+  // ✅ Close our modal when the Privy export pop-up closes and the user returns
+  // to the app (window focus / visibilitychange). This is more reliable than
+  // relying on exportWallet() promise timing.
+  useEffect(() => {
+    if (!exportModalOpen || !exporting) return;
+
+    let closed = false;
+    const closeOnce = () => {
+      if (closed) return;
+      closed = true;
+      resetExportModal();
     };
+
+    const onFocus = () => setTimeout(closeOnce, 150);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        setTimeout(closeOnce, 150);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [exportModalOpen, exporting]);
 
   // ------ hydrate form from user ------
   useEffect(() => {
@@ -204,19 +235,6 @@ const SettingsPage: React.FC = () => {
       (user.financialKnowledgeLevel || "none") as FinancialKnowledgeLevel
     );
   }, [user]);
-
-  // build referral link when user/referralCode are ready
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!user?.referralCode) return;
-
-    const origin = window.location.origin;
-    const link = `${origin}/sign-in?ref=${encodeURIComponent(
-      user.referralCode
-    )}`;
-
-    setReferralLink(link);
-  }, [user?.referralCode]);
 
   const initialState = useMemo(
     () => ({
@@ -302,9 +320,7 @@ const SettingsPage: React.FC = () => {
       const res = await fetch("/api/user/update", {
         method: "PATCH",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           firstName: firstName.trim() || null,
           lastName: lastName.trim() || null,
@@ -363,40 +379,12 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // 🔗 Share handler: prefers native share sheet, falls back to copy
-  const handleShareReferralLink = async () => {
-    if (!referralLink) return;
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: "Join me on Haven",
-          text: "I’ve been using Haven to manage my crypto on Haven. Use my link to sign up:",
-          url: referralLink,
-        });
-      } else if (navigator.clipboard && window.isSecureContext) {
-        // Fallback: copy link if share sheet not available
-        await navigator.clipboard.writeText(referralLink);
-        setCopiedReferralLink(true);
-        setTimeout(() => setCopiedReferralLink(false), 1500);
-      } else {
-        // Last-resort fallback: prompt
-        window.prompt("Copy this referral link:", referralLink);
-      }
-    } catch (err) {
-      // User cancelled share -> ignore
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      console.error("Failed to share referral link:", err);
-    }
-  };
-
   // ------ wallet export handlers ------
-    const handleOpenExportModal = () => {
+  const handleOpenExportModal = () => {
     setExportError(null);
     setExportAcknowledged(false);
     setExportModalOpen(true);
   };
-
 
   const handleConfirmExport = async () => {
     if (!canExportWallet || exporting || !privySolWallet) return;
@@ -405,17 +393,17 @@ const SettingsPage: React.FC = () => {
     setExportError(null);
 
     try {
-      // This opens Privy's secure export modal where the *user* sees the key.
+      // Do not close our modal here based on promise timing.
+      // The effect above closes when the user returns to the app.
       await exportWallet({ address: privySolWallet.address });
-      // After invoking, we can close our warning modal.
-      resetExportModal();
     } catch (err) {
       console.error("Error exporting wallet:", err);
+
+      // Optional: show error, then close anyway (matches "close after popup closes")
       setExportError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong while starting the export. Please try again."
+        err instanceof Error ? err.message : "Export was cancelled or failed."
       );
+      resetExportModal();
     } finally {
       setExporting(false);
     }
@@ -424,582 +412,554 @@ const SettingsPage: React.FC = () => {
   // ------ loading / auth states ------
   if (!user && userLoading) {
     return (
-      <div className="min-h-screen  text-zinc-50">
-        <div className="mx-auto w-full max-w-3xl px-3 pb-10 pt-4 sm:px-4">
-          <div className="mb-4 flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-zinc-900" />
-            <div className="h-4 w-40 rounded bg-zinc-900" />
-          </div>
-          <div className="space-y-3">
-            <div className="h-24 rounded-3xl bg-zinc-950/80" />
-            <div className="h-40 rounded-3xl bg-zinc-950/80" />
+      <main className="min-h-screen w-full overflow-x-hidden text-white">
+        <div className="w-full px-3 pb-8 pt-4 sm:px-4">
+          <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
+            <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
+                <div className="flex items-center gap-2">
+                  <div className="h-9 w-9 rounded-full border border-white/10 bg-white/5" />
+                  <div>
+                    <div className="h-4 w-36 rounded bg-white/10" />
+                    <div className="mt-2 h-3 w-56 rounded bg-white/5" />
+                  </div>
+                </div>
+              </div>
+              <div className="p-3 sm:p-4">
+                <div className="space-y-3">
+                  <div className="h-28 rounded-3xl border border-white/10 bg-white/[0.04]" />
+                  <div className="h-48 rounded-3xl border border-white/10 bg-white/[0.04]" />
+                  <div className="h-40 rounded-3xl border border-white/10 bg-white/[0.04]" />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (!user && !userLoading) {
     return (
-      <div className="min-h-screen bg-black text-zinc-50">
-        <div className="mx-auto w-full max-w-3xl px-3 pb-10 pt-4 sm:px-4">
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="inline-flex items-center gap-2 text-xs text-zinc-400 hover:text-emerald-300"
-          >
-            <ArrowLeft className="h-3 w-3" />
-            Back
-          </button>
-          <div className="mt-6 rounded-3xl border border-red-500/40 bg-red-500/10 px-4 py-5 text-sm text-red-50">
-            You need to be signed in to view settings.
+      <main className="min-h-screen w-full overflow-x-hidden text-white">
+        <div className="w-full px-3 pb-8 pt-4 sm:px-4">
+          <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
+            <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
+                <button
+                  type="button"
+                  onClick={() => router.push("/")}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 active:scale-[0.98]"
+                  aria-label="Back"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+                <div className="min-w-0">
+                  <h1 className="truncate text-base font-semibold sm:text-lg">
+                    Settings
+                  </h1>
+                  <p className="truncate text-[11px] text-zinc-400">
+                    You need to be signed in.
+                  </p>
+                </div>
+                <div className="h-9 w-9" />
+              </div>
+
+              <div className="p-3 sm:p-4">
+                <div className="rounded-3xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-50">
+                  You need to be signed in to view settings.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (!user) return null;
 
   const avatarUrl = user.profileImageUrl || null;
-  const initials =
-    !avatarUrl && user
-      ? `${user.firstName?.[0] ?? ""}${
-          user.lastName?.[0] ?? ""
-        }`.toUpperCase() || "HV"
-      : "HV";
-
   const displayName =
-    user.firstName || user.fullName || user.email || "Haven investor";
+    user.fullName || user.firstName || user.email || "Haven member";
 
   return (
-    <div className="min-h-screen text-zinc-50">
-      <div className="mx-auto w-full max-w-3xl px-3 pb-10 pt-4 sm:px-4">
-        {/* Header */}
-        <header className="mb-5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950/80 text-zinc-400 hover:border-emerald-500/60 hover:text-emerald-200"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight sm:text-xl">
-                Settings
-              </h1>
-              <p className="text-[11px] text-zinc-500 sm:text-xs">
-                Manage your Haven profile, preferences, and account details.
-              </p>
-            </div>
-          </div>
+    <main className="min-h-screen w-full overflow-x-hidden text-white">
+      <div className="w-full px-3 pb-8 pt-4 sm:px-4">
+        <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
+          <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
+            {/* Top bar */}
+            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => router.back()}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 active:scale-[0.98]"
+                  aria-label="Back"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
 
-          <Link
-            href="/"
-            className="hidden text-xs text-zinc-400 hover:text-emerald-300 sm:inline-flex"
-          >
-            Back to dashboard
-          </Link>
-        </header>
-
-        {/* Avatar + basic identity card */}
-        <section className="mb-4 rounded-3xl border border-zinc-900 bg-zinc-950/80 px-4 py-4 sm:px-5 sm:py-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              {/* Avatar */}
-              <button
-                type="button"
-                onClick={handleAvatarClick}
-                disabled={uploadingAvatar}
-                className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80"
-                aria-label="Change profile photo"
-              >
-                {avatarUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={avatarUrl}
-                    alt={displayName}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <span className="text-sm font-semibold text-white">
-                    {initials}
-                  </span>
-                )}
-
-                {/* Tiny camera badge */}
-                <div className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/90">
-                  <Camera className="h-2.5 w-2.5 text-emerald-300" />
+                <div className="min-w-0">
+                  <h1 className="truncate text-base font-semibold sm:text-lg">
+                    Settings
+                  </h1>
+                  <p className="truncate text-[11px] text-zinc-400">
+                    Edit your profile, preferences, and account security.
+                  </p>
                 </div>
+              </div>
 
-                {uploadingAvatar && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[10px] text-emerald-100">
-                    Uploading…
+              <div className="flex shrink-0 items-center gap-2">
+                <Link
+                  href="/profile"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-[11px] text-zinc-100 active:scale-[0.98]"
+                >
+                  <UserRound className="h-4 w-4 text-zinc-300" />
+                  <span className="hidden sm:inline">Profile</span>
+                </Link>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-3 sm:p-4">
+              <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
+                {/* LEFT */}
+                <section className="min-w-0 space-y-3">
+                  {/* Identity card */}
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleAvatarClick}
+                        disabled={uploadingAvatar}
+                        className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+                        aria-label="Change profile photo"
+                      >
+                        {avatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={avatarUrl}
+                            alt={displayName}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <UserRound className="h-6 w-6 text-zinc-200" />
+                        )}
+
+                        <div className="pointer-events-none absolute bottom-0 right-0 mb-0.5 mr-0.5 flex items-center gap-1 rounded-full border border-emerald-500/40 bg-black/60 px-1.5 py-[2px] text-[9px] text-emerald-300">
+                          <Camera className="h-2.5 w-2.5" />
+                          Edit
+                        </div>
+
+                        {uploadingAvatar && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[10px]">
+                            Uploading…
+                          </div>
+                        )}
+                      </button>
+
+                      <input
+                        ref={avatarInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleAvatarChange}
+                      />
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <h2 className="min-w-0 truncate text-base font-semibold">
+                            {displayName}
+                          </h2>
+                          {user.country && (
+                            <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
+                              {user.country}
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="truncate text-[11px] text-zinc-400">
+                          {user.email}
+                        </p>
+
+                        {avatarError && (
+                          <p className="mt-1 flex items-center gap-1 text-[11px] text-red-300">
+                            <AlertCircle className="h-3 w-3" />
+                            {avatarError}
+                          </p>
+                        )}
+
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
+                            <div className="min-w-0">
+                              <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
+                                Currency
+                              </p>
+                              <p className="mt-1 truncate text-[13px] text-zinc-50">
+                                {displayCurrency ||
+                                  (user.displayCurrency as DisplayCurrency) ||
+                                  "USD"}
+                              </p>
+                            </div>
+                            <Globe2 className="h-4 w-4 text-zinc-400" />
+                          </div>
+
+                          <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
+                            <div className="min-w-0">
+                              <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
+                                Plan
+                              </p>
+                              <p className="mt-1 truncate text-[13px] text-zinc-50">
+                                {user.isPro ? "Pro" : "Standard"}
+                              </p>
+                            </div>
+                            <Info className="h-4 w-4 text-zinc-400" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                )}
-              </button>
 
-              {/* Hidden file input */}
-              <input
-                ref={avatarInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleAvatarChange}
-              />
-
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Profile
-                </p>
-                <p className="text-base font-semibold text-zinc-50">
-                  {displayName}
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-500">
-                  Update your name, country, and display currency below.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-2 text-right text-[11px] text-zinc-500 sm:mt-0">
-              <p>
-                Haven account created{" "}
-                {user.createdAt
-                  ? new Date(user.createdAt).toLocaleDateString()
-                  : "recently"}
-              </p>
-              {user.isPro && (
-                <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 font-medium text-emerald-200">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  Haven Pro
-                </p>
-              )}
-            </div>
-          </div>
-
-          {avatarError && (
-            <p className="mt-2 flex items-center gap-1 text-[11px] text-red-300">
-              <AlertCircle className="h-3 w-3" />
-              {avatarError}
-            </p>
-          )}
-        </section>
-
-        {/* Main settings form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Profile details */}
-          <section className="rounded-3xl border border-zinc-900 bg-zinc-950/80 px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Profile details
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  This is how Haven personalizes your experience.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-zinc-400">
-                  First name
-                </label>
-                <input
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  placeholder="First name"
-                  className="w-full rounded-2xl border border-zinc-800 bg-black/70 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/40 placeholder:text-zinc-600 focus:border-emerald-500 focus:ring-2"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-zinc-400">
-                  Last name
-                </label>
-                <input
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  placeholder="Last name"
-                  className="w-full rounded-2xl border border-zinc-800 bg-black/70 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/40 placeholder:text-zinc-600 focus:border-emerald-500 focus:ring-2"
-                />
-              </div>
-            </div>
-
-            <div className="mt-3 grid gap-3 sm:grid-cols-[2fr_1.5fr]">
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-zinc-400">
-                  Country
-                </label>
-                <input
-                  value={country}
-                  onChange={(e) => setCountry(e.target.value)}
-                  placeholder="Country (e.g., Canada)"
-                  className="w-full rounded-2xl border border-zinc-800 bg-black/70 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/40 placeholder:text-zinc-600 focus:border-emerald-500 focus:ring-2"
-                />
-                <p className="mt-1 text-[10px] text-zinc-500">
-                  We use this to tune content and future regional features.
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="flex items-center gap-1 text-[11px] font-medium text-zinc-400">
-                  Display currency
-                  <Globe className="h-3 w-3 text-zinc-500" />
-                </label>
-                <select
-                  value={displayCurrency}
-                  onChange={(e) =>
-                    setDisplayCurrency(e.target.value as DisplayCurrency)
-                  }
-                  className="w-full rounded-2xl border border-zinc-800 bg-black/70 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/40 focus:border-emerald-500 focus:ring-2"
-                >
-                  {DISPLAY_CURRENCIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-[10px] text-zinc-500">
-                  All balances and charts in Haven will be shown in this
-                  currency. Quotes still run in USD under the hood.
-                </p>
-              </div>
-            </div>
-          </section>
-
-          {/* Risk & knowledge */}
-          <section className="rounded-3xl border border-zinc-900 bg-zinc-950/80 px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Investing profile
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  We use this to shape default settings and future guidance.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              {/* Risk level */}
-              <div>
-                <p className="mb-2 text-[11px] font-medium text-zinc-400">
-                  Risk level
-                </p>
-                <div className="space-y-1.5">
-                  {RISK_OPTIONS.map((opt) => {
-                    const active = riskLevel === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => setRiskLevel(opt.value)}
-                        className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
-                          active
-                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-100"
-                            : "border-zinc-800 bg-black/70 text-zinc-200 hover:border-emerald-500/40"
-                        }`}
-                      >
-                        <div className="mt-0.5 h-2 w-2 rounded-full bg-emerald-400/80" />
-                        <div>
-                          <p className="font-medium">{opt.label}</p>
-                          <p className="mt-0.5 text-[11px] text-zinc-400">
-                            {opt.description}
+                  {/* Wallet address */}
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
+                          <Wallet className="h-3.5 w-3.5 text-emerald-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                            Wallet address
+                          </p>
+                          <p className="mt-1 truncate text-xs text-zinc-100">
+                            {shortAddress(user.walletAddress)}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-zinc-500">
+                            Read-only. Managed by Privy.
                           </p>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                      </div>
 
-              {/* Knowledge level */}
-              <div>
-                <p className="mb-2 flex items-center gap-1 text-[11px] font-medium text-zinc-400">
-                  Financial knowledge
-                  <Info className="h-3 w-3 text-zinc-500" />
-                </p>
-                <div className="space-y-1.5">
-                  {KNOWLEDGE_OPTIONS.map((opt) => {
-                    const active = knowledgeLevel === opt.value;
-                    return (
                       <button
-                        key={opt.value}
                         type="button"
-                        onClick={() => setKnowledgeLevel(opt.value)}
-                        className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
-                          active
-                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-100"
-                            : "border-zinc-800 bg-black/70 text-zinc-200 hover:border-emerald-500/40"
-                        }`}
+                        onClick={handleCopyWallet}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-zinc-100 active:scale-[0.98]"
                       >
-                        <div className="mt-0.5 h-2 w-2 rounded-full bg-zinc-500/80" />
-                        <div>
-                          <p className="font-medium">{opt.label}</p>
-                          <p className="mt-0.5 text-[11px] text-zinc-400">
-                            {opt.description}
+                        {copiedWallet ? (
+                          <>
+                            <Check className="h-3 w-3" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3 w-3" />
+                            Copy
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Referral code */}
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
+                          <span className="text-[10px] font-semibold tracking-[0.2em] text-emerald-200">
+                            RF
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                            Referral code
+                          </p>
+                          <p className="mt-1 font-mono text-sm text-zinc-100">
+                            {user.referralCode || "—"}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-zinc-500">
+                            Share this code with friends.
                           </p>
                         </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleCopyReferral}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-zinc-100 active:scale-[0.98]"
+                      >
+                        {copiedReferral ? (
+                          <>
+                            <Check className="h-3 w-3" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3 w-3" />
+                            Copy
+                          </>
+                        )}
                       </button>
-                    );
-                  })}
-                </div>
+                    </div>
+                  </div>
+
+                  {/* Wallet security & export */}
+                  <div className="rounded-2xl border border-red-500/25 bg-red-500/5 px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-400/40 bg-red-500/10">
+                          <ShieldAlert className="h-3.5 w-3.5 text-red-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-red-200/80">
+                            Wallet security
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-100">
+                            Export private key
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-zinc-400">
+                            Advanced: only do this if you understand the risk.
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleOpenExportModal}
+                        disabled={!canExportWallet}
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] active:scale-[0.98] ${
+                          canExportWallet
+                            ? "border-red-400/40 bg-red-500/10 text-red-100"
+                            : "cursor-not-allowed border-white/10 bg-white/5 text-zinc-500"
+                        }`}
+                      >
+                        <KeyRound className="h-3 w-3" />
+                        Export
+                      </button>
+                    </div>
+
+                    {!canExportWallet && (
+                      <p className="mt-2 text-[10px] text-zinc-400">
+                        To export, you must be signed in and have an embedded
+                        Solana wallet.
+                      </p>
+                    )}
+                  </div>
+                </section>
+
+                {/* RIGHT */}
+                <section className="min-w-0 space-y-3">
+                  <form onSubmit={handleSubmit} className="space-y-3">
+                    {/* Profile details */}
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                      <div className="mb-3">
+                        <h3 className="text-sm font-semibold">
+                          Profile details
+                        </h3>
+                        <p className="mt-0.5 text-[11px] text-zinc-400">
+                          Update your name, country, and currency display.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-medium text-zinc-400">
+                            First name
+                          </label>
+                          <input
+                            value={firstName}
+                            onChange={(e) => setFirstName(e.target.value)}
+                            placeholder="First name"
+                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-medium text-zinc-400">
+                            Last name
+                          </label>
+                          <input
+                            value={lastName}
+                            onChange={(e) => setLastName(e.target.value)}
+                            placeholder="Last name"
+                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-2 grid gap-2 sm:grid-cols-[1.2fr_1fr]">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-medium text-zinc-400">
+                            Country
+                          </label>
+                          <input
+                            value={country}
+                            onChange={(e) => setCountry(e.target.value)}
+                            placeholder="Country (e.g., Canada)"
+                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="flex items-center gap-1 text-[11px] font-medium text-zinc-400">
+                            Display currency
+                            <Globe2 className="h-3 w-3 text-zinc-500" />
+                          </label>
+                          <select
+                            value={displayCurrency}
+                            onChange={(e) =>
+                              setDisplayCurrency(
+                                e.target.value as DisplayCurrency
+                              )
+                            }
+                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
+                          >
+                            {DISPLAY_CURRENCIES.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Investing profile */}
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                      <div className="mb-3">
+                        <h3 className="text-sm font-semibold">
+                          Investing profile
+                        </h3>
+                        <p className="mt-0.5 text-[11px] text-zinc-400">
+                          Helps personalize default settings and future
+                          guidance.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {/* Risk */}
+                        <div>
+                          <p className="mb-2 text-[11px] font-medium text-zinc-300">
+                            Risk level
+                          </p>
+                          <div className="space-y-1.5">
+                            {RISK_OPTIONS.map((opt) => {
+                              const active = riskLevel === opt.value;
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setRiskLevel(opt.value)}
+                                  className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
+                                    active
+                                      ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-100"
+                                      : "border-white/10 bg-black/20 text-zinc-200 hover:border-emerald-500/30"
+                                  }`}
+                                >
+                                  <div
+                                    className={`mt-0.5 h-2 w-2 rounded-full ${
+                                      active ? "bg-emerald-400" : "bg-zinc-600"
+                                    }`}
+                                  />
+                                  <div>
+                                    <p className="font-medium">{opt.label}</p>
+                                    <p className="mt-0.5 text-[11px] text-zinc-400">
+                                      {opt.description}
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Knowledge */}
+                        <div>
+                          <p className="mb-2 flex items-center gap-1 text-[11px] font-medium text-zinc-300">
+                            Financial knowledge
+                            <Info className="h-3 w-3 text-zinc-500" />
+                          </p>
+                          <div className="space-y-1.5">
+                            {KNOWLEDGE_OPTIONS.map((opt) => {
+                              const active = knowledgeLevel === opt.value;
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setKnowledgeLevel(opt.value)}
+                                  className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
+                                    active
+                                      ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-100"
+                                      : "border-white/10 bg-black/20 text-zinc-200 hover:border-emerald-500/30"
+                                  }`}
+                                >
+                                  <div
+                                    className={`mt-0.5 h-2 w-2 rounded-full ${
+                                      active ? "bg-emerald-400" : "bg-zinc-600"
+                                    }`}
+                                  />
+                                  <div>
+                                    <p className="font-medium">{opt.label}</p>
+                                    <p className="mt-0.5 text-[11px] text-zinc-400">
+                                      {opt.description}
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Sticky save bar */}
+                    <div className="sticky bottom-0 z-10 rounded-2xl border border-white/10 bg-black/70 px-3 py-2 backdrop-blur">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 text-[11px]">
+                          {saveError ? (
+                            <span className="flex items-center gap-1 text-red-300">
+                              <AlertCircle className="h-3 w-3" />
+                              <span className="truncate">{saveError}</span>
+                            </span>
+                          ) : saveSuccess ? (
+                            <span className="flex items-center gap-1 text-emerald-300">
+                              <Check className="h-3 w-3" />
+                              Settings saved
+                            </span>
+                          ) : isDirty ? (
+                            <span className="text-zinc-300">
+                              Unsaved changes
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400">
+                              All changes saved
+                            </span>
+                          )}
+                          <div className="mt-0.5 text-[10px] text-zinc-500">
+                            Email and wallet are managed by Privy and can’t be
+                            edited here.
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={!isDirty || saving}
+                          className={`inline-flex shrink-0 items-center justify-center rounded-full px-4 py-1.5 text-xs font-semibold transition ${
+                            !isDirty || saving
+                              ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
+                              : "border border-emerald-500 bg-emerald-500 text-black shadow-[0_0_0_1px_rgba(63,243,135,0.85)] hover:bg-emerald-400"
+                          }`}
+                        >
+                          {saving ? "Saving…" : "Save changes"}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                </section>
               </div>
             </div>
-          </section>
-
-          {/* 🔐 Wallet security & export */}
-          <section className="rounded-3xl border border-red-900/60 bg-zinc-950 px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <ShieldAlert className="h-4 w-4 text-red-400" />
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-300">
-                    Wallet security
-                  </p>
-                  <p className="text-[11px] text-zinc-400">
-                    Export the private key for your embedded Haven wallet.
-                  </p>
-                </div>
-              </div>
-              <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-100">
-                Advanced
-              </span>
-            </div>
-
-            <div className="space-y-2 text-[11px] text-zinc-300">
-              <p>
-                Exporting your private key lets you load this wallet into
-                another app (like Phantom or Backpack) and control your Haven
-                address from there.
-              </p>
-              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[10px] text-zinc-400">
-                <li>Anyone with your private key can move your funds.</li>
-                <li>Never paste it into chats, screenshots, or email.</li>
-                <li>
-                  Store it somewhere offline and secure (password manager or
-                  paper backup).
-                </li>
-              </ul>
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <div className="text-[10px] text-zinc-500">
-                Haven never sees your full private key. Export is handled by
-                Privy in a secure modal.
-              </div>
-              <button
-                type="button"
-                onClick={handleOpenExportModal}
-                disabled={!canExportWallet}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium transition ${
-                  canExportWallet
-                    ? "border-red-500/70 bg-red-500/10 text-red-100 hover:border-red-400 hover:bg-red-500/20"
-                    : "cursor-not-allowed border-zinc-800 bg-zinc-900 text-zinc-500"
-                }`}
-              >
-                <KeyRound className="h-3.5 w-3.5" />
-                Export wallet key
-              </button>
-            </div>
-
-            {!canExportWallet && (
-              <p className="mt-1 text-[10px] text-zinc-500">
-                To export, make sure you’re signed in and have an embedded
-                Solana wallet created with Haven.
-              </p>
-            )}
-          </section>
-
-          {/* 🔗 Referrals section */}
-          <section className="rounded-3xl border border-zinc-900 bg-zinc-950/80 px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Referrals
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  Share Haven with friends. Anyone who signs up from your link
-                  will be linked to your account.
-                </p>
-              </div>
-              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100">
-                <p className="font-semibold">
-                  Your code:{" "}
-                  <span className="font-mono text-emerald-50">
-                    {user.referralCode}
-                  </span>
-                </p>
-                <p className="mt-1 text-[10px] text-emerald-50/80">
-                  Later, you can earn rewards based on your referrals’ activity.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
-                Referral link
-              </label>
-              <div className="flex items-center gap-2 rounded-2xl border border-zinc-900 bg-black/70 px-2 py-1.5">
-                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/80">
-                  <Link2 className="h-3.5 w-3.5 text-slate-300" />
-                </span>
-                <input
-                  readOnly
-                  value={referralLink}
-                  className="flex-1 bg-transparent text-[11px] text-slate-200 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleShareReferralLink}
-                  className="inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-[10px] text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-200"
-                >
-                  {copiedReferralLink ? (
-                    <>
-                      <Check className="h-3 w-3" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Share2 className="h-3 w-3" />
-                      Share
-                    </>
-                  )}
-                </button>
-              </div>
-              <p className="text-[10px] text-zinc-500">
-                On supported devices, this opens your share sheet (Messages,
-                Mail, AirDrop, etc). Otherwise, the link is copied to your
-                clipboard.
-              </p>
-            </div>
-          </section>
-
-          {/* Account info (read-only) */}
-          <section className="rounded-3xl border border-zinc-900 bg-zinc-950/80 px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Account
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  Core identifiers can’t be changed from settings.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              {/* Email */}
-              <div className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-[11px] font-medium text-zinc-400">Email</p>
-                  <p className="break-all text-[13px] text-zinc-100">
-                    {user.email}
-                  </p>
-                </div>
-                <span className="mt-1 inline-flex w-max rounded-full border border-zinc-800 bg-black/70 px-2 py-0.5 text-[10px] text-zinc-500 sm:mt-0">
-                  Managed via Privy
-                </span>
-              </div>
-
-              {/* Wallet */}
-              <div className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-medium text-zinc-400">
-                    Wallet address
-                  </p>
-                  <p className="max-w-[260px] truncate font-mono text-[11px] text-zinc-100 sm:max-w-[320px]">
-                    {user.walletAddress}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCopyWallet}
-                  className="mt-1 inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-black/70 px-2 py-0.5 text-[10px] text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-200 sm:mt-0"
-                >
-                  {copiedWallet ? (
-                    <>
-                      <Check className="h-3 w-3" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3" />
-                      Copy
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Referral code (raw) */}
-              <div className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-medium text-zinc-400">
-                    Referral code
-                  </p>
-                  <p className="font-mono text-[11px] text-zinc-100">
-                    {user.referralCode}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCopyReferral}
-                  className="mt-1 inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-black/70 px-2 py-0.5 text-[10px] text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-200 sm:mt-0"
-                >
-                  {copiedReferral ? (
-                    <>
-                      <Check className="h-3 w-3" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3" />
-                      Copy code
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Save bar */}
-          <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 rounded-2xl border border-zinc-900 bg-black/90 px-3 py-2 text-[11px] backdrop-blur">
-            <div className="flex flex-col gap-1 text-zinc-400">
-              {saveError ? (
-                <span className="flex items-center gap-1 text-red-300">
-                  <AlertCircle className="h-3 w-3" />
-                  {saveError}
-                </span>
-              ) : saveSuccess ? (
-                <span className="flex items-center gap-1 text-emerald-300">
-                  <Check className="h-3 w-3" />
-                  Settings saved
-                </span>
-              ) : isDirty ? (
-                <span>Unsaved changes</span>
-              ) : (
-                <span>All changes saved</span>
-              )}
-              <span className="text-[10px] text-zinc-500">
-                Wallet, email, and Privy ID can’t be edited from here.
-              </span>
-            </div>
-
-            <button
-              type="submit"
-              disabled={!isDirty || saving}
-              className={`inline-flex items-center justify-center rounded-full px-4 py-1.5 text-xs font-medium transition ${
-                !isDirty || saving
-                  ? "cursor-not-allowed border border-zinc-800 bg-zinc-900 text-zinc-500"
-                  : "border border-emerald-500 bg-emerald-500 text-black shadow-[0_0_0_1px_rgba(63,243,135,0.85)] hover:bg-emerald-400"
-              }`}
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </button>
           </div>
-        </form>
+        </div>
       </div>
 
       {/* 🔐 Export wallet confirmation modal */}
@@ -1030,21 +990,11 @@ const SettingsPage: React.FC = () => {
                   Anyone with this key can{" "}
                   <span className="font-semibold text-red-300">
                     move all funds
-                  </span>{" "}
-                  from your wallet.
+                  </span>
+                  .
                 </li>
-                <li>
-                  Haven <span className="font-semibold">cannot</span> help you
-                  recover this key if you lose it.
-                </li>
-                <li>
-                  Only paste it into wallets you trust (e.g. Phantom, Backpack),
-                  never into chats or screenshots.
-                </li>
-                <li>
-                  Store it somewhere offline and secure (password manager or
-                  paper backup).
-                </li>
+                <li>Haven can’t recover it if you lose it.</li>
+                <li>Never paste it into chats or screenshots.</li>
               </ul>
 
               <label className="mt-3 flex cursor-pointer items-start gap-2 text-[10px] text-zinc-300">
@@ -1055,8 +1005,8 @@ const SettingsPage: React.FC = () => {
                   className="mt-0.5 h-3 w-3 rounded border-zinc-600 bg-zinc-900 text-red-400 focus:ring-red-500"
                 />
                 <span>
-                  I understand that if someone gets my private key, they can
-                  access my funds and Haven can’t undo it.
+                  I understand: if someone gets my private key, they can access
+                  my funds.
                 </span>
               </label>
 
@@ -1066,13 +1016,19 @@ const SettingsPage: React.FC = () => {
                   {exportError}
                 </p>
               )}
+
+              {exporting && (
+                <div className="mt-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] text-zinc-300">
+                  Waiting for Privy… close the Privy window to return here.
+                </div>
+              )}
             </div>
 
             <div className="mt-4 flex items-center justify-between gap-2">
               <button
                 type="button"
                 onClick={() => setExportModalOpen(false)}
-                className="inline-flex items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[11px] text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+                className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-zinc-200 hover:bg-white/10"
                 disabled={exporting}
               >
                 Cancel
@@ -1081,25 +1037,24 @@ const SettingsPage: React.FC = () => {
                 type="button"
                 onClick={handleConfirmExport}
                 disabled={!exportAcknowledged || !canExportWallet || exporting}
-                className={`inline-flex items-center justify-center rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
+                className={`inline-flex items-center justify-center rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
                   !exportAcknowledged || !canExportWallet || exporting
-                    ? "cursor-not-allowed border border-red-500/40 bg-red-950 text-red-500/70"
-                    : "border border-red-500 bg-red-500 text-black shadow-[0_0_0_1px_rgba(248,113,113,0.6)] hover:bg-red-400"
+                    ? "cursor-not-allowed border border-red-500/25 bg-red-950/40 text-red-300/50"
+                    : "border border-red-500 bg-red-500 text-black hover:bg-red-400"
                 }`}
               >
-                {exporting ? "Opening export…" : "Continue & export key"}
+                {exporting ? "Opening export…" : "Continue & export"}
               </button>
             </div>
 
             <p className="mt-2 text-[9px] text-zinc-500">
-              When you continue, a secure Privy window will open where{" "}
-              <span className="font-medium text-zinc-300">only you</span> can
-              view and copy your private key. Haven never sees or stores it.
+              A secure Privy window will open where only you can view/copy the
+              key. Haven never sees it.
             </p>
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 };
 
