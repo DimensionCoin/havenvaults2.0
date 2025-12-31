@@ -8,7 +8,7 @@ import Transfer from "@/components/accounts/deposit/Transfer";
 import Withdraw from "@/components/accounts/deposit/Withdraw";
 import { useBalance } from "@/providers/BalanceProvider";
 
-type DrawerMode = "deposit" | "transfer" | "withdraw" | null;
+type DrawerMode = "deposit" | "withdraw" | null;
 
 type DepositAccountCardProps = {
   /**
@@ -43,8 +43,12 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
   onTransfer,
   onWithdraw,
 }) => {
+  // Drawer is ONLY for Deposit + Withdraw now
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
+
+  // Transfer is a Dialog modal now
+  const [transferOpen, setTransferOpen] = useState(false);
 
   // 🔹 Pull USDC + loading from BalanceProvider
   const {
@@ -73,100 +77,103 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
 
   const handleDrawerChange = (open: boolean) => {
     setDrawerOpen(open);
-    if (!open) {
-      setDrawerMode(null);
-    }
+    if (!open) setDrawerMode(null);
   };
 
   return (
-    <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
-      {/* Card */}
-      <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-white/10 px-4 py-4 sm:px-6 sm:py-6">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
-            Deposit Account
-          </p>
+    <>
+      {/* Drawer ONLY wraps deposit/withdraw flows */}
+      <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
+        {/* Card */}
+        <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-white/10 px-4 py-4 sm:px-6 sm:py-6">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
+              Deposit Account
+            </p>
 
-          <div className="mt-4">
-            <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
-              {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
-            </p>
-            <p className="mt-1 text-[11px] text-zinc-500">
-              Account #{shortAddress(walletAddress)}
-            </p>
+            <div className="mt-4">
+              <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
+                {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Account #{shortAddress(walletAddress)}
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-5 flex gap-2">
-          {/* Deposit → opens Deposit drawer */}
-          <DrawerTrigger asChild>
+          <div className="mt-5 flex gap-2">
+            {/* Deposit → opens Drawer */}
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={() => openDrawer("deposit")}
+                className="flex-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
+              >
+                Deposit
+              </button>
+            </DrawerTrigger>
+
+            {/* Transfer → opens Dialog (NOT a DrawerTrigger) */}
             <button
               type="button"
-              onClick={() => openDrawer("deposit")}
-              className="flex-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
-            >
-              Deposit
-            </button>
-          </DrawerTrigger>
-
-          {/* Transfer → opens Transfer drawer */}
-          <DrawerTrigger asChild>
-            <button
-              type="button"
-              onClick={() => openDrawer("transfer")}
+              onClick={() => setTransferOpen(true)}
               className="flex-1 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-3 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-900/70"
             >
               Transfer
             </button>
-          </DrawerTrigger>
 
-          {/* Withdraw → opens Withdraw drawer */}
-          <DrawerTrigger asChild>
-            <button
-              type="button"
-              onClick={() => openDrawer("withdraw")}
-              className="flex-1 rounded-xl border border-zinc-700 bg-black/40 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-900"
-            >
-              Withdraw
-            </button>
-          </DrawerTrigger>
+            {/* Withdraw → opens Drawer */}
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={() => openDrawer("withdraw")}
+                className="flex-1 rounded-xl border border-zinc-700 bg-black/40 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-900"
+              >
+                Withdraw
+              </button>
+            </DrawerTrigger>
+          </div>
         </div>
-      </div>
 
-      {/* Drawer body — we only mount ONE flow at a time */}
-      {drawerMode === "deposit" && (
-        <Deposit
-          walletAddress={walletAddress}
-          balanceUsd={effectiveBalance}
-          onSuccess={async () => {
-            onDeposit?.();
-            setDrawerOpen(false);
-          }}
-        />
-      )}
+        {/* Drawer body — mount ONE flow at a time */}
+        {drawerMode === "deposit" && (
+          <Deposit
+            walletAddress={walletAddress}
+            balanceUsd={effectiveBalance}
+            onSuccess={async () => {
+              onDeposit?.();
+              setDrawerOpen(false);
+            }}
+          />
+        )}
 
-      {drawerMode === "transfer" && (
-        <Transfer
-          walletAddress={walletAddress}
-          balanceUsd={effectiveBalance}
-          onSuccess={async () => {
-            onTransfer?.();
-            setDrawerOpen(false);
-          }}
-        />
-      )}
+        {drawerMode === "withdraw" && (
+          <Withdraw
+            walletAddress={walletAddress}
+            balanceUsd={effectiveBalance}
+            onSuccess={async () => {
+              onWithdraw?.();
+              setDrawerOpen(false);
+            }}
+          />
+        )}
+      </Drawer>
 
-      {drawerMode === "withdraw" && (
-        <Withdraw
-          walletAddress={walletAddress}
-          balanceUsd={effectiveBalance}
-          onSuccess={async () => {
-            onWithdraw?.();
-            setDrawerOpen(false);
-          }}
-        />
-      )}
-    </Drawer>
+      {/* Transfer modal lives OUTSIDE the Drawer */}
+      <Transfer
+        open={transferOpen}
+        onOpenChange={(open) => {
+          setTransferOpen(open);
+          if (!open) onTransfer?.(); // optional: fire when closed
+        }}
+        walletAddress={walletAddress}
+        balanceUsd={effectiveBalance}
+        onSuccess={async () => {
+          onTransfer?.();
+          setTransferOpen(false);
+        }}
+      />
+    </>
   );
 };
 

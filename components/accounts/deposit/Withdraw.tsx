@@ -1,7 +1,7 @@
 // components/accounts/deposit/Withdraw.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   DrawerContent,
   DrawerHeader,
@@ -16,13 +16,17 @@ import { useBalance } from "@/providers/BalanceProvider";
 
 type WithdrawProps = {
   walletAddress: string; // sender's Solana address (must be Privy wallet)
-  balanceUsd: number; // ~USDC balance in USD
+
   /**
-   * Optional callback for parent after a successful withdraw
-   * (e.g. to refresh other state).
+   * Balance in the user's DISPLAY currency for this lane
+   * (e.g. 1500 CAD, 800 EUR, etc).
    */
+  balanceUsd: number;
+
   onSuccess?: () => void;
 };
+
+const sanitizeAmountInput = (s: string) => s.replace(/[^\d.]/g, "");
 
 const Withdraw: React.FC<WithdrawProps> = ({
   walletAddress,
@@ -36,7 +40,41 @@ const Withdraw: React.FC<WithdrawProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // 🔹 wallet balances (has refresh())
-  const { refresh: refreshBalances } = useBalance();
+  const { refresh: refreshBalances, displayCurrency, fxRate } = useBalance();
+
+  const normalizedDisplayCurrency =
+    displayCurrency === "USDC" || !displayCurrency
+      ? "USD"
+      : displayCurrency.toUpperCase();
+
+  const effectiveFx = fxRate > 0 ? fxRate : 1;
+
+  const formatDisplayAmount = (n: number | null | undefined) => {
+    if (n == null || !Number.isFinite(n)) return "—";
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: normalizedDisplayCurrency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(n);
+    } catch {
+      return `${Number(n).toFixed(2)} ${normalizedDisplayCurrency}`;
+    }
+  };
+
+  // user typed amount in DISPLAY currency
+  const amountDisplay = useMemo(() => {
+    const n = Number(amountInput);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [amountInput]);
+
+  // backend operates in USDC (≈ USD)
+  // display = USD * fx  =>  USD = display / fx  => USDC ≈ USD
+  const amountUsdc = useMemo(() => {
+    if (amountDisplay <= 0) return 0;
+    return amountDisplay / (effectiveFx || 1);
+  }, [amountDisplay, effectiveFx]);
 
   // 🔹 our hook – builds + signs tx and calls /api/user/wallet/transfer
   const {
@@ -47,13 +85,17 @@ const Withdraw: React.FC<WithdrawProps> = ({
     feeUsdc,
   } = useSponsoredUsdcTransfer();
 
-  const parsedAmount = (() => {
-    const n = Number(amountInput);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  })();
+  // fee comes back in USDC; convert it for display
+  const effectiveFeeUsdc = feeUsdc ?? 0;
+  const feeDisplay = effectiveFeeUsdc * effectiveFx;
 
-  const effectiveFee = feeUsdc ?? 0;
-  const totalDebited = parsedAmount + effectiveFee;
+  const totalDebitedUsdc = amountUsdc + effectiveFeeUsdc;
+  const totalDebitedDisplay = totalDebitedUsdc * effectiveFx;
+
+  const laneBalanceDisplay = balanceUsd || 0;
+
+  const hasEnoughBalance =
+    amountDisplay > 0 && totalDebitedDisplay <= laneBalanceDisplay + 1e-9;
 
   const handleCryptoWithdraw = async () => {
     setErrorMsg(null);
@@ -64,29 +106,26 @@ const Withdraw: React.FC<WithdrawProps> = ({
       return;
     }
 
-    // Basic validation
     if (!toAddress || toAddress.trim().length < 32) {
       setErrorMsg("Enter a valid wallet address.");
       return;
     }
 
-    if (!parsedAmount || parsedAmount <= 0) {
-      setErrorMsg("Enter a valid USDC amount.");
+    if (!amountDisplay || amountDisplay <= 0) {
+      setErrorMsg("Enter a valid amount.");
       return;
     }
 
-    // Rough check vs. available balance (USDC ~ USD)
-    if (totalDebited > balanceUsd) {
+    if (!hasEnoughBalance) {
       setErrorMsg("Insufficient balance for amount + fee.");
       return;
     }
 
     try {
-      // 🧠 Button press = consent → Privy signs → backend co-signs + sends
       const sig = await send({
         fromOwnerBase58: walletAddress,
         toOwnerBase58: toAddress.trim(),
-        amountUi: parsedAmount,
+        amountUi: amountUsdc, // ✅ backend amount (USDC), user never sees it
       });
 
       const txId = sig || lastSig || "";
@@ -96,10 +135,9 @@ const Withdraw: React.FC<WithdrawProps> = ({
           : txId;
 
       setSuccessMsg(
-        txId ? `Withdrawal sent on-chain. Tx: ${shortSig}` : "Withdrawal sent."
+        txId ? `Withdrawal sent. Tx: ${shortSig}` : "Withdrawal sent."
       );
 
-      // 🔄 small delay so RPC indexes, then refresh balances
       try {
         await new Promise((r) => setTimeout(r, 1200));
         await refreshBalances();
@@ -107,14 +145,10 @@ const Withdraw: React.FC<WithdrawProps> = ({
         console.error("[Withdraw] balance refresh failed:", e);
       }
 
-      // Clear form
       setAmountInput("");
       setToAddress("");
 
-      // Let parent also react if it wants (optional)
-      if (onSuccess) onSuccess();
-      // If you want to auto-close the drawer, you can do it via parent
-      // by controlling Drawer open state.
+      onSuccess?.();
     } catch (err) {
       console.error("[Withdraw] withdraw error:", err);
       setErrorMsg(
@@ -128,9 +162,9 @@ const Withdraw: React.FC<WithdrawProps> = ({
   const sendDisabled =
     sending ||
     !walletAddress ||
-    !parsedAmount ||
-    parsedAmount <= 0 ||
-    !toAddress.trim();
+    amountDisplay <= 0 ||
+    !toAddress.trim() ||
+    !hasEnoughBalance;
 
   return (
     <DrawerContent className="border-t border-zinc-800 bg-[#03180051] backdrop-blur-xl text-zinc-50">
@@ -139,7 +173,8 @@ const Withdraw: React.FC<WithdrawProps> = ({
           Withdraw funds
         </DrawerTitle>
         <DrawerDescription className="text-[10px] text-zinc-400">
-          Withdraw from your Deposit Account to another crypto wallet.
+          Withdraw from your Deposit Account to another wallet. Network fees are
+          covered.
         </DrawerDescription>
       </DrawerHeader>
 
@@ -191,44 +226,79 @@ const Withdraw: React.FC<WithdrawProps> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="text-[11px] font-medium text-zinc-300">
-                Amount (USDC)
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-medium text-zinc-300">
+                  Amount ({normalizedDisplayCurrency})
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const maxDisplay = Math.max(
+                      0,
+                      laneBalanceDisplay - feeDisplay
+                    );
+                    const safe =
+                      maxDisplay > 0 ? Math.floor(maxDisplay * 100) / 100 : 0;
+                    setAmountInput(safe > 0 ? String(safe) : "");
+                  }}
+                  className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-40"
+                  disabled={laneBalanceDisplay <= feeDisplay}
+                >
+                  Max
+                </button>
+              </div>
+
               <input
                 className="w-full rounded-lg border border-zinc-700 bg-black/40 px-3 py-2 text-sm text-zinc-50 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
                 placeholder="0.00"
                 inputMode="decimal"
                 value={amountInput}
-                onChange={(e) => setAmountInput(e.target.value)}
+                onChange={(e) => {
+                  const next = sanitizeAmountInput(e.target.value);
+                  const [, dec = ""] = next.split(".");
+                  if (dec.length > 2) return;
+                  setAmountInput(next);
+                }}
               />
+
               <p className="text-[11px] text-zinc-500">
-                Available: ~{balanceUsd.toFixed(2)} USDC
+                Available: {formatDisplayAmount(laneBalanceDisplay)}
               </p>
             </div>
 
-            {/* Breakdown */}
+            {/* Breakdown (DISPLAY currency only) */}
             <div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-2 text-[11px]">
               <div className="flex justify-between">
-                <span className="text-zinc-400">You send</span>
+                <span className="text-zinc-400">You withdraw</span>
                 <span className="text-zinc-100">
-                  {parsedAmount.toFixed(2)} USDC
+                  {formatDisplayAmount(amountDisplay)}
                 </span>
               </div>
+
               <div className="mt-1 flex justify-between">
                 <span className="text-zinc-400">Processing fee</span>
                 <span className="text-zinc-100">
-                  {effectiveFee.toFixed(2)} USDC
+                  {formatDisplayAmount(amountDisplay > 0 ? feeDisplay : 0)}
                 </span>
               </div>
-              <div className="mt-2 border-t border-zinc-800 pt-2 flex justify-between">
+
+              <div className="mt-2 flex justify-between border-t border-zinc-800 pt-2">
                 <span className="font-medium text-zinc-200">Total debited</span>
                 <span className="font-semibold text-emerald-300">
-                  {totalDebited.toFixed(2)} USDC
+                  {formatDisplayAmount(
+                    amountDisplay > 0 ? totalDebitedDisplay : 0
+                  )}
                 </span>
               </div>
             </div>
 
-            {/* Errors from local validation OR hook */}
+            {!hasEnoughBalance && amountDisplay > 0 && (
+              <p className="text-[11px] text-red-400">
+                Insufficient balance for amount + fee.
+              </p>
+            )}
+
             {(errorMsg || transferError) && (
               <p className="text-[11px] text-red-400">
                 {errorMsg || transferError}
@@ -256,7 +326,7 @@ const Withdraw: React.FC<WithdrawProps> = ({
                 disabled={sendDisabled}
                 className="rounded-lg bg-emerald-400 px-4 py-1.5 text-xs font-semibold text-black shadow-[0_0_14px_rgba(52,211,153,0.7)] transition hover:brightness-110 disabled:opacity-60"
               >
-                {sending ? "Sending…" : "Send USDC"}
+                {sending ? "Sending…" : "Send"}
               </button>
             </div>
           </TabsContent>

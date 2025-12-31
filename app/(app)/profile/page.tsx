@@ -17,6 +17,8 @@ import {
   Check,
   UserRound,
   Settings,
+  Link2,
+  MailPlus,
 } from "lucide-react";
 
 type ContactStatus = "invited" | "active" | "external";
@@ -40,11 +42,50 @@ type Referral = {
   joinedAt: string | null;
 };
 
+// what we need from user object without using `any`
 type UserWithSocial = {
   contacts?: unknown;
   referrals?: unknown;
 };
 
+type InviteDTO = {
+  email: string | null;
+  status: "sent" | "clicked" | "signed_up";
+  sentAt: string | null;
+  clickedAt: string | null;
+  redeemedAt: string | null;
+};
+
+type PersonalInviteCreateResponse =
+  | {
+      ok: true;
+      reused: boolean;
+      invite: {
+        email: string;
+        inviteToken: string;
+        status: "sent" | "clicked" | "signed_up";
+        sentAt: string | null;
+      };
+      link: string;
+      path?: string;
+    }
+  | {
+      ok: false;
+      reason?: string;
+      message?: string;
+    };
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
+type IOSNavigator = Navigator & { standalone?: boolean };
+
+// ✅ tiny safe helper: normalize contacts/referrals to arrays
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -86,17 +127,8 @@ const formatMembershipDuration = (iso?: string | null) => {
   return `${diffYears}y ${remainingMonths}m`;
 };
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-};
-
-type IOSNavigator = Navigator & { standalone?: boolean };
-
-// ✅ tiny safe helper: normalize contacts/referrals to arrays
-function asArray<T>(v: unknown): T[] {
-  return Array.isArray(v) ? (v as T[]) : [];
-}
+const isValidEmail = (email: string) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 const ProfilePage: React.FC = () => {
   const { user, refresh } = useUser();
@@ -108,8 +140,17 @@ const ProfilePage: React.FC = () => {
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const avatarUrl = user?.profileImageUrl || null;
-  const displayName = user?.fullName || user?.firstName || "Haven member";
+  // ── Invite UI state ──────────────────────────────────────────────
+  const [invitesLoading, setInvitesLoading] = useState(true);
+  const [invites, setInvites] = useState<InviteDTO[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [creatingInvite, setCreatingInvite] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  const [copiedGeneric, setCopiedGeneric] = useState(false);
+  const [copiedPersonalToken, setCopiedPersonalToken] = useState<string | null>(
+    null
+  );
 
   // PWA banner state
   const [isMobile, setIsMobile] = useState(false);
@@ -117,6 +158,22 @@ const ProfilePage: React.FC = () => {
   const [canPromptInstall, setCanPromptInstall] = useState(false);
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
+
+  const avatarUrl = user?.profileImageUrl || null;
+  const displayName = user?.fullName || user?.firstName || "Haven member";
+
+  // a “generic referral link” (doesn't require server)
+  const genericInviteLink = useMemo(() => {
+    const base =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (typeof window !== "undefined" ? window.location.origin : "");
+    // If you already have a canonical route for generic referrals, set it here:
+    // e.g. /sign-in?ref=<userId> OR /sign-in?ref=<refCode>
+    // We'll use walletAddress as stable fallback (you can swap to user.refCode later).
+    const ref = user?.walletAddress || user?.email || "";
+    const url = `${base}/sign-in?ref=${encodeURIComponent(ref)}`;
+    return url;
+  }, [user?.walletAddress, user?.email]);
 
   useEffect(() => {
     const ua = navigator.userAgent || "";
@@ -151,7 +208,7 @@ const ProfilePage: React.FC = () => {
     };
   }, []);
 
-  // ✅ contacts pulling fix (no provider changes): tolerate non-array shapes
+  // ✅ contacts/referrals without `any`
   const contacts: Contact[] = useMemo(() => {
     const social = user as unknown as UserWithSocial;
     return asArray<Contact>(social?.contacts);
@@ -161,7 +218,6 @@ const ProfilePage: React.FC = () => {
     const social = user as unknown as UserWithSocial;
     return asArray<Referral>(social?.referrals);
   }, [user]);
-
 
   const referralsCount = referrals.length;
   const contactsCount = contacts.length;
@@ -234,6 +290,125 @@ const ProfilePage: React.FC = () => {
     } finally {
       setDeferredPrompt(null);
       setCanPromptInstall(false);
+    }
+  };
+
+  // ── Load personal invites ────────────────────────────────────
+  useEffect(() => {
+    let mounted = true;
+
+    const loadInvites = async () => {
+      try {
+        setInvitesLoading(true);
+        const res = await fetch("/api/user/invites", {
+          method: "GET",
+          credentials: "include",
+        });
+        if (!res.ok) {
+          if (mounted) setInvites([]);
+          return;
+        }
+        const data = (await res.json().catch(() => ({}))) as {
+          invites?: InviteDTO[];
+        };
+        if (mounted)
+          setInvites(Array.isArray(data.invites) ? data.invites : []);
+      } catch {
+        if (mounted) setInvites([]);
+      } finally {
+        if (mounted) setInvitesLoading(false);
+      }
+    };
+
+    if (user) loadInvites();
+    return () => {
+      mounted = false;
+    };
+  }, [user]);
+
+  const handleCopyGenericInvite = async () => {
+    try {
+      await navigator.clipboard.writeText(genericInviteLink);
+      setCopiedGeneric(true);
+      setTimeout(() => setCopiedGeneric(false), 1400);
+    } catch (err) {
+      console.error("Copy generic invite failed:", err);
+    }
+  };
+
+  const handleCreatePersonalInvite = async () => {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email || !isValidEmail(email)) {
+      setInviteError("Enter a valid email.");
+      return;
+    }
+
+    setInviteError(null);
+    setCreatingInvite(true);
+
+    try {
+      const res = await fetch("/api/user/invite/personal", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = (await res
+        .json()
+        .catch(() => ({}))) as PersonalInviteCreateResponse;
+
+      if (!res.ok) {
+        // API returns 409 with message for already_on_haven
+        const msg =
+          "message" in data && typeof data.message === "string"
+            ? data.message
+            : "Failed to create invite.";
+        setInviteError(msg);
+        return;
+      }
+
+      // success: refresh list
+      setInviteEmail("");
+      // reload invites
+      const reload = await fetch("/api/user/invites", {
+        method: "GET",
+        credentials: "include",
+      });
+      const re = (await reload.json().catch(() => ({}))) as {
+        invites?: InviteDTO[];
+      };
+      setInvites(Array.isArray(re.invites) ? re.invites : []);
+
+      // auto-copy link if present
+      if ("link" in data && typeof data.link === "string" && data.link) {
+        try {
+          await navigator.clipboard.writeText(data.link);
+          setCopiedPersonalToken(data.invite.inviteToken);
+          setTimeout(() => setCopiedPersonalToken(null), 1500);
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err) {
+      console.error("Create personal invite failed:", err);
+      setInviteError("Failed to create invite. Try again.");
+    } finally {
+      setCreatingInvite(false);
+    }
+  };
+
+  const handleCopyPersonalLink = async (inviteToken: string) => {
+    try {
+      const base =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (typeof window !== "undefined" ? window.location.origin : "");
+      const link = `${base}/sign-in?invite=${encodeURIComponent(inviteToken)}`;
+      await navigator.clipboard.writeText(link);
+      setCopiedPersonalToken(inviteToken);
+      setTimeout(() => setCopiedPersonalToken(null), 1400);
+    } catch (err) {
+      console.error("Copy personal invite failed:", err);
     }
   };
 
@@ -402,7 +577,6 @@ const ProfilePage: React.FC = () => {
                       </p>
                     )}
 
-                    {/* Small stats (unchanged) */}
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                       <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
                         <div className="min-w-0">
@@ -473,7 +647,193 @@ const ProfilePage: React.FC = () => {
 
                 {/* RIGHT */}
                 <section className="min-w-0 space-y-3">
-                  {/* Overview (NO invites now) */}
+                  {/* ✅ INVITES: generic link + personal invites */}
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+                          <Link2 className="h-4 w-4 text-emerald-300" />
+                          Invite friends
+                        </h3>
+                        <p className="mt-0.5 text-[11px] text-zinc-400">
+                          Share your link or create a personal invite.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Generic link */}
+                    <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                        Your invite link
+                      </p>
+                      <p className="mt-1 truncate text-[11px] text-zinc-200">
+                        {genericInviteLink}
+                      </p>
+
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCopyGenericInvite}
+                          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-[11px] text-zinc-100 hover:bg-white/10 active:scale-[0.98]"
+                        >
+                          {copiedGeneric ? (
+                            <>
+                              <Check className="h-3.5 w-3.5" /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" /> Copy link
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // optional: native share on mobile
+                            if (navigator.share) {
+                              navigator
+                                .share({
+                                  title: "Haven",
+                                  text: "Join me on Haven",
+                                  url: genericInviteLink,
+                                })
+                                .catch(() => null);
+                            } else {
+                              handleCopyGenericInvite();
+                            }
+                          }}
+                          className="inline-flex items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100 hover:bg-emerald-500/15 active:scale-[0.98]"
+                        >
+                          Share
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Personal invite creation */}
+                    <div className="mt-3">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                        Personal invite
+                      </p>
+
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <MailPlus className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                          <input
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            placeholder="friend@email.com"
+                            className="h-10 w-full rounded-2xl border border-white/10 bg-black/30 pl-9 pr-3 text-[13px] text-white outline-none placeholder:text-zinc-500 focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleCreatePersonalInvite}
+                          disabled={creatingInvite}
+                          className={[
+                            "h-10 shrink-0 rounded-2xl px-4 text-[12px] font-semibold active:scale-[0.98]",
+                            creatingInvite
+                              ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-400"
+                              : "border border-emerald-500/30 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/20",
+                          ].join(" ")}
+                        >
+                          {creatingInvite ? "Creating…" : "Create"}
+                        </button>
+                      </div>
+
+                      {inviteError && (
+                        <p className="mt-2 text-[11px] text-red-300">
+                          {inviteError}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Personal invites list */}
+                    <div className="mt-4 border-t border-white/10 pt-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-[11px] font-medium text-zinc-300">
+                          Recent personal invites
+                        </p>
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
+                          {invitesLoading ? "…" : invites.length}
+                        </span>
+                      </div>
+
+                      {invitesLoading ? (
+                        <div className="space-y-2">
+                          {Array.from({ length: 2 }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="h-12 animate-pulse rounded-2xl border border-white/10 bg-white/5"
+                            />
+                          ))}
+                        </div>
+                      ) : invites.length === 0 ? (
+                        <p className="text-[11px] text-zinc-500">
+                          No personal invites yet.
+                        </p>
+                      ) : (
+                        <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
+                          {invites.map((inv) => {
+                            // we don't get token from GET /invites; we only show status.
+                            // But we *can* still provide a copy button by reusing email -> create again (idempotent),
+                            // or (better) you can extend GET endpoint to include inviteToken.
+                            //
+                            // For now: show status + email. If you want copy-link here,
+                            // update GET /api/user/invites to also return inviteToken.
+                            const statusLabel =
+                              inv.status === "signed_up"
+                                ? "Signed up"
+                                : inv.status === "clicked"
+                                ? "Opened"
+                                : "Sent";
+
+                            return (
+                              <div
+                                key={`${inv.email ?? "unknown"}-${
+                                  inv.sentAt ?? "na"
+                                }`}
+                                className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-[12px] font-medium text-zinc-100">
+                                    {inv.email ?? "Unknown"}
+                                  </p>
+                                  <p className="text-[10px] text-zinc-400">
+                                    {statusLabel} • {formatDate(inv.sentAt)}
+                                  </p>
+                                </div>
+
+                                <span
+                                  className={[
+                                    "shrink-0 rounded-full border px-2 py-0.5 text-[10px]",
+                                    inv.status === "signed_up"
+                                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-100"
+                                      : inv.status === "clicked"
+                                      ? "border-white/15 bg-white/5 text-zinc-200"
+                                      : "border-white/10 bg-black/20 text-zinc-300",
+                                  ].join(" ")}
+                                >
+                                  {statusLabel}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Optional: if you update GET endpoint to return inviteToken, you can show copy buttons like this:
+                          <button onClick={() => handleCopyPersonalLink(inv.inviteToken)}>Copy</button>
+                      */}
+                      <p className="mt-2 text-[10px] text-zinc-500">
+                        Tip: creating a personal invite for the same email will
+                        reuse the existing link (until they sign up).
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Overview */}
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
                     <div>
                       <h3 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -506,7 +866,7 @@ const ProfilePage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* People (NO pending invites now) */}
+                  {/* People */}
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
                     <div className="mb-3">
                       <h3 className="text-sm font-semibold">People</h3>
