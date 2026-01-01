@@ -6,6 +6,7 @@ import type { ChartTimeframe } from "./types";
 import { formatMoney } from "./utils";
 import TimeframeTabs from "./TimeframeTabs";
 import LineOnlyChart from "./LineOnlyChart";
+import Image from "next/image";
 
 type Point = { t: number; y: number };
 
@@ -50,10 +51,12 @@ export default function PriceChartPanel({
       <div className="flex flex-col items-center text-center">
         <div className="flex items-center gap-2">
           {tokenLogo ? (
-            <img
+            <Image
               src={tokenLogo}
               alt={tokenName}
-              className="h-6 w-6 rounded-full border border-white/10"
+              width={12}
+              height={12}
+              className="h-8 w-8 rounded-full border border-white/10"
             />
           ) : (
             <div className="h-6 w-6 rounded-full border border-white/10 bg-white/5" />

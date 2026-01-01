@@ -1,4 +1,3 @@
-// components/dash/Chart.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -30,7 +29,7 @@ type SnapshotApiResponse = {
   owner: string;
   snapshots: {
     asOf: string; // ISO date
-    totalBalanceUSDC: number;
+    totalBalanceUSDC: number; // USD/USDC
     breakdown?: {
       savingsFlex?: number | null;
       savingsPlus?: number | null;
@@ -43,12 +42,22 @@ type SnapshotApiResponse = {
 
 type ChartPoint = {
   date: string; // "YYYY-MM-DD"
+  t: number; // timestamp (ms)
   value: number; // display currency
 };
 
+function formatMoney(value: number, currency: string) {
+  const n = Number.isFinite(value) ? value : 0;
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency,
+    maximumFractionDigits: n < 1 ? 4 : 2,
+  });
+}
+
 const HistoryChart: React.FC = () => {
   const { user } = useUser();
-  const { displayCurrency, fxRate } = useBalance(); // fxRate: USD -> displayCurrency
+  const { displayCurrency, fxRate } = useBalance();
 
   const [range, setRange] = useState<RangeKey>("1w");
   const [snapshots, setSnapshots] = useState<SnapshotApiResponse["snapshots"]>(
@@ -59,9 +68,10 @@ const HistoryChart: React.FC = () => {
 
   const walletAddress = user?.walletAddress;
 
-  // Fetch all snapshots once we have a wallet address
   useEffect(() => {
     if (!walletAddress) return;
+
+    const controller = new AbortController();
 
     const fetchData = async () => {
       setLoading(true);
@@ -70,12 +80,16 @@ const HistoryChart: React.FC = () => {
         const url = `/api/user/wallet/chart-data?owner=${encodeURIComponent(
           walletAddress
         )}`;
-        const res = await fetch(url, { method: "GET", cache: "no-store" });
+        const res = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
 
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           console.error(
-            "[HistoryChart] /api/user/wallet/chart-data failed:",
+            "[HistoryChart] chart-data failed:",
             res.status,
             res.statusText,
             text
@@ -86,7 +100,9 @@ const HistoryChart: React.FC = () => {
 
         const data = (await res.json()) as SnapshotApiResponse;
         setSnapshots(data.snapshots ?? []);
-      } catch (err) {
+      } catch (err: unknown) {
+        // ✅ no `any` — safe narrowing
+        if (err instanceof Error && err.name === "AbortError") return;
         console.error("[HistoryChart] error fetching chart data:", err);
         setError("Failed to load history.");
       } finally {
@@ -95,9 +111,9 @@ const HistoryChart: React.FC = () => {
     };
 
     void fetchData();
+    return () => controller.abort();
   }, [walletAddress]);
 
-  // Helper: normalize a Date to a UTC "YYYY-MM-DD" key
   const dayKeyUTC = (d: Date): string => {
     const year = d.getUTCFullYear();
     const month = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -105,7 +121,6 @@ const HistoryChart: React.FC = () => {
     return `${year}-${month}-${day}`;
   };
 
-  // Build a map of dayKey -> totalBalanceUSDC from snapshots (USD/USDC)
   const snapshotsByDay = useMemo(() => {
     const map = new Map<string, number>();
     for (const snap of snapshots) {
@@ -122,23 +137,20 @@ const HistoryChart: React.FC = () => {
 
   const activeConfig = RANGE_OPTIONS.find((r) => r.key === range)!;
 
-  // Build a daily time series for the selected range, converted to display currency.
   const visibleData: ChartPoint[] = useMemo(() => {
     if (!snapshots.length) return [];
 
     const today = new Date();
     const rate = fxRate && fxRate > 0 ? fxRate : 1;
 
-    // For "1D" we want 2 points: today and yesterday
     const visibleSpan =
       activeConfig.key === "1d" ? 2 : activeConfig.visibleDays;
 
-    // Earliest day in DB
-    const allKeys = Array.from(snapshotsByDay.keys()).sort(); // YYYY-MM-DD
+    const allKeys = Array.from(snapshotsByDay.keys()).sort();
     const earliestKey = allKeys[0];
 
     const points: ChartPoint[] = [];
-    let lastKnownValueUsd = 0;
+    let lastKnownUsd = 0;
 
     for (let i = visibleSpan - 1; i >= 0; i--) {
       const d = new Date(today);
@@ -146,20 +158,19 @@ const HistoryChart: React.FC = () => {
       const key = dayKeyUTC(d);
 
       let valueUsd: number;
-
       if (snapshotsByDay.has(key)) {
         valueUsd = snapshotsByDay.get(key)!;
-        lastKnownValueUsd = valueUsd;
+        lastKnownUsd = valueUsd;
       } else {
-        valueUsd = key < earliestKey ? 0 : lastKnownValueUsd;
+        valueUsd = key < earliestKey ? 0 : lastKnownUsd;
       }
 
-      // Convert USD/USDC -> display currency
+      const t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
       const valueDisplay = valueUsd * rate;
 
-      // Safety: never allow NaN in chart
       points.push({
         date: key,
+        t,
         value: Number.isFinite(valueDisplay) ? valueDisplay : 0,
       });
     }
@@ -173,7 +184,6 @@ const HistoryChart: React.FC = () => {
     fxRate,
   ]);
 
-  // Small, compact range selector (reused)
   const RangeSelector = () => (
     <div className="flex gap-1.5">
       {RANGE_OPTIONS.map((opt) => {
@@ -183,12 +193,12 @@ const HistoryChart: React.FC = () => {
             key={opt.key}
             type="button"
             onClick={() => setRange(opt.key)}
-            className={`rounded-full px-2.5 py-0.5 text-[9px] font-medium transition
-              ${
-                isActive
-                  ? "bg-primary text-black shadow-[0_0_10px_rgba(190,242,100,0.6)]"
-                  : "bg-zinc-900 text-zinc-400"
-              }`}
+            className={[
+              "rounded-full px-2.5 py-1 text-[10px] font-semibold transition border",
+              isActive
+                ? "bg-emerald-500/20 text-emerald-100 border-emerald-300/25 shadow-[0_0_0_1px_rgba(63,243,135,0.55)]"
+                : "bg-black/35 text-white/55 border-white/10 hover:text-white/80 hover:border-white/15",
+            ].join(" ")}
           >
             {opt.label}
           </button>
@@ -197,9 +207,63 @@ const HistoryChart: React.FC = () => {
     </div>
   );
 
+  const formatDateLabel = (key: string) => {
+    const [y, m, d] = key.split("-").map((x) => parseInt(x, 10));
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    if (range === "1y") {
+      return dt.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+      });
+    }
+    return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  const CustomTooltip = ({
+    active,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: {
+      value?: number;
+      payload?: { date?: string; value?: number };
+    }[];
+  }) => {
+    if (!active || !payload?.length) return null;
+
+    const v = Number(payload[0]?.value ?? 0);
+    const dateKey = String(payload[0]?.payload?.date ?? "");
+
+    const idx = visibleData.findIndex((p) => p.date === dateKey);
+    const prev = idx > 0 ? visibleData[idx - 1].value : v;
+    const diff = v - prev;
+
+    const sign = diff >= 0 ? "+" : "-";
+
+    return (
+      <div className="rounded-2xl border border-white/10 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm">
+        <div className="text-sm font-semibold text-white/90">
+          {formatMoney(v, displayCurrency)}
+        </div>
+        <div className="mt-0.5 text-[11px] text-white/45">
+          {formatDateLabel(dateKey)}
+        </div>
+        <div
+          className={[
+            "mt-1 text-[11px] font-semibold",
+            diff >= 0 ? "text-emerald-300" : "text-rose-300",
+          ].join(" ")}
+        >
+          {sign}
+          {formatMoney(Math.abs(diff), displayCurrency)}
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
-      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[10px] text-zinc-500">
+      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-white/45">
         Loading history…
       </div>
     );
@@ -207,7 +271,7 @@ const HistoryChart: React.FC = () => {
 
   if (error) {
     return (
-      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[10px] text-red-400">
+      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-rose-300">
         {error || "Something went wrong."}
       </div>
     );
@@ -215,116 +279,93 @@ const HistoryChart: React.FC = () => {
 
   if (!snapshots.length) {
     return (
-      <div className="w-full rounded-2xl bg-black/25 px-3 py-3">
-        <div className="mb-2 flex justify-end">
+      <div className="w-full">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
+            History
+          </div>
           <RangeSelector />
         </div>
-        <p className="text-[10px] text-zinc-500">No history yet.</p>
+        <div className="rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-white/45">
+          No history yet.
+        </div>
       </div>
     );
   }
 
-  // ✅ Tooltip shows ACTUAL value, plus change vs previous point (no “negative balance” confusion)
-  const CustomTooltip = ({
-    active,
-    payload,
-  }: {
-    active?: boolean;
-    payload?: { value?: number; payload?: { date?: string; value?: number } }[];
-  }) => {
-    if (!active || !payload?.length) return null;
-
-    const v = Number(payload[0]?.value ?? 0);
-    const date = String(payload[0]?.payload?.date ?? "");
-
-    const idx = visibleData.findIndex((p) => p.date === date);
-    const prev = idx > 0 ? visibleData[idx - 1].value : v;
-    const diff = v - prev;
-
-    const sign = diff >= 0 ? "+" : "-";
-    const absDiff = Math.abs(diff);
-
-    return (
-      <div className="rounded-xl bg-white px-3 py-2 shadow-md shadow-[rgba(190,242,100,0.6)]">
-        <div className="text-xs font-semibold text-zinc-900">
-          {Number.isFinite(v) ? v.toFixed(2) : "0.00"} {displayCurrency}
-        </div>
-        <div className="text-[10px] font-semibold text-primary">
-          {sign}
-          {Number.isFinite(absDiff) ? absDiff.toFixed(2) : "0.00"}{" "}
-          {displayCurrency}
-        </div>
-      </div>
-    );
-  };
+  const values = visibleData.map((p) => p.value);
+  const low = values.length ? Math.min(...values) : 0;
+  const high = values.length ? Math.max(...values) : 0;
 
   return (
     <div className="w-full">
-      <div className="w-full pt-2 pb-3">
-        <div className="mb-1 flex justify-start">
-          <RangeSelector />
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
+          History
         </div>
+        <RangeSelector />
+      </div>
 
-        <div className="h-28 w-full overflow-hidden">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart
-              data={visibleData}
-              margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
-            >
-              <XAxis dataKey="date" hide />
-              <YAxis dataKey="value" hide domain={["auto", "auto"]} />
+      <div className="h-[124px] w-full overflow-hidden sm:h-[176px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart
+            data={visibleData}
+            margin={{ top: 6, right: 10, bottom: 0, left: 0 }}
+          >
+            <XAxis dataKey="date" hide />
+            <YAxis dataKey="value" hide domain={["auto", "auto"]} />
 
-              <Tooltip
-                cursor={{
-                  stroke: "rgba(255,255,255,0.35)",
-                  strokeDasharray: "3 3",
-                }}
-                content={<CustomTooltip />}
-              />
+            <Tooltip
+              cursor={{
+                stroke: "rgba(255,255,255,0.16)",
+                strokeDasharray: "3 3",
+              }}
+              content={<CustomTooltip />}
+            />
 
-              <defs>
-                <linearGradient
-                  id="historyGradient"
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop
-                    offset="0%"
-                    style={{
-                      stopColor: "var(--primary)",
-                      stopOpacity: 0.35,
-                    }}
-                  />
-                  <stop
-                    offset="90%"
-                    style={{
-                      stopColor: "var(--primary)",
-                      stopOpacity: 0,
-                    }}
-                  />
-                </linearGradient>
-              </defs>
+            <defs>
+              <linearGradient
+                id="portfolioGradient"
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="1"
+              >
+                <stop
+                  offset="0%"
+                  stopColor="var(--chart-1, rgb(16 185 129))"
+                  stopOpacity="0.28"
+                />
+                <stop
+                  offset="90%"
+                  stopColor="var(--chart-1, rgb(16 185 129))"
+                  stopOpacity="0.0"
+                />
+              </linearGradient>
+            </defs>
 
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke="var(--primary)"
-                strokeWidth={2}
-                fill="url(#historyGradient)"
-                dot={false}
-                activeDot={{
-                  r: 5,
-                  stroke: "var(--primary)",
-                  strokeWidth: 2,
-                  fill: "#000000",
-                }}
-                isAnimationActive
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke="var(--chart-1, rgb(16 185 129))"
+              strokeWidth={2.2}
+              fill="url(#portfolioGradient)"
+              dot={false}
+              activeDot={{
+                r: 4,
+                stroke: "var(--chart-1, rgb(16 185 129))",
+                strokeWidth: 2,
+                fill: "#000000",
+              }}
+              isAnimationActive
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
+        <span>Low: {formatMoney(low, displayCurrency)}</span>
+        <span>High: {formatMoney(high, displayCurrency)}</span>
       </div>
     </div>
   );
