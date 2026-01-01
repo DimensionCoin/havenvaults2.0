@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -25,15 +25,6 @@ import {
   type TokenCategory,
 } from "@/lib/tokenConfig";
 
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from "recharts";
-
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
 import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
@@ -53,35 +44,23 @@ type ResolvedToken = {
   mint: string;
 };
 
-type HistoricalPoint = {
-  t: number;
-  price: number; // USD
-};
+type HistoricalPoint = { t: number; price: number }; // USD from API
+type HistoricalApiResponse = { id: string; prices: HistoricalPoint[] };
 
-type HistoricalApiResponse = {
-  id: string;
-  prices: HistoricalPoint[];
-};
-
-type PriceEntry = {
-  price: number; // USD
-  priceChange24hPct?: number;
-};
-
-type PricesResponse = {
-  prices: Record<string, PriceEntry>;
+type SpotResp = {
+  prices: Record<
+    string,
+    { priceUsd: number; priceChange24hPct: number | null }
+  >;
 };
 
 type TimeframeKey = "1D" | "7D" | "30D" | "90D";
 
-const TIMEFRAMES: Record<
-  TimeframeKey,
-  { label: string; days: string; interval: string }
-> = {
-  "1D": { label: "24H", days: "1", interval: "hourly" },
-  "7D": { label: "7D", days: "7", interval: "hourly" },
-  "30D": { label: "30D", days: "30", interval: "daily" },
-  "90D": { label: "90D", days: "90", interval: "daily" },
+const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
+  "1D": { label: "24H", days: "1" },
+  "7D": { label: "7D", days: "7" },
+  "30D": { label: "30D", days: "30" },
+  "90D": { label: "90D", days: "90" },
 };
 
 /* --------------------------------------------------------------------- */
@@ -139,35 +118,255 @@ const safeParse = (s: string) => {
 };
 
 /* --------------------------------------------------------------------- */
-/* Chart tooltip                                                         */
+/* Sleek hover chart (Amplify-style)                                     */
 /* --------------------------------------------------------------------- */
 
-type ChartPoint = { label: string; price: number };
+type SleekPoint = { t: number; y: number }; // display currency y
 
-type CustomTooltipProps = {
-  active?: boolean;
-  payload?: { value: number }[];
-  label?: string;
-  currency: string;
-};
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
 
-const CustomTooltip: React.FC<CustomTooltipProps> = ({
-  active,
-  payload,
-  label,
-  currency,
-}) => {
-  if (!active || !payload || !payload.length) return null;
-  const value = payload[0]?.value;
+function formatTimeLabel(t: number, tf: TimeframeKey) {
+  const d = new Date(t);
+  if (tf === "1D") {
+    return d.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function SleekLineChart({
+  data,
+  height = 210,
+  displayCurrency,
+  timeframe,
+}: {
+  data: SleekPoint[];
+  height?: number;
+  displayCurrency: string;
+  timeframe: TimeframeKey;
+}) {
+  const width = 640;
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [isHovering, setIsHovering] = useState(false);
+
+  const computed = useMemo(() => {
+    if (!data || data.length < 2) {
+      return {
+        pathD: "",
+        minY: 0,
+        maxY: 0,
+        min: 0,
+        max: 1,
+        scaleX: (_i: number) => 0,
+        scaleY: (_y: number) => height,
+      };
+    }
+
+    const ys = data.map((d) => d.y);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const pad = (maxY - minY) * 0.15 || 1;
+    const min = minY - pad;
+    const max = maxY + pad;
+
+    const scaleX = (i: number) => (i / (data.length - 1)) * width;
+    const scaleY = (y: number) => {
+      const t = (y - min) / (max - min);
+      return height - t * height;
+    };
+
+    const pathD = data
+      .map((p, i) => {
+        const x = scaleX(i);
+        const y = scaleY(p.y);
+        return `${i === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+      })
+      .join(" ");
+
+    return { pathD, minY, maxY, min, max, scaleX, scaleY };
+  }, [data, height]);
+
+  const activeIdx =
+    hoverIdx === null ? null : clamp(hoverIdx, 0, Math.max(0, data.length - 1));
+  const activePoint = activeIdx !== null ? data[activeIdx] : null;
+
+  const activeX = activeIdx !== null ? computed.scaleX(activeIdx) : null;
+  const activeY = activePoint ? computed.scaleY(activePoint.y) : null;
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!wrapRef.current || data.length < 2) return;
+
+    const rect = wrapRef.current.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const frac = rect.width > 0 ? px / rect.width : 0;
+    const idx = Math.round(frac * (data.length - 1));
+
+    setIsHovering(true);
+    setHoverIdx(clamp(idx, 0, data.length - 1));
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    onPointerMove(e);
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    try {
+      (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const onLeave = () => {
+    setIsHovering(false);
+    setHoverIdx(null);
+  };
+
+  const tooltip = useMemo(() => {
+    if (!activePoint || activeX === null || activeY === null) return null;
+
+    const leftPct = (activeX / width) * 100;
+    const topPct = (activeY / height) * 100;
+
+    const clampedLeft = clamp(leftPct, 6, 78);
+    const clampedTop = clamp(topPct - 18, 4, 72);
+
+    return {
+      leftPct,
+      topPct,
+      boxLeftPct: clampedLeft,
+      boxTopPct: clampedTop,
+      priceText: formatCurrency(activePoint.y, displayCurrency),
+      timeText: formatTimeLabel(activePoint.t, timeframe),
+    };
+  }, [activePoint, activeX, activeY, displayCurrency, timeframe]);
+
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/90 px-3 py-2 text-xs text-slate-100 shadow-xl">
-      <div className="font-medium text-emerald-300">
-        {formatCurrency(value, currency)}
+    <div ref={wrapRef} className="relative w-full select-none">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-[210px] w-full"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="havenLineFade" x1="0" x2="0" y1="0" y2="1">
+            <stop
+              offset="0%"
+              stopColor="var(--chart-1, rgb(16 185 129))"
+              stopOpacity="0.26"
+            />
+            <stop
+              offset="100%"
+              stopColor="var(--chart-1, rgb(16 185 129))"
+              stopOpacity="0.02"
+            />
+          </linearGradient>
+        </defs>
+
+        {[0.2, 0.4, 0.6, 0.8].map((t) => (
+          <line
+            key={t}
+            x1="0"
+            x2={width}
+            y1={height * t}
+            y2={height * t}
+            stroke="white"
+            strokeOpacity="0.06"
+            strokeWidth="1"
+          />
+        ))}
+
+        {computed.pathD && (
+          <path
+            d={`${computed.pathD} L ${width} ${height} L 0 ${height} Z`}
+            fill="url(#havenLineFade)"
+          />
+        )}
+
+        {computed.pathD && (
+          <path
+            d={computed.pathD}
+            fill="none"
+            stroke="var(--chart-1, rgb(16 185 129))"
+            strokeOpacity="0.85"
+            strokeWidth="2.2"
+          />
+        )}
+
+        {isHovering && activeX !== null && activeY !== null && (
+          <>
+            <line
+              x1={activeX}
+              x2={activeX}
+              y1={0}
+              y2={height}
+              stroke="white"
+              strokeOpacity="0.10"
+              strokeWidth="1"
+            />
+            <circle
+              cx={activeX}
+              cy={activeY}
+              r="4.5"
+              fill="black"
+              fillOpacity="0.9"
+              stroke="var(--chart-1, rgb(16 185 129))"
+              strokeWidth="2"
+            />
+          </>
+        )}
+
+        <rect
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+          fill="transparent"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onLeave}
+          onPointerCancel={onLeave}
+        />
+      </svg>
+
+      {tooltip && isHovering && (
+        <div
+          className="pointer-events-none absolute rounded-2xl border border-white/10 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm"
+          style={{
+            left: `${tooltip.boxLeftPct}%`,
+            top: `${tooltip.boxTopPct}%`,
+            maxWidth: "72%",
+          }}
+        >
+          <div className="text-sm font-semibold text-white/90">
+            {tooltip.priceText}
+          </div>
+          <div className="mt-0.5 text-[11px] text-white/45">
+            {tooltip.timeText}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
+        <span>
+          Low:{" "}
+          {computed.minY ? formatCurrency(computed.minY, displayCurrency) : "—"}
+        </span>
+        <span>
+          High:{" "}
+          {computed.maxY ? formatCurrency(computed.maxY, displayCurrency) : "—"}
+        </span>
       </div>
-      <div className="mt-0.5 text-[10px] text-slate-400">{label}</div>
     </div>
   );
-};
+}
 
 /* --------------------------------------------------------------------- */
 /* Fullscreen processing modal                                           */
@@ -183,10 +382,10 @@ type TxModalState =
       signature?: string | null;
     };
 
-const TxModal: React.FC<{
-  state: TxModalState;
-  onClose: () => void;
-}> = ({ state, onClose }) => {
+const TxModal: React.FC<{ state: TxModalState; onClose: () => void }> = ({
+  state,
+  onClose,
+}) => {
   if (!state.open) return null;
 
   const isProcessing = state.stage === "processing";
@@ -331,6 +530,8 @@ const CoinPage: React.FC = () => {
 
   const ownerBase58 = user?.walletAddress ?? "";
 
+  const coingeckoId = (meta?.id || "").trim();
+
   /* ------------------------------------------------------------------- */
   /* Balances                                                            */
   /* ------------------------------------------------------------------- */
@@ -358,7 +559,7 @@ const CoinPage: React.FC = () => {
       : 0;
 
   /* ------------------------------------------------------------------- */
-  /* Fetch spot price                                                    */
+  /* Fetch spot price (CoinGecko API)                                    */
   /* ------------------------------------------------------------------- */
 
   useEffect(() => {
@@ -368,20 +569,30 @@ const CoinPage: React.FC = () => {
       try {
         setPriceLoading(true);
 
-        const res = await fetch("/api/prices/jup", {
+        // If we don't have a CG id, we can't use the CG spot endpoint.
+        if (!coingeckoId) {
+          setSpotPriceUsd(null);
+          setPriceChange24hPct(null);
+          return;
+        }
+
+        const res = await fetch("/api/prices/coingecko", {
           method: "POST",
           signal: controller.signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mints: [mint] }),
+          body: JSON.stringify({ ids: [coingeckoId] }),
+          cache: "no-store",
         });
 
         if (!res.ok) return;
 
-        const data = (await res.json()) as PricesResponse;
-        const entry = data.prices?.[mint];
+        const data = (await res.json()) as SpotResp;
+        const entry = data?.prices?.[coingeckoId];
         if (!entry) return;
 
-        setSpotPriceUsd(entry.price ?? null);
+        setSpotPriceUsd(
+          typeof entry.priceUsd === "number" ? entry.priceUsd : null
+        );
         setPriceChange24hPct(
           typeof entry.priceChange24hPct === "number"
             ? entry.priceChange24hPct
@@ -395,20 +606,18 @@ const CoinPage: React.FC = () => {
       }
     };
 
-    if (mint) loadSpotPrice();
+    loadSpotPrice();
     return () => controller.abort();
-  }, [mint, priceRefreshTick]);
+  }, [coingeckoId, priceRefreshTick]);
 
   /* ------------------------------------------------------------------- */
-  /* Fetch history                                                       */
+  /* Fetch history (CoinGecko API)                                       */
   /* ------------------------------------------------------------------- */
-
-  const metaId = meta?.id;
 
   useEffect(() => {
-    if (!metaId) {
+    if (!coingeckoId) {
       setHistory([]);
-      setHistoryError("No chart data available for this asset.");
+      setHistoryError("No CoinGecko id for this asset.");
       return;
     }
 
@@ -420,13 +629,10 @@ const CoinPage: React.FC = () => {
         setHistoryLoading(true);
         setHistoryError(null);
 
-        const params = new URLSearchParams({
-          id: metaId,
-          days: cfg.days,
-          interval: cfg.interval,
-        });
+        const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(
+          coingeckoId
+        )}&days=${encodeURIComponent(cfg.days)}`;
 
-        const url = `/api/prices/historical?${params.toString()}`;
         const res = await fetch(url, {
           method: "GET",
           signal: controller.signal,
@@ -440,7 +646,7 @@ const CoinPage: React.FC = () => {
         }
 
         const data = (await res.json()) as HistoricalApiResponse;
-        setHistory(data.prices || []);
+        setHistory(Array.isArray(data?.prices) ? data.prices : []);
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return;
@@ -453,7 +659,7 @@ const CoinPage: React.FC = () => {
 
     loadHistory();
     return () => controller.abort();
-  }, [metaId, timeframe]);
+  }, [coingeckoId, timeframe, priceRefreshTick]);
 
   /* ------------------------------------------------------------------- */
   /* Derived values                                                      */
@@ -462,27 +668,11 @@ const CoinPage: React.FC = () => {
   const spotPriceDisplay =
     spotPriceUsd && fxRate ? spotPriceUsd * fxRate : null;
 
-  const chartData: ChartPoint[] = useMemo(() => {
+  const chartData = useMemo((): SleekPoint[] => {
     if (!history?.length) return [];
-
-    const formatter =
-      timeframe === "1D"
-        ? (ts: number) =>
-            new Date(ts).toLocaleTimeString("en-US", {
-              hour: "numeric",
-              minute: "2-digit",
-            })
-        : (ts: number) =>
-            new Date(ts).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-            });
-
-    return history.map((p) => ({
-      label: formatter(p.t),
-      price: p.price * (fxRate || 1),
-    }));
-  }, [history, timeframe, fxRate]);
+    if (!fxRate || fxRate <= 0) return [];
+    return history.map((p) => ({ t: p.t, y: p.price * fxRate }));
+  }, [history, fxRate]);
 
   const cashNum = safeParse(cashAmount); // display currency
   const assetNum = safeParse(assetAmount); // token units
@@ -495,7 +685,6 @@ const CoinPage: React.FC = () => {
 
   // Determine gross notional based on user intent
   const grossUsd = lastEdited === "cash" ? cashUsd : assetUsd;
-
   const grossUsdSafe = grossUsd > 0 && Number.isFinite(grossUsd) ? grossUsd : 0;
 
   const feeUsd =
@@ -504,7 +693,6 @@ const CoinPage: React.FC = () => {
   const netUsdAfterFee = Math.max(grossUsdSafe - feeUsd, 0);
 
   const feeDisplay = fxRate && feeUsd ? feeUsd * fxRate : 0;
-
   const netDisplay = fxRate && netUsdAfterFee ? netUsdAfterFee * fxRate : 0;
 
   // What the user receives (after fee)
@@ -513,7 +701,7 @@ const CoinPage: React.FC = () => {
 
   const receiveCashDisplay = netDisplay; // after fee
 
-  // If user types the opposite unit, we compute the other field for preview (without overwriting the user’s input)
+  // If user types the opposite unit, we compute the other field for preview (without overwriting input)
   const impliedAssetFromCash =
     spotPriceUsd && cashUsd > 0 ? cashUsd / spotPriceUsd : 0;
 
@@ -529,7 +717,6 @@ const CoinPage: React.FC = () => {
     if (!spotPriceUsd || spotPriceUsd <= 0) return;
 
     if (lastEdited === "cash") {
-      // user is setting cash, update asset preview field
       const n = safeParse(cashAmount);
       if (!n || n <= 0) {
         if (assetAmount !== "") setAssetAmount("");
@@ -542,7 +729,6 @@ const CoinPage: React.FC = () => {
         if (next !== assetAmount) setAssetAmount(next);
       }
     } else {
-      // user is setting asset, update cash preview field
       const n = safeParse(assetAmount);
       if (!n || n <= 0) {
         if (cashAmount !== "") setCashAmount("");
@@ -590,9 +776,6 @@ const CoinPage: React.FC = () => {
     setIsMaxSell(false);
     setInputUnit(next);
     setLastEdited(next);
-
-    // Keep values, but user’s newly selected unit becomes the authoritative input.
-    // (We don’t clear because that feels “bank app” friendly.)
   };
 
   const setQuickCash = (pct: number) => {
@@ -629,17 +812,13 @@ const CoinPage: React.FC = () => {
       if (!fxRate || fxRate <= 0) throw new Error("FX not ready yet.");
       if (!spotPriceUsd || spotPriceUsd <= 0)
         throw new Error("Price not ready.");
-
       if (grossUsdSafe <= 0) throw new Error("Enter an amount.");
 
       if (side === "buy") {
-        // Buying uses the cash rail; check against internal cash balance (~USD)
         if (grossUsdSafe > cashBalanceInternal + 0.000001) {
           throw new Error("Not enough Cash available.");
         }
 
-        // Backend expects amountDisplay (display currency) for buy.
-        // If user entered asset, we convert to the implied cash display.
         const amountDisplay =
           lastEdited === "cash" ? cashNum : impliedCashFromAssetDisplay;
 
@@ -667,7 +846,6 @@ const CoinPage: React.FC = () => {
       }
 
       // sell
-      // If user entered cash, convert to asset units for the backend call
       const sellAmountUi =
         lastEdited === "asset"
           ? assetNum
@@ -721,15 +899,12 @@ const CoinPage: React.FC = () => {
 
   const perfPct = useMemo(() => {
     const firstPrice = history[0]?.price ?? spotPriceUsd ?? null;
-
     const lastPrice =
       history[history.length - 1]?.price ?? spotPriceUsd ?? firstPrice ?? null;
 
     if (!firstPrice || !lastPrice) return 0;
-
     return ((lastPrice - firstPrice) / firstPrice) * 100;
   }, [history, spotPriceUsd]);
-
 
   const primaryDisabled =
     swapLoading ||
@@ -776,6 +951,9 @@ const CoinPage: React.FC = () => {
     );
   }
 
+  const pct = typeof priceChange24hPct === "number" ? priceChange24hPct : null;
+  const isUp = (pct ?? 0) >= 0;
+
   return (
     <div className="min-h-screen text-foreground">
       <TxModal state={txModal} onClose={() => setTxModal({ open: false })} />
@@ -806,93 +984,89 @@ const CoinPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Header card */}
-        <div className="glass-panel mt-3 bg-white/10 p-4 sm:p-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-2xl border border-white/15 bg-black/60">
+        {/* Amplify-style price + chart header */}
+        <div className="mt-3 glass-panel bg-white/10 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6">
+          {/* centered token */}
+          <div className="flex flex-col items-center text-center">
+            <div className="flex items-center gap-2">
               {logo ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={logo}
                   alt={name}
-                  className="h-full w-full object-cover"
+                  className="h-6 w-6 rounded-full border border-white/10"
                 />
               ) : (
-                <span className="text-xs font-semibold text-slate-100">
-                  {(symbol || "???").slice(0, 3).toUpperCase()}
-                </span>
+                <div className="h-6 w-6 rounded-full border border-white/10 bg-white/5" />
               )}
-            </div>
 
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-lg font-semibold tracking-tight text-slate-50">
-                  {name}
-                </h1>
-                {symbol && (
-                  <span className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 text-[10px] font-medium uppercase text-slate-300">
-                    {symbol}
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
-                <span className="rounded-full bg-black/60 px-2 py-0.5">
-                  {category}
-                </span>
-
-                {priceChange24hPct !== null && (
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${
-                      priceChange24hPct > 0
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : priceChange24hPct < 0
-                        ? "bg-red-500/10 text-red-300"
-                        : "bg-black/40 text-slate-400"
-                    }`}
-                  >
-                    {priceChange24hPct > 0 ? (
-                      <ArrowUpRight className="h-3 w-3" />
-                    ) : priceChange24hPct < 0 ? (
-                      <ArrowDownRight className="h-3 w-3" />
-                    ) : null}
-                    {formatPct(priceChange24hPct)}{" "}
-                    <span className="text-slate-400/80">24h</span>
-                  </span>
-                )}
+              <div className="text-[12px] font-semibold tracking-[0.28em] text-white/55">
+                {symbol || name}
               </div>
             </div>
 
-            <div className="text-right">
-              <div className="text-[11px] text-slate-500">Price</div>
-              <div className="text-xl font-semibold text-slate-50">
-                {priceLoading && !spotPriceDisplay
+            <div className="mt-2 flex items-baseline justify-center gap-2">
+              <span className="text-[44px] font-semibold leading-none tracking-tight text-white/92 sm:text-5xl">
+                {priceLoading && spotPriceDisplay === null
                   ? "…"
                   : formatCurrency(spotPriceDisplay, displayCurrency)}
-              </div>
+              </span>
             </div>
-          </div>
 
-          {/* Chart */}
-          <div className="mt-4 rounded-3xl border border-white/8 bg-black/40 px-3 py-3">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-[11px] text-slate-400">
-                {`${TIMEFRAMES[timeframe].label} performance`}
-                <span className="ml-2 font-semibold">
-                  <span
-                    className={
-                      perfPct > 0
-                        ? "text-emerald-300"
-                        : perfPct < 0
-                        ? "text-red-300"
-                        : "text-slate-300"
-                    }
-                  >
-                    {formatPct(perfPct)}
-                  </span>
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <span
+                className={[
+                  "inline-flex items-center gap-1 text-sm font-semibold",
+                  pct === null
+                    ? "text-white/40"
+                    : isUp
+                    ? "text-emerald-300"
+                    : "text-rose-300",
+                ].join(" ")}
+              >
+                {pct === null ? null : isUp ? (
+                  <ArrowUpRight className="h-4 w-4" />
+                ) : (
+                  <ArrowDownRight className="h-4 w-4" />
+                )}
+                {pct === null ? "—" : `${pct.toFixed(2)}%`}
+              </span>
+
+              <span className="text-xs text-white/35">(24h)</span>
+
+              <span className="mx-1 h-3 w-px bg-white/10" />
+
+              <span className="text-xs text-white/35">
+                {TIMEFRAMES[timeframe].label} perf{" "}
+                <span
+                  className={
+                    perfPct > 0
+                      ? "text-emerald-300"
+                      : perfPct < 0
+                      ? "text-rose-300"
+                      : "text-white/50"
+                  }
+                >
+                  {formatPct(perfPct)}
+                </span>
+              </span>
+            </div>
+
+            {!!category && (
+              <div className="mt-2 text-[11px] text-white/35">
+                <span className="rounded-full border border-white/10 bg-black/30 px-2 py-0.5">
+                  {category}
                 </span>
               </div>
+            )}
+          </div>
 
+          {/* chart container (mobile full-bleed) */}
+          <div className="relative mt-4 overflow-hidden rounded-3xl border border-white/10 bg-black/45 shadow-[0_18px_55px_rgba(0,0,0,0.55)] -mx-4 sm:mx-0">
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
+
+            {/* timeframe tabs overlay */}
+            <div className="absolute right-3 top-3 z-10">
               <div className="flex gap-1 rounded-full border border-white/10 bg-black/40 p-0.5 text-[11px]">
                 {(Object.keys(TIMEFRAMES) as TimeframeKey[]).map((tf) => {
                   const active = tf === timeframe;
@@ -905,7 +1079,7 @@ const CoinPage: React.FC = () => {
                       className={`rounded-full px-2.5 py-0.5 transition disabled:opacity-50 ${
                         active
                           ? "bg-emerald-500 text-black shadow-[0_0_0_1px_rgba(63,243,135,0.85)]"
-                          : "text-slate-300 hover:bg-white/5"
+                          : "text-slate-200 hover:bg-white/5"
                       }`}
                     >
                       {TIMEFRAMES[tf].label}
@@ -915,57 +1089,31 @@ const CoinPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="h-[160px]">
+            <div className="px-3 pb-3 pt-12 sm:px-4 sm:pb-4">
               {historyLoading && !chartData.length ? (
-                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
                   Loading chart…
                 </div>
               ) : historyError ? (
-                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
                   {historyError}
                 </div>
               ) : !chartData.length ? (
-                <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                  No chart data available.
+                <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
+                  No chart data.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fontSize: 10, fill: "rgba(148,163,184,0.9)" }}
-                      tickMargin={6}
-                      stroke="rgba(51,65,85,0.7)"
-                    />
-                    <YAxis domain={["auto", "auto"]} hide />
-                    <Tooltip
-                      content={(props) => (
-                        <CustomTooltip
-                          {...(props as unknown as {
-                            active?: boolean;
-                            payload?: { value: number }[];
-                            label?: string;
-                          })}
-                          currency={displayCurrency}
-                        />
-                      )}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="price"
-                      dot={false}
-                      stroke="var(--chart-1)"
-                      strokeWidth={2}
-                      activeDot={{ r: 4 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <SleekLineChart
+                  data={chartData}
+                  displayCurrency={displayCurrency}
+                  timeframe={timeframe}
+                />
               )}
             </div>
           </div>
         </div>
 
-        {/* Trade card (bank-style) */}
+        {/* Trade card (unchanged) */}
         <div className="mt-4 glass-panel-soft p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <div className="glass-pill">
@@ -1116,7 +1264,7 @@ const CoinPage: React.FC = () => {
             )}
           </div>
 
-          {/* Bank-style preview: always show exact spend/receive */}
+          {/* Bank-style preview */}
           <div className="mt-3 rounded-2xl border border-white/10 bg-black/35 px-3 py-3 text-[12px] text-slate-200">
             <div className="flex items-center justify-between">
               <span className="text-slate-400">
@@ -1138,11 +1286,7 @@ const CoinPage: React.FC = () => {
             </div>
 
             <div className="mt-2 flex items-center justify-between">
-              <span className="text-slate-400">
-                {side === "buy"
-                  ? "You receive (approx.)"
-                  : "You receive (approx.)"}
-              </span>
+              <span className="text-slate-400">You receive (approx.)</span>
               <span className="font-semibold text-slate-50">
                 {side === "buy"
                   ? `${formatQty(receiveAsset, 6)} ${symbol || "ASSET"}`
@@ -1250,6 +1394,18 @@ const CoinPage: React.FC = () => {
                 <span className="text-slate-400">Cluster</span>
                 <span className="font-medium">{CLUSTER}</span>
               </div>
+
+              {coingeckoId ? (
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-slate-400">CoinGecko</span>
+                  <span className="font-medium">{coingeckoId}</span>
+                </div>
+              ) : (
+                <div className="mt-2 text-[11px] text-amber-200/80">
+                  This token has no CoinGecko id, so chart/price may be
+                  unavailable.
+                </div>
+              )}
             </div>
           )}
         </div>
