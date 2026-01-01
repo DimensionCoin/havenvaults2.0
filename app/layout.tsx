@@ -4,6 +4,7 @@ import PrivyProviders from "@/providers/PrivyProvider";
 import { Inter, DM_Sans } from "next/font/google";
 import { UserProvider } from "@/providers/UserProvider";
 import PwaRegister from "@/components/PwaRegister";
+import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 
 export const metadata: Metadata = {
   title: "Haven Vaults",
@@ -39,7 +40,7 @@ export default function RootLayout({
         <PrivyProviders>
           <UserProvider>
             <PwaRegister />
-            {children}
+            <ConvexClientProvider> {children}</ConvexClientProvider>
           </UserProvider>
         </PrivyProviders>
       </body>
