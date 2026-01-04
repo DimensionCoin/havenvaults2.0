@@ -9,11 +9,14 @@ export type MultiplierPosition = {
   id: string;
   tokenSymbol: AmplifyTokenSymbol;
   leverage: LeverageOption;
-  buyIn: number; // in display currency
-  entryPrice: number; // in display currency
+  buyIn: number;
+  entryPrice: number;
   estTokenQty: number;
-  estLiquidationPrice: number; // in display currency
+  estLiquidationPrice: number;
   createdAt: string;
+  side?: "long" | "short";
+  openSignature?: string | null;
+  sweepSignature?: string | null;
 };
 
 export type PredictionSide = "YES" | "NO";
@@ -34,6 +37,6 @@ export type PredictionPosition = {
   marketId: string;
   title: string;
   side: PredictionSide;
-  stake: number; // in display currency
+  stake: number;
   createdAt: string;
 };

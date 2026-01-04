@@ -163,7 +163,7 @@ const DashboardHeroCard: React.FC = () => {
         </div>
 
         {/* Chart block */}
-        <div className="relative z-10 mt-3 rounded-2xl border border-white/10 bg-black/30 px-2 pt-1.5 pb-1">
+        <div className="relative z-10 mt-3 mb-0 md:mb-3 rounded-2xl border border-white/10 bg-black/30 px-2 pt-1.5 pb-1">
           <HistoryChart />
         </div>
       </div>

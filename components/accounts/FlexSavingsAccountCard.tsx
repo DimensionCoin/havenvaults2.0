@@ -99,25 +99,15 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     return 0;
   }, [account, savingsFlexUsd]);
 
-  // Optional: currency-aware formatting using symbol
+  // Always show "$" (no CAD$, US$, etc) but still keep separators/decimals
   const formatDisplay = (n?: number | null) => {
     const value =
       n === undefined || n === null || Number.isNaN(n) ? 0 : Number(n);
 
-    try {
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value);
-    } catch {
-      // fallback if currency code is weird
-      return `$${value.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
-    }
+    return `$${value.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
   };
 
   const openDrawer = (mode: Exclude<DrawerMode, null>) => {
@@ -172,8 +162,8 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
           typeof data.apyPct === "number" && Number.isFinite(data.apyPct)
             ? data.apyPct
             : typeof data.apy === "number" && Number.isFinite(data.apy)
-            ? data.apy * 100
-            : 0;
+              ? data.apy * 100
+              : 0;
 
         if (!cancelled) setApyPctLive(pct);
 
@@ -242,8 +232,8 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
               {apyLoading
                 ? "APY …"
                 : apyFinal === null
-                ? "APY —"
-                : `APY ${apyFinal.toFixed(2)}%`}
+                  ? "APY —"
+                  : `APY ${apyFinal.toFixed(2)}%`}
             </div>
           </div>
 
@@ -305,6 +295,6 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
       )}
     </Drawer>
   );
-};
+};;
 
 export default FlexSavingsAccountCard;

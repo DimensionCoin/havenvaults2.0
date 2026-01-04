@@ -272,7 +272,7 @@ export default function LineOnlyChart({
         </>
       )}
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
+      <div className="mt-2 px-2 flex items-center justify-between text-[11px] text-white/35">
         <span>Low: {computed.minY ? computed.minY.toFixed(2) : "—"}</span>
         <span>High: {computed.maxY ? computed.maxY.toFixed(2) : "—"}</span>
       </div>

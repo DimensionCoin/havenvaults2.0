@@ -1,8 +1,10 @@
+// app/invest/page.tsx (or wherever this file lives)
 "use client";
 
 import React, { useState } from "react";
 
 import HoldingsTable from "@/components/invest/HoldingsTable";
+import OpenPositionsMini from "@/components/invest/OpenPositionsMini";
 import SellDrawer from "@/components/invest/Sell";
 import TransferSPL from "@/components/invest/TransferSPL";
 
@@ -27,14 +29,15 @@ const Invest: React.FC = () => {
                 setTransferOpen(true);
               }}
             />
+
+            {/* ✅ Small clean positions list under token holdings */}
+            <OpenPositionsMini />
           </div>
         </div>
       </div>
 
-      {/* Sell modal (Dialog inside Sell.tsx) */}
       <SellDrawer open={sellOpen} onOpenChange={setSellOpen} />
 
-      {/* ✅ Transfer modal (Dialog inside TransferSPL.tsx) */}
       {walletAddress && (
         <TransferSPL
           open={transferOpen}
@@ -43,8 +46,6 @@ const Invest: React.FC = () => {
           onSuccess={() => setTransferOpen(false)}
         />
       )}
-
-      
     </>
   );
 };

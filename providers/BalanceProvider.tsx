@@ -6,6 +6,8 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 import { useUser } from "./UserProvider";
@@ -17,42 +19,53 @@ export type WalletToken = {
   logoURI?: string | null;
   amount: number;
   decimals: number;
-
-  // In the user's display currency (converted from USD by fxRate)
   usdPrice?: number;
   usdValue?: number;
+  priceChange24h?: number;
+  usdChange24h?: number;
+};
 
-  priceChange24h?: number; // fraction: 0.05 = +5%
-  usdChange24h?: number; // value change in display currency
+type BoosterStaticPosition = {
+  id: string; // publicKey
+  publicKey: string;
+  symbol: "SOL" | "ETH" | "BTC";
+  isLong: boolean;
+  createdAt: string;
+
+  entryUsd: number; // base USD
+  sizeUsd: number; // base USD
+  collateralUsd: number; // base USD
 };
 
 type BalanceContextValue = {
   loading: boolean;
-  tokens: WalletToken[]; // non-USDC tokens only
+  tokens: WalletToken[];
 
-  // In the user's display currency
-  totalUsd: number; // combined: wallet tokens + wallet USDC + savings flex (only if linked)
+  // ✅ total portfolio value (includes boosted take-home)
+  totalUsd: number;
   totalChange24hUsd: number;
   totalChange24hPct: number;
 
   lastUpdated: number | null;
 
-  // Wallet USDC position
-  usdcUsd: number; // in display currency
-  usdcAmount: number; // in USDC
+  usdcUsd: number;
+  usdcAmount: number;
 
-  // Savings Flex USDC position (0 if no linked account pk)
-  savingsFlexUsd: number; // in display currency
-  savingsFlexAmount: number; // in USDC
+  savingsFlexUsd: number;
+  savingsFlexAmount: number;
 
-  // Native SOL (not shown as a token)
   nativeSol: number;
 
-  // FX info
-  displayCurrency: string; // e.g. "USD", "CAD", "EUR"
-  fxRate: number; // USD -> displayCurrency
+  displayCurrency: string;
+  fxRate: number;
+
+  // ✅ boosted positions
+  boosterTakeHomeUsd: number; // live (display currency)
+  boosterPositionsCount: number;
+  boosterPositions: BoosterStaticPosition[]; // static list for UI anywhere
 
   refresh: () => Promise<void>;
+  refreshNow: () => Promise<void>;
 };
 
 const BalanceContext = createContext<BalanceContextValue | undefined>(
@@ -67,7 +80,7 @@ export const useBalance = () => {
 
 type ApiBalanceResponse = {
   owner: string;
-  totalUsd: number; // wallet total in USD (includes USDC)
+  totalUsd: number;
   totalChange24hUsd: number;
   totalChange24hPct: number;
   tokens: {
@@ -77,37 +90,115 @@ type ApiBalanceResponse = {
     logoURI?: string | null;
     uiAmount: number;
     decimals: number;
-    price?: number; // USD
-    usdValue?: number; // USD
+    price?: number;
+    usdValue?: number;
     priceChange24h?: number;
-    usdChange24h?: number; // USD
+    usdChange24h?: number;
   }[];
-  count?: number;
   nativeSol?: number;
 };
 
 type FxResponse = {
   base?: string;
   target?: string;
-  rate?: number; // USD -> target
+  rate?: number;
 };
 
 type FlexBalanceResponse = {
-  ok?: boolean;
-  marginfiAccountPk?: string;
-  accountPkSource?: string;
-  amountUi?: string; // USDC UI units
-  amountBase?: string;
-  decimals?: number;
-  source?: string;
+  amountUi?: string;
   error?: string;
+};
+
+type BoosterApiResponse = {
+  positions?: Array<{
+    publicKey: string;
+    symbol: "SOL" | "ETH" | "BTC";
+    side: "long" | "short";
+    account: {
+      openTime?: string; // seconds string
+      price: string; // u64 1e6
+      sizeUsd: string; // u64 1e6
+      collateralUsd: string; // u64 1e6
+    };
+  }>;
 };
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
+// ----- pyth ids (same as your hook) -----
+const PYTH_PRICE_IDS: Record<"SOL" | "ETH" | "BTC", string> = {
+  BTC: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+  ETH: "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+  SOL: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+};
+
 function safeNumber(v: unknown, fallback = 0): number {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : fallback;
+}
+
+function safeStr(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+function safeSymbol(v: unknown): "SOL" | "ETH" | "BTC" | null {
+  const s = safeStr(v).toUpperCase();
+  if (s === "SOL" || s === "ETH" || s === "BTC") return s;
+  return null;
+}
+
+function usdFrom6Str(x?: string | null): number {
+  const n = typeof x === "string" ? Number(x) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
+}
+
+async function fetchHermesMarks(
+  symbols: Array<"SOL" | "ETH" | "BTC">,
+  signal?: AbortSignal
+): Promise<Partial<Record<"SOL" | "ETH" | "BTC", number>>> {
+  const uniq = Array.from(new Set(symbols)).filter(Boolean);
+  const ids = uniq.map((s) => PYTH_PRICE_IDS[s]).filter(Boolean);
+  if (!ids.length) return {};
+
+  const qs = ids.map((id) => `ids[]=${encodeURIComponent(id)}`).join("&");
+
+  const res = await fetch(
+    `https://hermes.pyth.network/v2/updates/price/latest?${qs}`,
+    { cache: "no-store", signal }
+  );
+
+  if (!res.ok) return {};
+
+  const body = (await res.json().catch(() => null)) as {
+    parsed?: Array<{ id: string; price?: { price?: string; expo?: number } }>;
+  } | null;
+
+  const parsed = Array.isArray(body?.parsed) ? body!.parsed! : [];
+
+  const idToPrice: Record<string, number> = {};
+  for (const u of parsed) {
+    const id = safeStr(u?.id);
+    const rawStr = safeStr(u?.price?.price);
+    const expo = Number(u?.price?.expo);
+    const raw = Number.parseInt(rawStr, 10);
+
+    if (!id) continue;
+    if (!Number.isFinite(raw) || !Number.isFinite(expo)) continue;
+
+    const px = raw * Math.pow(10, expo);
+    if (!Number.isFinite(px) || px <= 0) continue;
+
+    idToPrice[id] = px;
+  }
+
+  const out: Partial<Record<"SOL" | "ETH" | "BTC", number>> = {};
+  for (const s of uniq) {
+    const id = PYTH_PRICE_IDS[s];
+    const px = idToPrice[id];
+    if (Number.isFinite(px) && px! > 0) out[s] = px!;
+  }
+
+  return out;
 }
 
 export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -115,10 +206,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const { user, loading: userLoading } = useUser();
 
+  const ownerAddress = user?.walletAddress || "";
+  const ownerReady = Boolean(ownerAddress?.trim());
+
   const [tokens, setTokens] = useState<WalletToken[]>([]);
-  const [totalUsd, setTotalUsd] = useState(0);
-  const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
-  const [totalChange24hPct, setTotalChange24hPct] = useState(0);
+  const [nativeSol, setNativeSol] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   const [usdcUsd, setUsdcUsd] = useState(0);
   const [usdcAmount, setUsdcAmount] = useState(0);
@@ -126,257 +220,433 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [savingsFlexUsd, setSavingsFlexUsd] = useState(0);
   const [savingsFlexAmount, setSavingsFlexAmount] = useState(0);
 
-  const [nativeSol, setNativeSol] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
-
   const [displayCurrency, setDisplayCurrency] = useState<string>("USD");
   const [fxRateState, setFxRateState] = useState<number>(1);
 
-  const refresh = useCallback(async () => {
-    if (userLoading) return;
+  // base totals (wallet + flex) in display currency
+  const [baseTotalUsdDisplay, setBaseTotalUsdDisplay] = useState(0);
+  const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
+  const [totalChange24hPct, setTotalChange24hPct] = useState(0);
 
-    const ownerAddress = user?.walletAddress || "";
+  // booster positions: static list + live take-home
+  const [boosterPositions, setBoosterPositions] = useState<
+    BoosterStaticPosition[]
+  >([]);
+  const [boosterPositionsCount, setBoosterPositionsCount] = useState(0);
+  const [boosterTakeHomeUsd, setBoosterTakeHomeUsd] = useState(0); // display currency
+  const boosterTakeHomeBaseRef = useRef(0); // base USD
+  const boosterPollMs = 10_000; // ✅ only marks poll, never positions
 
-    // ✅ STRICT: only fetch/count flex if user has a saved marginfiAccountPk
-    const flexSubdoc = user?.savingsAccounts?.find(
-      (a: any) => a?.type === "flex"
-    );
-    const flexMarginfiPk =
-      typeof (flexSubdoc as any)?.marginfiAccountPk === "string" &&
-      (flexSubdoc as any).marginfiAccountPk.trim()
-        ? (flexSubdoc as any).marginfiAccountPk.trim()
-        : null;
+  // total = base + booster take-home (both in display currency)
+  const totalUsd = useMemo(
+    () => baseTotalUsdDisplay + boosterTakeHomeUsd,
+    [baseTotalUsdDisplay, boosterTakeHomeUsd]
+  );
 
-    const hasLinkedFlexAccount = Boolean(flexMarginfiPk);
+  // prevent refresh dogpile
+  const refreshInflight = useRef<Promise<void> | null>(null);
 
-    if (!ownerAddress) {
-      setTokens([]);
-      setTotalUsd(0);
-      setTotalChange24hUsd(0);
-      setTotalChange24hPct(0);
-      setUsdcUsd(0);
-      setUsdcAmount(0);
-      setSavingsFlexUsd(0);
-      setSavingsFlexAmount(0);
-      setNativeSol(0);
-      setLastUpdated(Date.now());
-      setDisplayCurrency("USD");
-      setFxRateState(1);
-      return;
-    }
+  const runRefresh = useCallback(
+    async (opts?: { bypassUserLoading?: boolean }) => {
+      if (refreshInflight.current) return refreshInflight.current;
 
-    setLoading(true);
+      const p = (async () => {
+        if (!opts?.bypassUserLoading && userLoading) return;
 
-    try {
-      const walletUrl = `/api/user/wallet/balance?owner=${encodeURIComponent(
-        ownerAddress
-      )}`;
+        const owner = user?.walletAddress || "";
 
-      const walletReq = fetch(walletUrl, { method: "GET", cache: "no-store" });
-      const fxReq = fetch("/api/fx", {
-        method: "GET",
-        cache: "no-store",
-        credentials: "include",
-      });
+        // flex linked?
+        const flexSubdoc = user?.savingsAccounts?.find(
+          (a: any) => a?.type === "flex"
+        );
+        const flexMarginfiPk =
+          typeof (flexSubdoc as any)?.marginfiAccountPk === "string" &&
+          (flexSubdoc as any).marginfiAccountPk.trim()
+            ? (flexSubdoc as any).marginfiAccountPk.trim()
+            : null;
 
-      // ✅ only call flex balance if we have a linked pk saved
-      const flexReq = hasLinkedFlexAccount
-        ? fetch("/api/savings/flex/balance", {
+        const hasLinkedFlexAccount = Boolean(flexMarginfiPk);
+
+        if (!owner) {
+          setTokens([]);
+          setNativeSol(0);
+          setUsdcUsd(0);
+          setUsdcAmount(0);
+          setSavingsFlexUsd(0);
+          setSavingsFlexAmount(0);
+
+          setBaseTotalUsdDisplay(0);
+          setTotalChange24hUsd(0);
+          setTotalChange24hPct(0);
+
+          setBoosterPositions([]);
+          setBoosterPositionsCount(0);
+          boosterTakeHomeBaseRef.current = 0;
+          setBoosterTakeHomeUsd(0);
+
+          setLastUpdated(Date.now());
+          setDisplayCurrency("USD");
+          setFxRateState(1);
+          return;
+        }
+
+        setLoading(true);
+
+        try {
+          const walletUrl = `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`;
+
+          const walletReq = fetch(walletUrl, {
+            method: "GET",
+            cache: "no-store",
+          });
+          const fxReq = fetch("/api/fx", {
             method: "GET",
             cache: "no-store",
             credentials: "include",
-          })
-        : Promise.resolve(null);
+          });
 
-      const [walletRes, fxRes, flexRes] = await Promise.all([
-        walletReq,
-        fxReq,
-        flexReq,
-      ]);
+          const flexReq = hasLinkedFlexAccount
+            ? fetch("/api/savings/flex/balance", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "include",
+              })
+            : Promise.resolve(null);
 
-      // ---------- wallet ----------
-      if (!walletRes.ok) {
-        const text = await walletRes.text().catch(() => "");
-        console.error(
-          "[BalanceProvider] /api/user/wallet/balance failed:",
-          walletRes.status,
-          walletRes.statusText,
-          text
-        );
-        setLastUpdated(Date.now());
-        return;
-      }
-
-      const walletJson = (await walletRes.json()) as ApiBalanceResponse;
-
-      const nativeSolRaw = safeNumber(walletJson.nativeSol, 0);
-      setNativeSol(nativeSolRaw);
-
-      const mappedUsd: WalletToken[] = (walletJson.tokens ?? []).map((t) => ({
-        mint: t.mint,
-        symbol: t.symbol,
-        name: t.name,
-        logoURI: t.logoURI ?? null,
-        amount: safeNumber(t.uiAmount, 0),
-        decimals: safeNumber(t.decimals, 0),
-        usdPrice: typeof t.price === "number" ? t.price : undefined,
-        usdValue: typeof t.usdValue === "number" ? t.usdValue : undefined,
-        priceChange24h:
-          typeof t.priceChange24h === "number" ? t.priceChange24h : undefined,
-        usdChange24h:
-          typeof t.usdChange24h === "number" ? t.usdChange24h : undefined,
-      }));
-
-      const usdcToken = mappedUsd.find((t) => t.mint === USDC_MINT);
-      const usdcUsdWallet = safeNumber(usdcToken?.usdValue, 0); // USD
-      const usdcAmtWallet = safeNumber(usdcToken?.amount, 0);
-
-      const nonUsdcTokensUsd = mappedUsd.filter((t) => t.mint !== USDC_MINT);
-      nonUsdcTokensUsd.sort((a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0));
-
-      const walletTotalUsd =
-        typeof walletJson.totalUsd === "number" &&
-        !Number.isNaN(walletJson.totalUsd)
-          ? walletJson.totalUsd
-          : 0;
-
-      const walletChangeUsd =
-        typeof walletJson.totalChange24hUsd === "number" &&
-        !Number.isNaN(walletJson.totalChange24hUsd)
-          ? walletJson.totalChange24hUsd
-          : 0;
-
-      // ---------- FX ----------
-      let fxRate = 1;
-      let fxTarget = "USD";
-
-      if (fxRes.ok) {
-        const fxData = (await fxRes.json().catch(() => ({}))) as FxResponse;
-        const rateNum = safeNumber(fxData.rate, 1);
-        fxRate = rateNum > 0 ? rateNum : 1;
-
-        if (typeof fxData.target === "string" && fxData.target.trim()) {
-          fxTarget = fxData.target.trim().toUpperCase();
-        }
-      } else {
-        console.warn("[BalanceProvider] /api/fx failed:", fxRes.status);
-      }
-
-      if (!Number.isFinite(fxRate) || fxRate <= 0) {
-        fxRate = 1;
-        fxTarget = "USD";
-      }
-
-      // ---------- flex savings ----------
-      // Only count flex if linked pk exists in user schema
-      let flexAmount = 0; // USDC
-      let flexUsd = 0; // USD
-
-      if (hasLinkedFlexAccount && flexRes) {
-        // ✅ your new API can return 204 when no pk exists (or if it treats it as missing)
-        if (flexRes.status === 204) {
-          flexAmount = 0;
-          flexUsd = 0;
-        } else if (flexRes.ok) {
-          const flexJson = (await flexRes
-            .json()
-            .catch(() => ({}))) as FlexBalanceResponse;
-
-          const amountUiStr =
-            typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
-
-          flexAmount = safeNumber(amountUiStr, 0);
-          flexUsd = flexAmount; // USDC assumed 1:1 USD
-        } else {
-          const t = await flexRes.text().catch(() => "");
-          console.warn(
-            "[BalanceProvider] /api/savings/flex/balance failed:",
-            flexRes.status,
-            flexRes.statusText,
-            t
-          );
-          flexAmount = 0;
-          flexUsd = 0;
-        }
-      }
-
-      // ---------- totals ----------
-      // ✅ flex only included if linked
-      const combinedTotalUsd =
-        walletTotalUsd + (hasLinkedFlexAccount ? flexUsd : 0);
-
-      // Flex treated as “flat” for 24h change
-      const combinedPrevUsd =
-        walletTotalUsd - walletChangeUsd + (hasLinkedFlexAccount ? flexUsd : 0);
-
-      const combinedChangeUsd = walletChangeUsd;
-      const combinedChangePct =
-        combinedPrevUsd > 0 ? combinedChangeUsd / combinedPrevUsd : 0;
-
-      // ---------- convert to display currency ----------
-      const convertOpt = (n?: number): number | undefined =>
-        typeof n === "number" && !Number.isNaN(n) ? n * fxRate : undefined;
-
-      const nonUsdcTokensDisplay: WalletToken[] = nonUsdcTokensUsd.map((t) => ({
-        ...t,
-        usdPrice: convertOpt(t.usdPrice),
-        usdValue: convertOpt(t.usdValue),
-        usdChange24h: convertOpt(t.usdChange24h),
-      }));
-
-      const combinedTotalDisplay = combinedTotalUsd * fxRate;
-      const usdcDisplayWallet = usdcUsdWallet * fxRate;
-
-      const flexDisplay = (hasLinkedFlexAccount ? flexUsd : 0) * fxRate;
-      const totalChangeDisplay = combinedChangeUsd * fxRate;
-
-      // ---------- commit ----------
-      setTokens(nonUsdcTokensDisplay);
-
-      setUsdcUsd(usdcDisplayWallet);
-      setUsdcAmount(usdcAmtWallet);
-
-      // ✅ if not linked, these stay 0
-      setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
-      setSavingsFlexUsd(hasLinkedFlexAccount ? flexDisplay : 0);
-
-      setTotalUsd(combinedTotalDisplay);
-      setTotalChange24hUsd(totalChangeDisplay);
-      setTotalChange24hPct(combinedChangePct);
-
-      setDisplayCurrency(fxTarget);
-      setFxRateState(fxRate);
-
-      setLastUpdated(Date.now());
-
-      // ---------- snapshot ----------
-      if (combinedTotalUsd > 0) {
-        try {
-          await fetch("/api/user/balance/snapshot", {
+          // ✅ positions fetch happens HERE (once per refresh), not on a poll
+          const boosterReq = fetch("/api/booster/positions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              owner: ownerAddress,
-              totalUsd: combinedTotalUsd,
-              breakdown: hasLinkedFlexAccount ? { savingsFlex: flexUsd } : {},
-            }),
+            body: JSON.stringify({ ownerBase58: owner }),
+            cache: "no-store",
           });
-        } catch (e) {
-          console.error("[BalanceProvider] snapshot failed:", e);
-        }
-      }
-    } catch (err) {
-      console.error("[BalanceProvider] refresh failed:", err);
-      setLastUpdated(Date.now());
-    } finally {
-      setLoading(false);
-    }
-  }, [user, userLoading]);
 
+          const [walletRes, fxRes, flexRes, boosterRes] = await Promise.all([
+            walletReq,
+            fxReq,
+            flexReq,
+            boosterReq,
+          ]);
+
+          // ---------- wallet ----------
+          if (!walletRes.ok) {
+            const text = await walletRes.text().catch(() => "");
+            console.error(
+              "[BalanceProvider] /api/user/wallet/balance failed:",
+              walletRes.status,
+              walletRes.statusText,
+              text
+            );
+            setLastUpdated(Date.now());
+            return;
+          }
+
+          const walletJson = (await walletRes.json()) as ApiBalanceResponse;
+          setNativeSol(safeNumber(walletJson.nativeSol, 0));
+
+          const mappedUsd: WalletToken[] = (walletJson.tokens ?? []).map(
+            (t) => ({
+              mint: t.mint,
+              symbol: t.symbol,
+              name: t.name,
+              logoURI: t.logoURI ?? null,
+              amount: safeNumber(t.uiAmount, 0),
+              decimals: safeNumber(t.decimals, 0),
+              usdPrice: typeof t.price === "number" ? t.price : undefined,
+              usdValue: typeof t.usdValue === "number" ? t.usdValue : undefined,
+              priceChange24h:
+                typeof t.priceChange24h === "number"
+                  ? t.priceChange24h
+                  : undefined,
+              usdChange24h:
+                typeof t.usdChange24h === "number" ? t.usdChange24h : undefined,
+            })
+          );
+
+          const usdcToken = mappedUsd.find((t) => t.mint === USDC_MINT);
+          const usdcUsdWalletBase = safeNumber(usdcToken?.usdValue, 0);
+          const usdcAmtWallet = safeNumber(usdcToken?.amount, 0);
+
+          const nonUsdcTokensUsd = mappedUsd.filter(
+            (t) => t.mint !== USDC_MINT
+          );
+          nonUsdcTokensUsd.sort(
+            (a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0)
+          );
+
+          const walletTotalUsdBase =
+            typeof walletJson.totalUsd === "number" &&
+            !Number.isNaN(walletJson.totalUsd)
+              ? walletJson.totalUsd
+              : 0;
+
+          const walletChangeUsdBase =
+            typeof walletJson.totalChange24hUsd === "number" &&
+            !Number.isNaN(walletJson.totalChange24hUsd)
+              ? walletJson.totalChange24hUsd
+              : 0;
+
+          // ---------- FX ----------
+          let fxRate = 1;
+          let fxTarget = "USD";
+
+          if (fxRes.ok) {
+            const fxData = (await fxRes.json().catch(() => ({}))) as FxResponse;
+            const rateNum = safeNumber(fxData.rate, 1);
+            fxRate = rateNum > 0 ? rateNum : 1;
+            if (typeof fxData.target === "string" && fxData.target.trim()) {
+              fxTarget = fxData.target.trim().toUpperCase();
+            }
+          } else {
+            console.warn("[BalanceProvider] /api/fx failed:", fxRes.status);
+          }
+
+          if (!Number.isFinite(fxRate) || fxRate <= 0) {
+            fxRate = 1;
+            fxTarget = "USD";
+          }
+
+          // ---------- flex savings ----------
+          let flexAmount = 0;
+          let flexUsdBase = 0;
+
+          if (hasLinkedFlexAccount && flexRes) {
+            if (flexRes.status === 204) {
+              flexAmount = 0;
+              flexUsdBase = 0;
+            } else if (flexRes.ok) {
+              const flexJson = (await flexRes
+                .json()
+                .catch(() => ({}))) as FlexBalanceResponse;
+              const amountUiStr =
+                typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
+              flexAmount = safeNumber(amountUiStr, 0);
+              flexUsdBase = flexAmount;
+            } else {
+              const t = await flexRes.text().catch(() => "");
+              console.warn(
+                "[BalanceProvider] /api/savings/flex/balance failed:",
+                flexRes.status,
+                flexRes.statusText,
+                t
+              );
+              flexAmount = 0;
+              flexUsdBase = 0;
+            }
+          }
+
+          // ---------- booster positions (STATIC LIST) ----------
+          let boosterStatic: BoosterStaticPosition[] = [];
+          if (boosterRes.ok) {
+            const bj = (await boosterRes
+              .json()
+              .catch(() => null)) as BoosterApiResponse | null;
+            const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
+
+            boosterStatic = raw
+              .map((p) => {
+                const symbol = safeSymbol(p?.symbol);
+                if (!symbol) return null;
+
+                const pk = safeStr(p?.publicKey);
+                if (!pk) return null;
+
+                const entryUsd = usdFrom6Str(p?.account?.price);
+                const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
+                const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
+                if (!(sizeUsd > 0) || !(entryUsd > 0)) return null;
+
+                const isLong = p?.side === "long";
+
+                const openSecs = Number(safeStr(p?.account?.openTime || "0"));
+                const createdAt =
+                  Number.isFinite(openSecs) &&
+                  openSecs > 0 &&
+                  openSecs < 10_000_000_000
+                    ? new Date(openSecs * 1000).toISOString()
+                    : new Date().toISOString();
+
+                return {
+                  id: pk,
+                  publicKey: pk,
+                  symbol,
+                  isLong,
+                  createdAt,
+                  entryUsd,
+                  sizeUsd,
+                  collateralUsd,
+                } satisfies BoosterStaticPosition;
+              })
+              .filter(Boolean) as BoosterStaticPosition[];
+          }
+
+          setBoosterPositions(boosterStatic);
+          setBoosterPositionsCount(boosterStatic.length);
+
+          // ---------- totals (BASE USD, excluding booster; booster added via take-home state) ----------
+          const combinedBaseUsd =
+            walletTotalUsdBase + (hasLinkedFlexAccount ? flexUsdBase : 0);
+          const prevBaseUsd =
+            walletTotalUsdBase -
+            walletChangeUsdBase +
+            (hasLinkedFlexAccount ? flexUsdBase : 0);
+
+          const changePct =
+            prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
+
+          // ---------- convert to DISPLAY currency ----------
+          const convertOpt = (n?: number): number | undefined =>
+            typeof n === "number" && !Number.isNaN(n) ? n * fxRate : undefined;
+
+          const nonUsdcTokensDisplay: WalletToken[] = nonUsdcTokensUsd.map(
+            (t) => ({
+              ...t,
+              usdPrice: convertOpt(t.usdPrice),
+              usdValue: convertOpt(t.usdValue),
+              usdChange24h: convertOpt(t.usdChange24h),
+            })
+          );
+
+          setTokens(nonUsdcTokensDisplay);
+
+          setUsdcUsd(usdcUsdWalletBase * fxRate);
+          setUsdcAmount(usdcAmtWallet);
+
+          setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
+          setSavingsFlexUsd((hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate);
+
+          setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
+          setTotalChange24hUsd(walletChangeUsdBase * fxRate);
+          setTotalChange24hPct(changePct);
+
+          setDisplayCurrency(fxTarget);
+          setFxRateState(fxRate);
+
+          // IMPORTANT: recompute boosterTakeHome in display currency from existing base ref
+          // (the marks poll effect will update it shortly)
+          setBoosterTakeHomeUsd(boosterTakeHomeBaseRef.current * fxRate);
+
+          setLastUpdated(Date.now());
+
+          // ---------- snapshot (BASE USD) ----------
+          // snapshot uses booster take-home BASE ref (won't cause loops)
+          const snapshotTotalBase =
+            combinedBaseUsd + safeNumber(boosterTakeHomeBaseRef.current, 0);
+
+          if (snapshotTotalBase > 0) {
+            try {
+              await fetch("/api/user/balance/snapshot", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  owner,
+                  totalUsd: snapshotTotalBase,
+                  breakdown: {
+                    ...(hasLinkedFlexAccount
+                      ? { savingsFlex: flexUsdBase }
+                      : {}),
+                    boosterTakeHome: safeNumber(
+                      boosterTakeHomeBaseRef.current,
+                      0
+                    ),
+                  },
+                }),
+              });
+            } catch (e) {
+              console.error("[BalanceProvider] snapshot failed:", e);
+            }
+          }
+        } catch (err) {
+          console.error("[BalanceProvider] refresh failed:", err);
+          setLastUpdated(Date.now());
+        } finally {
+          setLoading(false);
+        }
+      })();
+
+      refreshInflight.current = p;
+      try {
+        await p;
+      } finally {
+        refreshInflight.current = null;
+      }
+    },
+    [user, userLoading, fxRateState]
+  );
+
+  const refresh = useCallback(async () => {
+    await runRefresh({ bypassUserLoading: false });
+  }, [runRefresh]);
+
+  const refreshNow = useCallback(async () => {
+    await runRefresh({ bypassUserLoading: true });
+  }, [runRefresh]);
+
+  // ✅ initial refresh only when owner becomes available / changes
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!ownerReady) return;
+    void runRefresh({ bypassUserLoading: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerReady, ownerAddress]);
+
+  // ✅ Marks-only polling: updates ONLY take-home (collateral + pnl)
+  useEffect(() => {
+    if (!ownerReady) return;
+    if (!boosterPositions.length) {
+      boosterTakeHomeBaseRef.current = 0;
+      setBoosterTakeHomeUsd(0);
+      return;
+    }
+
+    let alive = true;
+    const controller = new AbortController();
+
+    const tick = async () => {
+      try {
+        const symbols = boosterPositions.map((p) => p.symbol);
+        const marks = await fetchHermesMarks(symbols, controller.signal);
+
+        let takeHomeBase = 0;
+
+        for (const p of boosterPositions) {
+          const mark = marks[p.symbol];
+          const markUsd =
+            Number.isFinite(mark as number) && (mark as number) > 0
+              ? (mark as number)
+              : p.entryUsd;
+
+          const pnlUsd =
+            p.entryUsd > 0 && p.sizeUsd > 0
+              ? p.isLong
+                ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
+                : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
+              : 0;
+
+          const net = p.collateralUsd + pnlUsd;
+          if (Number.isFinite(net)) takeHomeBase += net;
+        }
+
+        if (!alive) return;
+
+        boosterTakeHomeBaseRef.current = takeHomeBase;
+
+        const fx =
+          Number.isFinite(fxRateState) && fxRateState > 0 ? fxRateState : 1;
+        setBoosterTakeHomeUsd(takeHomeBase * fx);
+      } catch {
+        // ignore
+      }
+    };
+
+    void tick();
+    const iv = setInterval(() => void tick(), boosterPollMs);
+
+    return () => {
+      alive = false;
+      controller.abort();
+      clearInterval(iv);
+    };
+  }, [ownerReady, boosterPositions, fxRateState]);
 
   const value: BalanceContextValue = {
     loading,
@@ -399,7 +669,12 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     displayCurrency,
     fxRate: fxRateState,
 
+    boosterTakeHomeUsd,
+    boosterPositionsCount,
+    boosterPositions,
+
     refresh,
+    refreshNow,
   };
 
   return (

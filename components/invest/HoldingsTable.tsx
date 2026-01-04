@@ -1,6 +1,7 @@
+// components/invest/HoldingsTable.tsx
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import Link from "next/link";
 import { ArrowUpRight, ArrowDownLeft } from "lucide-react";
 
@@ -43,8 +44,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
   onBuy,
   onReceive,
 }) => {
-  const { tokens, loading, totalChange24hUsd, totalChange24hPct } =
-    useBalance();
+  const {
+    tokens,
+    loading,
+    boosterTakeHomeUsd, // ✅ needed for investTotalUsd
+    totalChange24hUsd,
+    totalChange24hPct,
+  } = useBalance();
+
   const { user } = useUser();
 
   const avatarUrl = user?.profileImageUrl || null;
@@ -67,9 +74,29 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           .trim() || "HV"
       : "HV";
 
-  // ── Only show wallet assets (exclude cash + savings) ─────────
-  const walletAssets = React.useMemo(() => {
-    return tokens.filter((t) => {
+  // ✅ SAME BALANCE LOGIC AS InvestAccountCard:
+  // invest = (non-USDC spot tokens) + (boosted take-home)
+  const nonUsdcTokens = useMemo(() => {
+    return (tokens || []).filter((t) => {
+      const mintLower = (t.mint || "").toLowerCase();
+      const isUsdcMint = ENV_USDC_MINT !== "" && mintLower === ENV_USDC_MINT;
+      const isUsdcSymbol = (t.symbol ?? "").toUpperCase() === "USDC";
+      return !(isUsdcMint || isUsdcSymbol);
+    });
+  }, [tokens]);
+
+  const investSpotUsd = useMemo(() => {
+    return nonUsdcTokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0);
+  }, [nonUsdcTokens]);
+
+  const investTotalUsd = useMemo(() => {
+    const b = Number.isFinite(boosterTakeHomeUsd) ? boosterTakeHomeUsd : 0;
+    return investSpotUsd + b;
+  }, [investSpotUsd, boosterTakeHomeUsd]);
+
+  // ── Only show wallet assets in the list (exclude cash + savings) ─────────
+  const walletAssets = useMemo(() => {
+    return (tokens || []).filter((t) => {
       const mintLower = (t.mint || "").toLowerCase();
       const isCashMint = ENV_USDC_MINT !== "" && mintLower === ENV_USDC_MINT;
       const isCashSymbol = (t.symbol ?? "").toUpperCase() === "USDC";
@@ -79,10 +106,6 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
     });
   }, [tokens]);
 
-  const walletAssetsUsd = React.useMemo(() => {
-    return walletAssets.reduce((sum, t) => sum + (t.usdValue ?? 0), 0);
-  }, [walletAssets]);
-
   const pct = totalChange24hPct ?? 0;
   const changeIsUp = (totalChange24hUsd ?? 0) > 0;
   const changeIsDown = (totalChange24hUsd ?? 0) < 0;
@@ -90,14 +113,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
   const changeColor = changeIsUp
     ? "text-emerald-300"
     : changeIsDown
-    ? "text-red-300"
-    : "text-zinc-300";
+      ? "text-red-300"
+      : "text-zinc-300";
 
   const changeChipBg = changeIsUp
     ? "border-emerald-500/25 bg-emerald-500/10"
     : changeIsDown
-    ? "border-red-500/25 bg-red-500/10"
-    : "border-white/10 bg-white/5";
+      ? "border-red-500/25 bg-red-500/10"
+      : "border-white/10 bg-white/5";
 
   const changeLabelUsd =
     !totalChange24hUsd || !Number.isFinite(totalChange24hUsd)
@@ -187,8 +210,6 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                 </p>
               </div>
             </div>
-
-            
           </div>
 
           {/* Balance */}
@@ -201,7 +222,8 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
               <div className="mt-2 h-11 w-48 animate-pulse rounded-2xl bg-white/10" />
             ) : (
               <p className="mt-1 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                {formatUsd(walletAssetsUsd)}
+                {/* ✅ INVESTMENTS + POSITIONS (same as InvestAccountCard) */}
+                {formatUsd(investTotalUsd)}
               </p>
             )}
 
@@ -297,15 +319,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                 const rowChangeColor = isUp
                   ? "text-emerald-300"
                   : isDown
-                  ? "text-red-300"
-                  : "text-zinc-400";
+                    ? "text-red-300"
+                    : "text-zinc-400";
 
-                // keep mobile short: hide change text under md
                 const changeUsdLabel =
                   t.usdChange24h !== undefined
-                    ? `${
-                        t.usdChange24h >= 0 ? "+" : ""
-                      }${t.usdChange24h.toFixed(2)}`
+                    ? `${t.usdChange24h >= 0 ? "+" : ""}${t.usdChange24h.toFixed(
+                        2
+                      )}`
                     : "—";
 
                 const changePctLabel =
@@ -346,7 +367,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                         </p>
                         <p className="truncate text-[12px] text-zinc-400">
                           {t.amount.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
+                            maximumFractionDigits: 6,
                           })}
                         </p>
                       </div>
@@ -359,7 +380,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                       </p>
                       <p
                         className={[
-                          "mt-0.5 hidden text-[12px] font-medium md:block",
+                          "mt-0.5 text-[12px] font-medium md:block",
                           rowChangeColor,
                         ].join(" ")}
                       >

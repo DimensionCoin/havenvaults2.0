@@ -1,3 +1,4 @@
+// components/amplify/PriceChartPanel.tsx
 "use client";
 
 import React, { useMemo } from "react";
@@ -35,7 +36,6 @@ const ORACLE_SYMBOLS = new Set(["BTC", "ETH", "SOL"]);
 function calcTimeframePct(data: Point[]): number | null {
   if (!Array.isArray(data) || data.length < 2) return null;
 
-  // find first valid non-zero-ish point to avoid divide-by-zero
   const firstValid = data.find((p) => Number.isFinite(p?.y) && p.y > 0);
   const lastValid = [...data]
     .reverse()
@@ -72,18 +72,28 @@ export default function PriceChartPanel({
     wantsOracle ? (sym as "BTC" | "ETH" | "SOL") : "BTC"
   );
 
-  // keep your existing behavior exactly:
-  // oracle controls displayed price + displayed currency for BTC/ETH/SOL
-  const finalPrice = wantsOracle ? oracle.price : price;
-  const finalCurrency = wantsOracle ? oracle.displayCurrency : displayCurrency;
+  const fallbackCurrency =
+    (typeof displayCurrency === "string" && displayCurrency.trim()) || "USD";
 
-  // ✅ FIX: timeframe % should come from the selected chartData (CoinGecko timeframe),
-  // not from oracle tick-to-tick changes.
+  // ✅ FIX: memoize so deps are stable
+  const safeChartData: Point[] = useMemo(() => {
+    return Array.isArray(chartData) ? chartData : [];
+  }, [chartData]);
+
+  const finalPrice = wantsOracle ? oracle.price : price;
+
+  const finalCurrency =
+    wantsOracle &&
+    typeof oracle.displayCurrency === "string" &&
+    oracle.displayCurrency.trim()
+      ? oracle.displayCurrency
+      : fallbackCurrency;
+
   const chartTimeframePct = useMemo(() => {
     if (loading) return null;
     if (error) return null;
-    return calcTimeframePct(chartData);
-  }, [chartData, loading, error]);
+    return calcTimeframePct(safeChartData);
+  }, [safeChartData, loading, error]);
 
   const finalPct = wantsOracle ? chartTimeframePct : pctChange;
 
@@ -158,7 +168,7 @@ export default function PriceChartPanel({
         </div>
 
         <div className="px-3 pb-3 pt-12 sm:px-4 sm:pb-4">
-          {loading && !chartData.length ? (
+          {loading && !safeChartData.length ? (
             <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
               Loading chart…
             </div>
@@ -166,13 +176,13 @@ export default function PriceChartPanel({
             <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
               {error}
             </div>
-          ) : !chartData.length ? (
+          ) : !safeChartData.length ? (
             <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
               No chart data.
             </div>
           ) : (
             <LineOnlyChart
-              data={chartData}
+              data={safeChartData}
               displayCurrency={finalCurrency}
               timeframe={activeTimeframe}
             />

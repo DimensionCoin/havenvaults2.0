@@ -18,7 +18,13 @@ const formatUsd = (n?: number | null) =>
       });
 
 const InvestAccountCard: React.FC = () => {
-  const { tokens, loading, usdcUsd } = useBalance();
+  const {
+    tokens,
+    loading,
+    usdcUsd,
+    boosterTakeHomeUsd,
+    boosterPositionsCount,
+  } = useBalance();
 
   // 🔹 Filter out USDC (by mint + symbol, same pattern as HoldingsTable)
   const nonUsdcTokens = useMemo(() => {
@@ -33,18 +39,47 @@ const InvestAccountCard: React.FC = () => {
     });
   }, [tokens]);
 
-  // non-USDC side = invest portfolio
-  const investUsd = useMemo(
+  // non-USDC side = invest portfolio (spot investments)
+  const investSpotUsd = useMemo(
     () => nonUsdcTokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0),
     [nonUsdcTokens]
   );
 
-  const hasAssets = investUsd > 0.01 && nonUsdcTokens.length > 0;
+  // ✅ add boosted “take-home” equity to invest total
+  const investTotalUsd = useMemo(() => {
+    const b = Number.isFinite(boosterTakeHomeUsd) ? boosterTakeHomeUsd : 0;
+    return investSpotUsd + b;
+  }, [investSpotUsd, boosterTakeHomeUsd]);
+
+  const hasAssets =
+    investTotalUsd > 0.01 &&
+    (nonUsdcTokens.length > 0 || boosterPositionsCount > 0);
+
   const visibleTokens = nonUsdcTokens.slice(0, 3);
   const extraCount =
     nonUsdcTokens.length > visibleTokens.length
       ? nonUsdcTokens.length - visibleTokens.length
       : 0;
+
+  // optional: show a nicer line under the big number
+  const positionsLabel = useMemo(() => {
+    const spotCount = nonUsdcTokens.length;
+    const boosterCount = boosterPositionsCount;
+
+    if (!hasAssets) return "Tap to start investing with Haven";
+
+    if (spotCount > 0 && boosterCount > 0) {
+      return `${spotCount} token position${spotCount === 1 ? "" : "s"} + ${
+        boosterCount
+      } boosted position${boosterCount === 1 ? "" : "s"}`;
+    }
+
+    if (boosterCount > 0) {
+      return `${boosterCount} boosted position${boosterCount === 1 ? "" : "s"}`;
+    }
+
+    return `${spotCount} position${spotCount === 1 ? "" : "s"} in your portfolio`;
+  }, [hasAssets, nonUsdcTokens.length, boosterPositionsCount]);
 
   return (
     <Link
@@ -61,15 +96,9 @@ const InvestAccountCard: React.FC = () => {
 
           <div className="mt-4">
             <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
-              {loading ? "…" : formatUsd(investUsd)}
+              {loading ? "…" : formatUsd(investTotalUsd)}
             </p>
-            <p className="mt-1 text-[11px] text-zinc-500">
-              {hasAssets
-                ? `${nonUsdcTokens.length} position${
-                    nonUsdcTokens.length === 1 ? "" : "s"
-                  } in your portfolio`
-                : "Tap to start investing with Haven"}
-            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">{positionsLabel}</p>
           </div>
         </div>
 
@@ -80,8 +109,8 @@ const InvestAccountCard: React.FC = () => {
               {hasAssets
                 ? "Top holdings"
                 : usdcUsd > 0
-                ? "You’re holding USDC — move some into investments."
-                : "No invest assets yet."}
+                  ? "You’re holding USDC — move some into investments."
+                  : "No invest assets yet."}
             </span>
             {!hasAssets && (
               <span className="text-[10px] text-zinc-600">
@@ -91,7 +120,7 @@ const InvestAccountCard: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1">
-            {hasAssets ? (
+            {nonUsdcTokens.length > 0 ? (
               <>
                 <div className="flex -space-x-1.5">
                   {visibleTokens.map((t, idx) => (
@@ -122,6 +151,11 @@ const InvestAccountCard: React.FC = () => {
                   </span>
                 )}
               </>
+            ) : boosterPositionsCount > 0 ? (
+              // ✅ If user has only boosted positions, show a “B” badge instead of token logos
+              <div className="w-7 h-7 rounded-full border border-zinc-800 bg-black/40 flex items-center justify-center text-[9px] text-zinc-300">
+                B
+              </div>
             ) : (
               <div className="w-7 h-7 rounded-full border border-zinc-800 bg-black/40 flex items-center justify-center text-[9px] text-zinc-300">
                 —
