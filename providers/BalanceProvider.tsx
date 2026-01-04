@@ -25,6 +25,17 @@ export type WalletToken = {
   usdChange24h?: number;
 };
 
+/**
+ * ✅ Booster position shape stored in context.
+ * This includes everything needed to compute:
+ * - per-position withdrawable (collateral + pnl)
+ * - portfolio totalUsd (wallet + flex + booster take-home)
+ * - lite UI (spotValueUsd, pnlUsd, sizeTokens)
+ *
+ * IMPORTANT:
+ * - entryUsd/sizeUsd/collateralUsd are BASE USD.
+ * - pnlUsd/spotValueUsd/takeHomeUsd are BASE USD derived from marks.
+ */
 type BoosterStaticPosition = {
   id: string; // publicKey
   publicKey: string;
@@ -33,8 +44,14 @@ type BoosterStaticPosition = {
   createdAt: string;
 
   entryUsd: number; // base USD
-  sizeUsd: number; // base USD
+  sizeUsd: number; // base USD (not take-home)
   collateralUsd: number; // base USD
+
+  // ✅ Derived fields (base USD / tokens)
+  sizeTokens: number; // sizeUsd / entryUsd
+  pnlUsd: number; // raw P&L in USD
+  spotValueUsd: number; // position value in USD (sizeUsd + pnlUsd)
+  takeHomeUsd: number; // withdrawable in USD (collateralUsd + pnlUsd)
 };
 
 type BalanceContextValue = {
@@ -42,27 +59,27 @@ type BalanceContextValue = {
   tokens: WalletToken[];
 
   // ✅ total portfolio value (includes boosted take-home)
-  totalUsd: number;
-  totalChange24hUsd: number;
+  totalUsd: number; // display currency
+  totalChange24hUsd: number; // display currency
   totalChange24hPct: number;
 
   lastUpdated: number | null;
 
-  usdcUsd: number;
+  usdcUsd: number; // display currency
   usdcAmount: number;
 
-  savingsFlexUsd: number;
+  savingsFlexUsd: number; // display currency
   savingsFlexAmount: number;
 
   nativeSol: number;
 
   displayCurrency: string;
-  fxRate: number;
+  fxRate: number; // display per 1 USD (same meaning you already use)
 
   // ✅ boosted positions
-  boosterTakeHomeUsd: number; // live (display currency)
+  boosterTakeHomeUsd: number; // display currency (SUM of withdrawables)
   boosterPositionsCount: number;
-  boosterPositions: BoosterStaticPosition[]; // static list for UI anywhere
+  boosterPositions: BoosterStaticPosition[]; // enriched list for UI anywhere
 
   refresh: () => Promise<void>;
   refreshNow: () => Promise<void>;
@@ -125,7 +142,7 @@ type BoosterApiResponse = {
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-// ----- pyth ids (same as your hook) -----
+// ----- pyth ids -----
 const PYTH_PRICE_IDS: Record<"SOL" | "ETH" | "BTC", string> = {
   BTC: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
   ETH: "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
@@ -152,6 +169,10 @@ function usdFrom6Str(x?: string | null): number {
   return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
 }
 
+/**
+ * Hermes returns parsed price updates.
+ * We only need a mark price per symbol.
+ */
 async function fetchHermesMarks(
   symbols: Array<"SOL" | "ETH" | "BTC">,
   signal?: AbortSignal
@@ -228,14 +249,16 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
   const [totalChange24hPct, setTotalChange24hPct] = useState(0);
 
-  // booster positions: static list + live take-home
+  // booster positions: enriched list + withdrawable total
   const [boosterPositions, setBoosterPositions] = useState<
     BoosterStaticPosition[]
   >([]);
   const [boosterPositionsCount, setBoosterPositionsCount] = useState(0);
+
+  // NOTE: "Take-home" is SUM of (collateral + pnl) across all booster positions.
+  // Stored in DISPLAY currency for easy use throughout the UI.
   const [boosterTakeHomeUsd, setBoosterTakeHomeUsd] = useState(0); // display currency
-  const boosterTakeHomeBaseRef = useRef(0); // base USD
-  const boosterPollMs = 10_000; // ✅ only marks poll, never positions
+  const boosterTakeHomeBaseRef = useRef(0); // base USD (for snapshots + recalcs)
 
   // total = base + booster take-home (both in display currency)
   const totalUsd = useMemo(
@@ -293,12 +316,15 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         setLoading(true);
 
         try {
-          const walletUrl = `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`;
+          const walletUrl = `/api/user/wallet/balance?owner=${encodeURIComponent(
+            owner
+          )}`;
 
           const walletReq = fetch(walletUrl, {
             method: "GET",
             cache: "no-store",
           });
+
           const fxReq = fetch("/api/fx", {
             method: "GET",
             cache: "no-store",
@@ -313,7 +339,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               })
             : Promise.resolve(null);
 
-          // ✅ positions fetch happens HERE (once per refresh), not on a poll
+          // ✅ booster positions fetch happens HERE (once per refresh)
           const boosterReq = fetch("/api/booster/positions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -421,7 +447,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               const amountUiStr =
                 typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
               flexAmount = safeNumber(amountUiStr, 0);
-              flexUsdBase = flexAmount;
+              flexUsdBase = flexAmount; // USDC-like
             } else {
               const t = await flexRes.text().catch(() => "");
               console.warn(
@@ -435,15 +461,26 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             }
           }
 
-          // ---------- booster positions (STATIC LIST) ----------
-          let boosterStatic: BoosterStaticPosition[] = [];
+          // ---------- booster positions (fetch + compute withdrawable correctly) ----------
+          // Step 1: parse raw booster positions (base fields)
+          let boosterBase: Array<{
+            id: string;
+            publicKey: string;
+            symbol: "SOL" | "ETH" | "BTC";
+            isLong: boolean;
+            createdAt: string;
+            entryUsd: number;
+            sizeUsd: number;
+            collateralUsd: number;
+          }> = [];
+
           if (boosterRes.ok) {
             const bj = (await boosterRes
               .json()
               .catch(() => null)) as BoosterApiResponse | null;
             const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
 
-            boosterStatic = raw
+            boosterBase = raw
               .map((p) => {
                 const symbol = safeSymbol(p?.symbol);
                 if (!symbol) return null;
@@ -475,17 +512,78 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                   entryUsd,
                   sizeUsd,
                   collateralUsd,
-                } satisfies BoosterStaticPosition;
+                };
               })
-              .filter(Boolean) as BoosterStaticPosition[];
+              .filter(Boolean) as any[];
           }
 
-          setBoosterPositions(boosterStatic);
-          setBoosterPositionsCount(boosterStatic.length);
+          // Step 2: fetch marks ONCE (no polling)
+          let marks: Partial<Record<"SOL" | "ETH" | "BTC", number>> = {};
+          if (boosterBase.length) {
+            const controller = new AbortController();
+            try {
+              marks = await fetchHermesMarks(
+                boosterBase.map((p) => p.symbol),
+                controller.signal
+              );
+            } catch {
+              marks = {};
+            }
+          }
+
+          // Step 3: enrich + compute WITHDRAWABLE = collateralUsd + pnlUsd
+          const boosterEnriched: BoosterStaticPosition[] = boosterBase.map(
+            (p) => {
+              const mark = marks[p.symbol];
+              const markUsd =
+                Number.isFinite(mark as number) && (mark as number) > 0
+                  ? (mark as number)
+                  : p.entryUsd;
+
+              // raw P&L: sizeUsd * %move (same logic you already had in the polling effect)
+              const pnlUsd =
+                p.entryUsd > 0 && p.sizeUsd > 0
+                  ? p.isLong
+                    ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
+                    : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
+                  : 0;
+
+              const takeHomeUsd = p.collateralUsd + pnlUsd;
+
+              // position "value" shown in UI: sizeUsd + pnl
+              const spotValueUsd = p.sizeUsd + pnlUsd;
+
+              // token qty: sizeUsd / entry
+              const sizeTokens = p.entryUsd > 0 ? p.sizeUsd / p.entryUsd : 0;
+
+              return {
+                ...p,
+                sizeTokens,
+                pnlUsd,
+                spotValueUsd,
+                takeHomeUsd,
+              };
+            }
+          );
+
+          setBoosterPositions(boosterEnriched);
+          setBoosterPositionsCount(boosterEnriched.length);
+
+          // ✅ SUM withdrawable in BASE USD, store in ref for snapshots
+          const boosterTakeHomeBase = boosterEnriched.reduce((sum, p) => {
+            const net = Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0;
+            return sum + net;
+          }, 0);
+
+          boosterTakeHomeBaseRef.current = boosterTakeHomeBase;
+
+          // ✅ store TAKE-HOME in DISPLAY currency (this is what you add to totalUsd)
+          setBoosterTakeHomeUsd(boosterTakeHomeBase * fxRate);
 
           // ---------- totals (BASE USD, excluding booster; booster added via take-home state) ----------
           const combinedBaseUsd =
             walletTotalUsdBase + (hasLinkedFlexAccount ? flexUsdBase : 0);
+
           const prevBaseUsd =
             walletTotalUsdBase -
             walletChangeUsdBase +
@@ -522,16 +620,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setDisplayCurrency(fxTarget);
           setFxRateState(fxRate);
 
-          // IMPORTANT: recompute boosterTakeHome in display currency from existing base ref
-          // (the marks poll effect will update it shortly)
-          setBoosterTakeHomeUsd(boosterTakeHomeBaseRef.current * fxRate);
-
           setLastUpdated(Date.now());
 
           // ---------- snapshot (BASE USD) ----------
-          // snapshot uses booster take-home BASE ref (won't cause loops)
-          const snapshotTotalBase =
-            combinedBaseUsd + safeNumber(boosterTakeHomeBaseRef.current, 0);
+          // snapshot uses booster take-home BASE (no loops)
+          const snapshotTotalBase = combinedBaseUsd + boosterTakeHomeBase;
 
           if (snapshotTotalBase > 0) {
             try {
@@ -545,10 +638,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                     ...(hasLinkedFlexAccount
                       ? { savingsFlex: flexUsdBase }
                       : {}),
-                    boosterTakeHome: safeNumber(
-                      boosterTakeHomeBaseRef.current,
-                      0
-                    ),
+                    boosterTakeHome: boosterTakeHomeBase,
                   },
                 }),
               });
@@ -571,7 +661,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         refreshInflight.current = null;
       }
     },
-    [user, userLoading, fxRateState]
+    [user, userLoading]
   );
 
   const refresh = useCallback(async () => {
@@ -589,64 +679,8 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerReady, ownerAddress]);
 
-  // ✅ Marks-only polling: updates ONLY take-home (collateral + pnl)
-  useEffect(() => {
-    if (!ownerReady) return;
-    if (!boosterPositions.length) {
-      boosterTakeHomeBaseRef.current = 0;
-      setBoosterTakeHomeUsd(0);
-      return;
-    }
-
-    let alive = true;
-    const controller = new AbortController();
-
-    const tick = async () => {
-      try {
-        const symbols = boosterPositions.map((p) => p.symbol);
-        const marks = await fetchHermesMarks(symbols, controller.signal);
-
-        let takeHomeBase = 0;
-
-        for (const p of boosterPositions) {
-          const mark = marks[p.symbol];
-          const markUsd =
-            Number.isFinite(mark as number) && (mark as number) > 0
-              ? (mark as number)
-              : p.entryUsd;
-
-          const pnlUsd =
-            p.entryUsd > 0 && p.sizeUsd > 0
-              ? p.isLong
-                ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
-                : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
-              : 0;
-
-          const net = p.collateralUsd + pnlUsd;
-          if (Number.isFinite(net)) takeHomeBase += net;
-        }
-
-        if (!alive) return;
-
-        boosterTakeHomeBaseRef.current = takeHomeBase;
-
-        const fx =
-          Number.isFinite(fxRateState) && fxRateState > 0 ? fxRateState : 1;
-        setBoosterTakeHomeUsd(takeHomeBase * fx);
-      } catch {
-        // ignore
-      }
-    };
-
-    void tick();
-    const iv = setInterval(() => void tick(), boosterPollMs);
-
-    return () => {
-      alive = false;
-      controller.abort();
-      clearInterval(iv);
-    };
-  }, [ownerReady, boosterPositions, fxRateState]);
+  // ✅ NO POLLING.
+  // If you want updates, call refresh() explicitly (e.g., after trade/close).
 
   const value: BalanceContextValue = {
     loading,
