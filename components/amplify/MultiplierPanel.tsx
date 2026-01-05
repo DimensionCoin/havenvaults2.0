@@ -87,14 +87,14 @@ const STAGE_CONFIG: Record<
     icon: "spinner",
   },
   signing: {
-    title: "Approve in wallet",
-    subtitle: "Please sign the transaction",
+    title: "Sending transaction",
+    subtitle: "Sending transaction to Exchange",
     progress: 20,
     icon: "wallet",
   },
   sending: {
     title: "Submitting",
-    subtitle: "Broadcasting to Solana...",
+    subtitle: "Broadcasting to Network...",
     progress: 40,
     icon: "spinner",
   },
@@ -106,7 +106,7 @@ const STAGE_CONFIG: Record<
   },
   "waiting-for-refund": {
     title: "Opening position",
-    subtitle: "Jupiter is processing...",
+    subtitle: "Exchange is processing...",
     progress: 70,
     icon: "spinner",
   },
@@ -406,7 +406,7 @@ export default function MultiplierPanel({
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white/90">Amplify</div>
+            <div className="text-sm font-semibold text-white/90">Multiplier</div>
             <div className="mt-0.5 text-xs text-white/45">
               Choose a multiplier and open a long position.
             </div>
@@ -444,22 +444,7 @@ export default function MultiplierPanel({
             </button>
           </div>
 
-          <div className="mt-2 text-[11px] text-white/45">
-            {buyInNum > 0 && fx > 0 ? (
-              <>
-                Sent as{" "}
-                <span className="text-white/80 font-semibold">
-                  {formatMoney(marginUsd, "USD")}
-                </span>{" "}
-                (USDC)
-                <span className="ml-2 text-white/35">
-                  • FX: 1 USD = {fx.toFixed(4)} {currencySafe}
-                </span>
-              </>
-            ) : (
-              "Sent as USDC (USD) on-chain"
-            )}
-          </div>
+          
 
           {/* Validation */}
           {!ownerReady && (
@@ -701,7 +686,7 @@ export default function MultiplierPanel({
             {/* Processing footer */}
             {modal.kind === "processing" && (
               <div className="mt-6 text-center text-xs text-white/30">
-                Please don&apos;t close this window
+                Please keep window open
               </div>
             )}
           </div>

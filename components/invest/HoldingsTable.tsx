@@ -215,7 +215,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           {/* Balance */}
           <div className="mt-4">
             <p className="text-[11px] font-medium text-zinc-400">
-              Your Balance
+              Your asset balance
             </p>
 
             {loading ? (

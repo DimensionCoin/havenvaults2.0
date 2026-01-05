@@ -1,6 +1,6 @@
 const CACHE_NAME = "haven-pwa-v1";
 
-const CORE_ASSETS = ["/", "/manifest.webmanifest"];
+const CORE_ASSETS = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

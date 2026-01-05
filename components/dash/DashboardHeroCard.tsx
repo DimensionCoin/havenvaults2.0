@@ -132,7 +132,7 @@ const DashboardHeroCard: React.FC = () => {
         <div className="relative z-10 mt-3 flex items-end justify-between gap-3 px-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.20em] text-white/55">
-              Portfolio balance
+              Total account balance
             </p>
             <p className="mt-1 text-2xl md:text-3xl font-semibold tracking-tight text-white/92">
               {balanceLoading ? "…" : formattedTotal}

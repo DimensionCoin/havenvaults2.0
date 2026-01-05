@@ -175,9 +175,9 @@ const Deposit: React.FC<DepositProps> = ({
 
                 <div className="mt-2 rounded-lg border border-zinc-800 bg-black/30 px-3 py-2 text-[11px]">
                   <div className="flex justify-between">
-                    <span className="text-zinc-400">Current USDC balance</span>
+                    <span className="text-zinc-400">Current balance</span>
                     <span className="font-semibold text-emerald-300">
-                      ~{balanceUsd.toFixed(2)} USDC
+                      ${balanceUsd.toFixed(2)} 
                     </span>
                   </div>
                 </div>

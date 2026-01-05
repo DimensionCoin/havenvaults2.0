@@ -215,3 +215,9 @@
   -ms-overflow-style: none; /* IE/old Edge */
   scrollbar-width: none; /* Firefox */
 }
+
+
+/* Disable native pull-to-refresh */
+html, body {
+  overscroll-behavior-y: contain;
+}

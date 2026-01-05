@@ -2,6 +2,8 @@ import BottomBar from "@/components/shared/BottomBar";
 import Sidebar from "@/components/shared/Sidebar";
 import { BalanceProvider } from "@/providers/BalanceProvider";
 import SolProvider from "@/providers/SolProvider";
+import PullToRefresh from "@/components/shared/PullToRefresh";
+import AppLayoutInner from "./AppLayoutInner";
 
 export default function appLayout({
   children,
@@ -14,9 +16,11 @@ export default function appLayout({
         <div className="w-full min-h-screen">
           {" "}
           <Sidebar />
-          <div className="py-1  md:justify-center items-center md:ml-18 lg:ml-22 pb-20 sm:px-5 lg:px-8">
-            {children}
-          </div>
+          <AppLayoutInner>
+            <div className="py-1  md:justify-center items-center md:ml-18 lg:ml-22 pb-20 sm:px-5 lg:px-8">
+              {children}
+            </div>
+          </AppLayoutInner>
           <BottomBar />
         </div>
       </SolProvider>

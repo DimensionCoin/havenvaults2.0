@@ -61,8 +61,8 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     [displayCurrency]
   );
 
-  const title = "High-Interest Savings";
-  const openTitle = "Open High-Interest Savings";
+  const title = "Plus Savings Account";
+  const openTitle = "Plus Account Coming Soon!";
   // ✅ no “USDC” in UI copy
   const description = "Lock funds for higher yield and faster growth.";
 

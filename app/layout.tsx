@@ -9,7 +9,7 @@ import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 export const metadata: Metadata = {
   title: "Haven Vaults",
   description: "Best app for financial growth.",
-  manifest: "/manifest.webmanifest",
+  manifest: "/manifest.json",
   themeColor: "#000000",
   appleWebApp: {
     capable: true,
@@ -29,9 +29,16 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* iOS home screen icon (use your best 180x180 if you have it) */}
-        <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
-        {/* Optional: iOS splash screens are separate (can add later) */}
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+        />
+        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+          name="apple-mobile-web-app-status-bar-style"
+          content="black-translucent"
+        />
       </head>
 
       <body
