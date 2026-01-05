@@ -2,7 +2,6 @@ import BottomBar from "@/components/shared/BottomBar";
 import Sidebar from "@/components/shared/Sidebar";
 import { BalanceProvider } from "@/providers/BalanceProvider";
 import SolProvider from "@/providers/SolProvider";
-import PullToRefresh from "@/components/shared/PullToRefresh";
 import AppLayoutInner from "./AppLayoutInner";
 
 export default function appLayout({
