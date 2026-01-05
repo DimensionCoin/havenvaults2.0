@@ -14,10 +14,12 @@ import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
-  getMint,
 } from "@solana/spl-token";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/* ───────── ENV ───────── */
 
 function required(name: string): string {
   const v = process.env[name];
@@ -27,15 +29,13 @@ function required(name: string): string {
 
 const RPC = required("NEXT_PUBLIC_SOLANA_RPC");
 const JUP_API_KEY = required("JUP_API_KEY");
-
-const HAVEN_FEEPAYER = new PublicKey(
-  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
-);
-const TREASURY_OWNER = new PublicKey(
-  required("NEXT_PUBLIC_APP_TREASURY_OWNER")
-);
-
+const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
+const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
 const FEE_RATE_RAW = process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0.01";
+
+// Pre-parse at module load
+const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
+const TREASURY_OWNER = new PublicKey(TREASURY_OWNER_STR);
 
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
 const JUP_SWAP_IXS = "https://api.jup.ag/swap/v1/swap-instructions";
@@ -46,6 +46,35 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 );
 
+// Connection singleton (reuse across requests)
+let _conn: Connection | null = null;
+function getConnection(): Connection {
+  if (!_conn) {
+    _conn = new Connection(RPC, {
+      commitment: "confirmed",
+      disableRetryOnRateLimit: false,
+    });
+  }
+  return _conn;
+}
+
+/* ───────── CACHES ───────── */
+
+// Token program cache (mint -> TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID)
+const tokenProgramCache = new Map<string, PublicKey>();
+
+// Decimals cache (mint -> decimals)
+const decimalsCache = new Map<string, number>();
+
+// ALT cache with TTL (5 min)
+const altCache = new Map<
+  string,
+  { account: AddressLookupTableAccount; expires: number }
+>();
+const ALT_CACHE_TTL = 5 * 60 * 1000;
+
+/* ───────── HELPERS ───────── */
+
 function jsonError(
   status: number,
   payload: {
@@ -55,47 +84,91 @@ function jsonError(
     tip?: string;
     stage?: string;
     traceId?: string;
-    details?: unknown;
   }
 ) {
-  console.error("[/api/jup/build] error", status, payload);
+  console.error("[/api/jup/build]", status, payload.code, payload.error);
   return NextResponse.json(payload, { status });
 }
 
-async function detectTokenProgramId(conn: Connection, mint: PublicKey) {
+async function getTokenProgramId(
+  conn: Connection,
+  mint: PublicKey
+): Promise<PublicKey> {
+  const key = mint.toBase58();
+  const cached = tokenProgramCache.get(key);
+  if (cached) return cached;
+
   const info = await conn.getAccountInfo(mint, "confirmed");
-  if (!info) throw new Error(`Mint not found on chain: ${mint.toBase58()}`);
-  return info.owner.equals(TOKEN_2022_PROGRAM_ID)
+  if (!info) throw new Error(`Mint not found: ${key}`);
+
+  const programId = info.owner.equals(TOKEN_2022_PROGRAM_ID)
     ? TOKEN_2022_PROGRAM_ID
     : TOKEN_PROGRAM_ID;
+
+  tokenProgramCache.set(key, programId);
+  return programId;
+}
+
+async function getDecimals(
+  conn: Connection,
+  mint: PublicKey,
+  programId: PublicKey
+): Promise<number> {
+  const key = mint.toBase58();
+  const cached = decimalsCache.get(key);
+  if (cached !== undefined) return cached;
+
+  // Read mint account directly (faster than getMint)
+  const info = await conn.getAccountInfo(mint, "confirmed");
+  if (!info?.data || info.data.length < 45) {
+    throw new Error(`Invalid mint account: ${key}`);
+  }
+
+  // Decimals is at offset 44 for both TOKEN_PROGRAM and TOKEN_2022
+  const decimals = info.data[44];
+  decimalsCache.set(key, decimals);
+  return decimals;
+}
+
+async function getAltCached(
+  conn: Connection,
+  key: string
+): Promise<AddressLookupTableAccount | null> {
+  const now = Date.now();
+  const cached = altCache.get(key);
+  if (cached && cached.expires > now) {
+    return cached.account;
+  }
+
+  const { value } = await conn.getAddressLookupTable(new PublicKey(key));
+  if (value) {
+    altCache.set(key, { account: value, expires: now + ALT_CACHE_TTL });
+  }
+  return value;
 }
 
 function toIx(obj: unknown): TransactionInstruction {
-  const rec = (obj ?? {}) as Record<string, unknown>;
-  const pid = rec.programId;
-  const dataStr = rec.data;
-  const listUnknown = Array.isArray(rec.keys)
-    ? (rec.keys as unknown[])
-    : Array.isArray(rec.accounts)
-    ? (rec.accounts as unknown[])
-    : null;
+  const rec = obj as Record<string, unknown>;
+  const pid = rec.programId as string;
+  const dataStr = rec.data as string;
+  const keys = (rec.keys ?? rec.accounts) as Array<{
+    pubkey: string;
+    isSigner: boolean;
+    isWritable: boolean;
+  }>;
 
-  if (typeof pid !== "string" || typeof dataStr !== "string" || !listUnknown)
-    throw new Error("Unexpected Jupiter instruction shape");
-
-  const keys = listUnknown.map((k) => {
-    const r = (k ?? {}) as Record<string, unknown>;
-    return {
-      pubkey: new PublicKey(String(r.pubkey)),
-      isSigner: Boolean(r.isSigner),
-      isWritable: Boolean(r.isWritable),
-    };
-  });
+  if (!pid || !dataStr || !keys) {
+    throw new Error("Invalid Jupiter instruction shape");
+  }
 
   return new TransactionInstruction({
     programId: new PublicKey(pid),
-    keys,
-    data: Buffer.from(String(dataStr), "base64"),
+    keys: keys.map((k) => ({
+      pubkey: new PublicKey(k.pubkey),
+      isSigner: Boolean(k.isSigner),
+      isWritable: Boolean(k.isWritable),
+    })),
+    data: Buffer.from(dataStr, "base64"),
   });
 }
 
@@ -106,12 +179,7 @@ function clamp(n: number, min: number, max: number) {
 function feeBpsFromEnv(): number {
   const rate = Number(FEE_RATE_RAW);
   if (!Number.isFinite(rate) || rate <= 0) return 0;
-  const clamped = clamp(rate, 0, 0.2);
-  return Math.round(clamped * 10_000);
-}
-
-function ceilMulDiv(amount: number, mul: number, div: number) {
-  return Math.floor((amount * mul + (div - 1)) / div);
+  return Math.round(clamp(rate, 0, 0.2) * 10_000);
 }
 
 function computeFeeUnits(amountUnits: number) {
@@ -119,7 +187,7 @@ function computeFeeUnits(amountUnits: number) {
   if (!Number.isFinite(amountUnits) || amountUnits <= 0 || bps <= 0) {
     return { feeUnits: 0, feeBps: 0, feeRate: 0 };
   }
-  const feeUnits = ceilMulDiv(amountUnits, bps, 10_000);
+  const feeUnits = Math.floor((amountUnits * bps + 9999) / 10_000);
   return { feeUnits, feeBps: bps, feeRate: bps / 10_000 };
 }
 
@@ -134,7 +202,6 @@ async function jupFetch(url: string, init?: RequestInit) {
   });
 }
 
-/** Replace Jupiter ATA creates with payer=HAVEN_FEEPAYER */
 function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   const sponsored: TransactionInstruction[] = [];
   const nonAta: TransactionInstruction[] = [];
@@ -146,7 +213,7 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
       continue;
     }
 
-    const keys = ix.keys ?? [];
+    const keys = ix.keys;
     const ata = keys[1]?.pubkey;
     const owner = keys[2]?.pubkey;
     const mint = keys[3]?.pubkey;
@@ -154,7 +221,7 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
 
     if (!ata || !owner || !mint) continue;
 
-    const dedupeKey = `${ata.toBase58()}|${owner.toBase58()}|${mint.toBase58()}|${tokenProgram.toBase58()}`;
+    const dedupeKey = `${ata.toBase58()}|${mint.toBase58()}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 
@@ -172,44 +239,34 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   return { sponsoredAtaIxs: sponsored, nonAtaSetupIxs: nonAta };
 }
 
-/** Parse "12.34" into base units using decimals (safe, avoids float drift). */
 function parseUiAmountToUnits(amountUi: string, decimals: number): number {
   const s = (amountUi ?? "").trim().replace(/,/g, "");
   if (!s) return 0;
 
   const [wRaw, fRaw = ""] = s.split(".");
-  const whole = wRaw.replace(/[^\d]/g, "");
-  const frac = fRaw.replace(/[^\d]/g, "");
+  const whole = wRaw.replace(/\D/g, "");
+  const frac = fRaw.replace(/\D/g, "");
 
   if (!whole && !frac) return 0;
 
   const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
   const unitsStr = (whole || "0") + fracPadded;
-  const unitsBig = BigInt(unitsStr || "0");
+  const units = Number(unitsStr);
 
-  if (unitsBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (!Number.isFinite(units) || units > Number.MAX_SAFE_INTEGER) {
     throw new Error("Amount is too large.");
   }
-  return Number(unitsBig);
+  return units;
 }
+
+/* ───────── ROUTE ───────── */
 
 export async function POST(req: Request) {
   const traceId = Math.random().toString(36).slice(2, 10);
+  const startTime = Date.now();
   let stage = "init";
 
   try {
-    stage = "envCheck";
-    if (!RPC?.includes("mainnet")) {
-      return jsonError(500, {
-        code: "NON_MAINNET_RPC",
-        error: "RPC must be mainnet",
-        userMessage: "Something's misconfigured on our side.",
-        tip: "Please try again later.",
-        stage,
-        traceId,
-      });
-    }
-
     stage = "parseBody";
     const body = (await req.json().catch(() => null)) as {
       fromOwnerBase58?: string;
@@ -221,16 +278,16 @@ export async function POST(req: Request) {
       isMax?: boolean;
     } | null;
 
-    const fromOwnerBase58 = body?.fromOwnerBase58 ?? "";
-    const inputMintStr = body?.inputMint ?? "";
-    const outputMintStr = body?.outputMint ?? "";
+    const fromOwnerBase58 = body?.fromOwnerBase58?.trim() ?? "";
+    const inputMintStr = body?.inputMint?.trim() ?? "";
+    const outputMintStr = body?.outputMint?.trim() ?? "";
     const slippageBps = body?.slippageBps ?? 50;
     const isMax = Boolean(body?.isMax);
 
     if (!fromOwnerBase58 || !inputMintStr || !outputMintStr) {
       return jsonError(400, {
         code: "INVALID_PAYLOAD",
-        error: "Need fromOwnerBase58, inputMint, outputMint",
+        error: "Missing required fields",
         userMessage: "Something went wrong building this swap.",
         tip: "Please refresh and try again.",
         stage,
@@ -245,7 +302,7 @@ export async function POST(req: Request) {
     if (inputMint.equals(outputMint)) {
       return jsonError(400, {
         code: "SAME_TOKEN",
-        error: "inputMint equals outputMint",
+        error: "Input equals output",
         userMessage: "Choose two different assets.",
         tip: "Pick another asset to receive.",
         stage,
@@ -253,22 +310,21 @@ export async function POST(req: Request) {
       });
     }
 
-    const conn = new Connection(RPC, "confirmed");
+    const conn = getConnection();
 
-    stage = "detectTokenPrograms";
-    const inputProgId = await detectTokenProgramId(conn, inputMint);
-    const outputProgId = await detectTokenProgramId(conn, outputMint);
+    /* ───────── PARALLEL: Token programs + decimals ───────── */
+    stage = "tokenInfo";
 
-    // decimals for input fee transfer + ui conversion
-    const inputMintInfo = await getMint(
-      conn,
-      inputMint,
-      "confirmed",
-      inputProgId
-    );
-    const inputDecimals = inputMintInfo.decimals;
+    const [inputProgId, outputProgId] = await Promise.all([
+      getTokenProgramId(conn, inputMint),
+      getTokenProgramId(conn, outputMint),
+    ]);
 
+    const inputDecimals = await getDecimals(conn, inputMint, inputProgId);
+
+    /* ───────── Derive ATAs ───────── */
     stage = "deriveATAs";
+
     const userInputAta = getAssociatedTokenAddressSync(
       inputMint,
       userOwner,
@@ -281,7 +337,6 @@ export async function POST(req: Request) {
       false,
       outputProgId
     );
-
     const treasuryInputAta = getAssociatedTokenAddressSync(
       inputMint,
       TREASURY_OWNER,
@@ -289,25 +344,23 @@ export async function POST(req: Request) {
       inputProgId
     );
 
-    // -----------------------------
-    // Amount: WSOL is treated as SPL token ONLY.
-    // No native SOL fallback / wrapping.
-    // -----------------------------
+    /* ───────── Amount + Balance check ───────── */
     stage = "amount";
-    let amountUnits = 0;
 
-    const bal = await conn
+    const balResp = await conn
       .getTokenAccountBalance(userInputAta, "confirmed")
       .catch(() => null);
-    const available = Number(bal?.value?.amount || "0");
+    const available = Number(balResp?.value?.amount || "0");
+
+    let amountUnits = 0;
 
     if (isMax) {
       if (available <= 0) {
         return jsonError(400, {
           code: "INSUFFICIENT_BALANCE",
-          error: "Token balance is zero",
-          userMessage: "You don’t have enough balance to swap.",
-          tip: "Try a smaller amount or deposit funds.",
+          error: "Zero balance",
+          userMessage: "You don't have any balance to swap.",
+          tip: "Deposit funds first.",
           stage,
           traceId,
         });
@@ -334,8 +387,8 @@ export async function POST(req: Request) {
       if (available < amountUnits) {
         return jsonError(400, {
           code: "INSUFFICIENT_BALANCE",
-          error: `need=${amountUnits}, available=${available}`,
-          userMessage: "You don’t have enough balance for that amount.",
+          error: `need=${amountUnits}, have=${available}`,
+          userMessage: "You don't have enough balance.",
           tip: "Try a smaller amount.",
           stage,
           traceId,
@@ -343,25 +396,27 @@ export async function POST(req: Request) {
       }
     }
 
-    // Fee is ALWAYS in the input token (including WSOL as SPL token)
+    /* ───────── Fee calculation ───────── */
     stage = "fee";
+
     const { feeUnits, feeBps, feeRate } = computeFeeUnits(amountUnits);
     const netUnits = Math.max(amountUnits - feeUnits, 0);
 
     if (feeUnits > 0 && netUnits <= 0) {
       return jsonError(400, {
-        code: "AMOUNT_TOO_SMALL_FOR_FEE",
+        code: "AMOUNT_TOO_SMALL",
         error: `gross=${amountUnits} fee=${feeUnits}`,
-        userMessage: "This amount is too small to cover the fee.",
-        tip: "Try a slightly larger amount.",
+        userMessage: "Amount is too small to cover the fee.",
+        tip: "Try a larger amount.",
         stage,
         traceId,
       });
     }
 
-    // QUOTE on netUnits (so fee stays aside)
-    stage = "quote";
-    const qUrl =
+    /* ───────── PARALLEL: Quote + Blockhash ───────── */
+    stage = "quoteAndBlockhash";
+
+    const quoteUrl =
       `${JUP_QUOTE}?` +
       new URLSearchParams({
         inputMint: inputMint.toBase58(),
@@ -370,33 +425,35 @@ export async function POST(req: Request) {
         slippageBps: String(slippageBps),
       });
 
-    const qRes = await jupFetch(qUrl);
-    const qText = await qRes.text().catch(() => "");
-    if (!qRes.ok) {
-      return jsonError(qRes.status, {
+    const [quoteRes, blockhashData] = await Promise.all([
+      jupFetch(quoteUrl),
+      conn.getLatestBlockhash("confirmed"),
+    ]);
+
+    if (!quoteRes.ok) {
+      const text = await quoteRes.text().catch(() => "");
+      return jsonError(quoteRes.status, {
         code: "JUP_QUOTE_FAILED",
-        error: `Quote failed: ${qRes.status} ${qText}`,
-        userMessage: "We couldn’t price this swap right now.",
-        tip: "Try again in a moment or reduce the amount.",
+        error: `Quote failed: ${quoteRes.status}`,
+        userMessage: "Couldn't price this swap right now.",
+        tip: "Try again in a moment.",
         stage,
         traceId,
       });
     }
 
-    const quoteResponse = qText ? JSON.parse(qText) : {};
+    const quoteResponse = await quoteRes.json();
 
-    // SWAP instructions
+    /* ───────── Swap instructions ───────── */
     stage = "swapInstructions";
+
     const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         quoteResponse,
         userPublicKey: userOwner.toBase58(),
-
-        // ✅ CRITICAL: prevent Jupiter from inserting native SOL wrap/unwrap steps
         wrapAndUnwrapSol: false,
-
         dynamicComputeUnitLimit: true,
         prioritizationFeeLamports: {
           priorityLevelWithMaxLamports: {
@@ -407,57 +464,51 @@ export async function POST(req: Request) {
       }),
     });
 
-    const swapText = await swapIxRes.text().catch(() => "");
     if (!swapIxRes.ok) {
       return jsonError(swapIxRes.status, {
-        code: "JUP_SWAP_INSTRUCTIONS_FAILED",
-        error: `swap-instructions failed: ${swapIxRes.status} ${swapText}`,
-        userMessage: "We couldn’t prepare this swap.",
+        code: "JUP_SWAP_IX_FAILED",
+        error: `swap-instructions failed: ${swapIxRes.status}`,
+        userMessage: "Couldn't prepare this swap.",
         tip: "Try again in a moment.",
         stage,
         traceId,
       });
     }
 
-    const j: {
+    const swapData = (await swapIxRes.json()) as {
       setupInstructions?: unknown[];
       swapInstruction?: unknown;
       cleanupInstructions?: unknown[];
-      addressLookupTableAddresses?: unknown;
-    } = swapText ? JSON.parse(swapText) : {};
-    const setupIxsRaw = j.setupInstructions ?? [];
-    const swapIxRaw = j.swapInstruction;
-    const cleanupIxsRaw = j.cleanupInstructions ?? [];
-    const altKeys: string[] = Array.isArray(j.addressLookupTableAddresses)
-      ? j.addressLookupTableAddresses.map((k) => String(k))
-      : [];
+      addressLookupTableAddresses?: string[];
+    };
 
-    if (!swapIxRaw) {
+    if (!swapData.swapInstruction) {
       return jsonError(500, {
-        code: "NO_SWAP_INSTRUCTION",
+        code: "NO_SWAP_IX",
         error: "Jupiter returned no swapInstruction",
-        userMessage: "We couldn’t prepare this route.",
-        tip: "Try again with a slightly different amount.",
+        userMessage: "Couldn't build this route.",
+        tip: "Try a different amount.",
         stage,
         traceId,
       });
     }
 
+    /* ───────── Load ALTs (parallel, cached) ───────── */
     stage = "loadALTs";
-    const altAccounts: AddressLookupTableAccount[] = [];
-    for (const k of altKeys) {
-      const { value } = await conn.getAddressLookupTable(new PublicKey(k));
-      if (value) altAccounts.push(value);
-    }
 
+    const altKeys = swapData.addressLookupTableAddresses ?? [];
+    const altAccounts = (
+      await Promise.all(altKeys.map((k) => getAltCached(conn, k)))
+    ).filter((a): a is AddressLookupTableAccount => a !== null);
+
+    /* ───────── Build instructions ───────── */
     stage = "buildInstructions";
 
-    const setupIxs = setupIxsRaw.map(toIx);
+    const setupIxs = (swapData.setupInstructions ?? []).map(toIx);
     const { sponsoredAtaIxs, nonAtaSetupIxs } =
       rebuildAtaCreatesAsSponsored(setupIxs);
 
-    // Ensure ATAs needed for (a) paying, (b) receiving, (c) treasury fee
-    const mustHaveAtas: TransactionInstruction[] = [
+    const mustHaveAtas = [
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER,
         userInputAta,
@@ -481,7 +532,7 @@ export async function POST(req: Request) {
       ),
     ];
 
-    const feeIx: TransactionInstruction | null =
+    const feeIx =
       feeUnits > 0
         ? createTransferCheckedInstruction(
             userInputAta,
@@ -495,27 +546,29 @@ export async function POST(req: Request) {
           )
         : null;
 
-    const ixsWithFee: TransactionInstruction[] = [
+    const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
+
+    const ixsWithFee = [
       ...mustHaveAtas,
       ...sponsoredAtaIxs,
       ...nonAtaSetupIxs,
-      toIx(swapIxRaw),
+      toIx(swapData.swapInstruction),
       ...(feeIx ? [feeIx] : []),
-      ...cleanupIxsRaw.map(toIx),
+      ...cleanupIxs,
     ];
 
-    const ixsNoFee: TransactionInstruction[] = [
+    const ixsNoFee = [
       ...mustHaveAtas,
       ...sponsoredAtaIxs,
       ...nonAtaSetupIxs,
-      toIx(swapIxRaw),
-      ...cleanupIxsRaw.map(toIx),
+      toIx(swapData.swapInstruction),
+      ...cleanupIxs,
     ];
 
+    /* ───────── Compile transaction ───────── */
     stage = "compile";
-    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
-      "processed"
-    );
+
+    const { blockhash, lastValidBlockHeight } = blockhashData;
 
     const compile = (ixs: TransactionInstruction[]) =>
       new VersionedTransaction(
@@ -527,57 +580,59 @@ export async function POST(req: Request) {
       );
 
     let tx = compile(ixsWithFee);
-    let encodedLen = Buffer.from(tx.serialize()).length;
+    let encodedLen = tx.serialize().length;
 
-    // If fee pushes over size, fallback to swap-only tx (still swaps netUnits)
-    let postChargeFeeUnits: number | undefined;
+    let postChargeFeeUnits: number | null = null;
     if (feeIx && encodedLen > MAX_ENCODED_LEN) {
       tx = compile(ixsNoFee);
-      encodedLen = Buffer.from(tx.serialize()).length;
+      encodedLen = tx.serialize().length;
       postChargeFeeUnits = feeUnits;
     }
 
     if (encodedLen > MAX_ENCODED_LEN) {
       return jsonError(413, {
         code: "TX_TOO_LARGE",
-        error: "Route too large to fit in one transaction.",
-        userMessage: "This route is too complex to complete right now.",
-        tip: "Try a smaller amount or a different pair.",
+        error: `Size ${encodedLen} > ${MAX_ENCODED_LEN}`,
+        userMessage: "This route is too complex.",
+        tip: "Try a smaller amount or different pair.",
         stage,
         traceId,
-        details: { encodedLen, limit: MAX_ENCODED_LEN },
       });
     }
 
     const b64 = Buffer.from(tx.serialize()).toString("base64");
+    const buildTime = Date.now() - startTime;
+
+    console.log(
+      `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0, 8)}→${outputMintStr.slice(0, 8)} amt=${amountUnits}`
+    );
 
     return NextResponse.json({
       transaction: b64,
       recentBlockhash: blockhash,
       lastValidBlockHeight,
       traceId,
-
       feeUnits,
       feeBps,
       feeRate,
       feeMint: inputMint.toBase58(),
       feeDecimals: inputDecimals,
-      postChargeFeeUnits: postChargeFeeUnits ?? null,
-
+      postChargeFeeUnits,
       grossInUnits: amountUnits,
       netInUnits: netUnits,
-
       isMax,
       inputMint: inputMint.toBase58(),
       outputMint: outputMint.toBase58(),
+      buildTimeMs: buildTime,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[JUP/BUILD] ${traceId} error at ${stage}:`, msg);
     return jsonError(500, {
       code: "UNHANDLED_BUILD_ERROR",
       error: msg,
-      userMessage: "We couldn’t build this swap.",
-      tip: "Please try again. If it keeps failing, contact support.",
+      userMessage: "Couldn't build this swap.",
+      tip: "Please try again.",
       stage,
       traceId,
     });

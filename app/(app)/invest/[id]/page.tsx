@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -15,6 +21,8 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
+  Wallet,
 } from "lucide-react";
 
 import {
@@ -27,7 +35,10 @@ import {
 
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
-import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
+import {
+  useServerSponsoredUsdcSwap,
+  type UsdcSwapStatus,
+} from "@/hooks/useServerSponsoredUsdcSwap";
 
 const CLUSTER = getCluster();
 
@@ -35,16 +46,14 @@ const SWAP_FEE_PCT =
   Number(process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0") || 0;
 const SWAP_FEE_PCT_DISPLAY = SWAP_FEE_PCT * 100;
 
-/* --------------------------------------------------------------------- */
-/* Types                                                                 */
-/* --------------------------------------------------------------------- */
+/* ───────── Types ───────── */
 
 type ResolvedToken = {
   meta: TokenMeta;
   mint: string;
 };
 
-type HistoricalPoint = { t: number; price: number }; // USD from API
+type HistoricalPoint = { t: number; price: number };
 type HistoricalApiResponse = { id: string; prices: HistoricalPoint[] };
 
 type SpotResp = {
@@ -63,9 +72,74 @@ const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
   "90D": { label: "90D", days: "90" },
 };
 
-/* --------------------------------------------------------------------- */
-/* Helpers                                                               */
-/* --------------------------------------------------------------------- */
+/* ───────── Stage Config (matches MultiplierPanel) ───────── */
+
+const STAGE_CONFIG: Record<
+  UsdcSwapStatus,
+  {
+    title: string;
+    subtitle: string;
+    progress: number;
+    icon: "spinner" | "wallet" | "success" | "error";
+  }
+> = {
+  idle: {
+    title: "",
+    subtitle: "",
+    progress: 0,
+    icon: "spinner",
+  },
+  building: {
+    title: "Preparing order",
+    subtitle: "Finding best route...",
+    progress: 15,
+    icon: "spinner",
+  },
+  signing: {
+    title: "Approving the transaction",
+    subtitle: "approving the order with exchange",
+    progress: 30,
+    icon: "wallet",
+  },
+  sending: {
+    title: "Submitting",
+    subtitle: "Broadcasting to network...",
+    progress: 60,
+    icon: "spinner",
+  },
+  confirming: {
+    title: "Confirming",
+    subtitle: "Waiting for network...",
+    progress: 85,
+    icon: "spinner",
+  },
+  done: {
+    title: "Order complete!",
+    subtitle: "Your trade was successful",
+    progress: 100,
+    icon: "success",
+  },
+  error: {
+    title: "Order failed",
+    subtitle: "Something went wrong",
+    progress: 0,
+    icon: "error",
+  },
+};
+
+/* ───────── Modal Types ───────── */
+
+type ModalKind = "processing" | "success" | "error";
+
+type ModalState = {
+  kind: ModalKind;
+  signature?: string | null;
+  errorMessage?: string;
+  side?: "buy" | "sell";
+  symbol?: string;
+} | null;
+
+/* ───────── Helpers ───────── */
 
 const resolveTokenFromSlug = (slug: string): ResolvedToken | null => {
   const normalized = slug.toLowerCase();
@@ -90,11 +164,20 @@ const resolveTokenFromSlug = (slug: string): ResolvedToken | null => {
   return null;
 };
 
-const formatCurrency = (v?: number | null, currency: string = "USD") => {
+/**
+ * ✅ Display as "$1.00" (no "CA$") while still respecting local formatting.
+ * We intentionally force USD formatting but keep the user’s numeric display.
+ *
+ * If you want to keep *their* separators (e.g. fr-FR) but still "$",
+ * we can swap "en-US" to user locale and use currencyDisplay: "narrowSymbol"
+ * — but "CA$" happens precisely because CAD in en-US becomes "CA$".
+ */
+const formatMoneyNoCode = (v?: number | null) => {
   const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
   return n.toLocaleString("en-US", {
     style: "currency",
-    currency,
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
     maximumFractionDigits: n < 1 ? 6 : 2,
   });
 };
@@ -117,11 +200,13 @@ const safeParse = (s: string) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/* --------------------------------------------------------------------- */
-/* Sleek hover chart (Amplify-style)                                     */
-/* --------------------------------------------------------------------- */
+function explorerUrl(sig: string) {
+  return `https://solscan.io/tx/${sig}`;
+}
 
-type SleekPoint = { t: number; y: number }; // display currency y
+/* ───────── Chart Components ───────── */
+
+type SleekPoint = { t: number; y: number };
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -242,10 +327,11 @@ function SleekLineChart({
       topPct,
       boxLeftPct: clampedLeft,
       boxTopPct: clampedTop,
-      priceText: formatCurrency(activePoint.y, displayCurrency),
+      // ✅ use no-code formatter (no CA$)
+      priceText: formatMoneyNoCode(activePoint.y),
       timeText: formatTimeLabel(activePoint.t, timeframe),
     };
-  }, [activePoint, activeX, activeY, displayCurrency, timeframe]);
+  }, [activePoint, activeX, activeY, timeframe]);
 
   return (
     <div ref={wrapRef} className="relative w-full select-none">
@@ -356,115 +442,70 @@ function SleekLineChart({
 
       <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
         <span>
-          Low:{" "}
-          {computed.minY ? formatCurrency(computed.minY, displayCurrency) : "—"}
+          Low: {computed.minY ? formatMoneyNoCode(computed.minY) : "—"}
         </span>
         <span>
-          High:{" "}
-          {computed.maxY ? formatCurrency(computed.maxY, displayCurrency) : "—"}
+          High: {computed.maxY ? formatMoneyNoCode(computed.maxY) : "—"}
         </span>
       </div>
     </div>
   );
 }
 
-/* --------------------------------------------------------------------- */
-/* Fullscreen processing modal                                           */
-/* --------------------------------------------------------------------- */
+/* ───────── Modal Sub-Components ───────── */
 
-type TxModalState =
-  | { open: false }
-  | {
-      open: true;
-      stage: "processing" | "success" | "error";
-      title?: string;
-      message?: string;
-      signature?: string | null;
-    };
-
-const TxModal: React.FC<{ state: TxModalState; onClose: () => void }> = ({
-  state,
-  onClose,
-}) => {
-  if (!state.open) return null;
-
-  const isProcessing = state.stage === "processing";
-  const isSuccess = state.stage === "success";
-  const isError = state.stage === "error";
-
+function ProgressBar({ progress }: { progress: number }) {
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="relative w-[92%] max-w-md rounded-3xl border border-white/10 bg-black/90 px-5 py-6 shadow-2xl">
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-3 top-3 rounded-full p-2 text-slate-400 hover:bg-white/5 hover:text-slate-100"
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
-
-        <div className="flex flex-col items-center text-center">
-          <div className="mb-3 mt-1 rounded-full border border-white/10 bg-black/50 p-4">
-            {isProcessing && (
-              <Loader2 className="h-7 w-7 animate-spin text-emerald-300" />
-            )}
-            {isSuccess && <CheckCircle2 className="h-7 w-7 text-emerald-300" />}
-            {isError && <XCircle className="h-7 w-7 text-red-300" />}
-          </div>
-
-          <div className="text-base font-semibold text-slate-50">
-            {state.title ||
-              (isProcessing
-                ? "Processing"
-                : isSuccess
-                ? "Order placed"
-                : "Order failed")}
-          </div>
-
-          <div className="mt-1 text-xs text-slate-400">
-            {state.message ||
-              (isProcessing
-                ? "Please keep this screen open while we place your order."
-                : isSuccess
-                ? "Your order was submitted successfully."
-                : "Something went wrong placing your order.")}
-          </div>
-
-          {state.signature && !isProcessing && (
-            <div className="mt-3 w-full rounded-2xl border border-white/10 bg-black/40 px-3 py-2 text-left text-[11px] text-slate-300">
-              <div className="text-slate-500">Reference</div>
-              <div className="mt-1 break-all font-mono">{state.signature}</div>
-            </div>
-          )}
-
-          {!isProcessing && (
-            <div className="mt-4 flex w-full gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-white/10"
-              >
-                Close
-              </button>
-
-              <Link
-                href="/invest"
-                className="flex-1 rounded-2xl bg-primary px-4 py-2 text-center text-sm font-semibold text-primary-foreground hover:opacity-90"
-              >
-                View assets
-              </Link>
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+      <div
+        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+      />
     </div>
   );
-};
+}
 
-/* --------------------------------------------------------------------- */
-/* Page                                                                  */
-/* --------------------------------------------------------------------- */
+function StageIcon({
+  icon,
+}: {
+  icon: "spinner" | "wallet" | "success" | "error";
+}) {
+  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
+
+  if (icon === "success") {
+    return (
+      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
+        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      </div>
+    );
+  }
+
+  if (icon === "error") {
+    return (
+      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
+        <XCircle className="h-7 w-7 text-rose-400" />
+      </div>
+    );
+  }
+
+  if (icon === "wallet") {
+    return (
+      <div
+        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
+      >
+        <Wallet className="h-7 w-7 text-amber-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${base} border-white/10 bg-white/5`}>
+      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    </div>
+  );
+}
+
+/* ───────── Page Component ───────── */
 
 const CoinPage: React.FC = () => {
   const params = useParams<{ id: string }>();
@@ -473,19 +514,20 @@ const CoinPage: React.FC = () => {
 
   const {
     displayCurrency,
-    fxRate, // USD -> displayCurrency
+    fxRate,
     tokens,
-    usdcAmount, // internal
-    usdcUsd, // display-currency value of internal cash
+    usdcAmount,
+    usdcUsd,
     refresh: refreshBalances,
   } = useBalance();
 
   const {
     swap: usdcSwap,
-    loading: swapLoading,
+    status: swapStatus,
+    error: swapError,
     signature: swapSig,
-    error: swapErr,
     reset: resetSwap,
+    isBusy: swapBusy,
   } = useServerSponsoredUsdcSwap();
 
   const slug = (params?.id || "").toString();
@@ -506,20 +548,20 @@ const CoinPage: React.FC = () => {
   const [priceLoading, setPriceLoading] = useState(false);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
-
-  // User can enter either Cash or Asset amount (bank-style)
   const [inputUnit, setInputUnit] = useState<"cash" | "asset">("cash");
-  const [cashAmount, setCashAmount] = useState<string>(""); // in display currency
-  const [assetAmount, setAssetAmount] = useState<string>(""); // token units
+  const [cashAmount, setCashAmount] = useState<string>("");
+  const [assetAmount, setAssetAmount] = useState<string>("");
   const [lastEdited, setLastEdited] = useState<"cash" | "asset">("cash");
 
   const [isMaxSell, setIsMaxSell] = useState(false);
   const [priceRefreshTick, setPriceRefreshTick] = useState(0);
   const [localErr, setLocalErr] = useState<string | null>(null);
-  const [txModal, setTxModal] = useState<TxModalState>({ open: false });
+  const [modal, setModal] = useState<ModalState>(null);
 
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+
+  const tradeStartedRef = useRef(false);
 
   const name = meta?.name || meta?.symbol || "Unknown asset";
   const symbol = meta?.symbol || "";
@@ -529,12 +571,9 @@ const CoinPage: React.FC = () => {
   const logo = meta?.logo || null;
 
   const ownerBase58 = user?.walletAddress ?? "";
-
   const coingeckoId = (meta?.id || "").trim();
 
-  /* ------------------------------------------------------------------- */
-  /* Balances                                                            */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Balances ───────── */
 
   const tokenPosition = useMemo(() => {
     const t = tokens.find((x) => x.mint === mint);
@@ -546,9 +585,7 @@ const CoinPage: React.FC = () => {
 
   const tokenBalance = clampNumber(tokenPosition.amount);
   const tokenValueDisplay = clampNumber(tokenPosition.valueDisplay);
-
-  // Internally this is your "cash" rail; UI calls it Cash.
-  const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0)); // ~USD
+  const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0));
   const cashBalanceDisplay = clampNumber(
     typeof usdcUsd === "number" ? usdcUsd : 0
   );
@@ -558,9 +595,7 @@ const CoinPage: React.FC = () => {
       ? meta.decimals
       : 0;
 
-  /* ------------------------------------------------------------------- */
-  /* Fetch spot price (CoinGecko API)                                    */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Fetch spot price ───────── */
 
   useEffect(() => {
     const controller = new AbortController();
@@ -569,7 +604,6 @@ const CoinPage: React.FC = () => {
       try {
         setPriceLoading(true);
 
-        // If we don't have a CG id, we can't use the CG spot endpoint.
         if (!coingeckoId) {
           setSpotPriceUsd(null);
           setPriceChange24hPct(null);
@@ -610,9 +644,7 @@ const CoinPage: React.FC = () => {
     return () => controller.abort();
   }, [coingeckoId, priceRefreshTick]);
 
-  /* ------------------------------------------------------------------- */
-  /* Fetch history (CoinGecko API)                                       */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Fetch history ───────── */
 
   useEffect(() => {
     if (!coingeckoId) {
@@ -641,7 +673,7 @@ const CoinPage: React.FC = () => {
 
         if (!res.ok) {
           setHistory([]);
-          setHistoryError("Couldn’t load chart data.");
+          setHistoryError("Couldn't load chart data.");
           return;
         }
 
@@ -651,7 +683,7 @@ const CoinPage: React.FC = () => {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return;
         setHistory([]);
-        setHistoryError("Couldn’t load chart data.");
+        setHistoryError("Couldn't load chart data.");
       } finally {
         setHistoryLoading(false);
       }
@@ -661,9 +693,7 @@ const CoinPage: React.FC = () => {
     return () => controller.abort();
   }, [coingeckoId, timeframe, priceRefreshTick]);
 
-  /* ------------------------------------------------------------------- */
-  /* Derived values                                                      */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Derived values ───────── */
 
   const spotPriceDisplay =
     spotPriceUsd && fxRate ? spotPriceUsd * fxRate : null;
@@ -674,43 +704,32 @@ const CoinPage: React.FC = () => {
     return history.map((p) => ({ t: p.t, y: p.price * fxRate }));
   }, [history, fxRate]);
 
-  const cashNum = safeParse(cashAmount); // display currency
-  const assetNum = safeParse(assetAmount); // token units
+  const cashNum = safeParse(cashAmount);
+  const assetNum = safeParse(assetAmount);
 
-  // Convert Cash(display) <-> USD
   const cashUsd = fxRate && fxRate > 0 && cashNum > 0 ? cashNum / fxRate : 0;
-
-  // Convert Asset <-> USD
   const assetUsd = spotPriceUsd && assetNum > 0 ? assetNum * spotPriceUsd : 0;
 
-  // Determine gross notional based on user intent
   const grossUsd = lastEdited === "cash" ? cashUsd : assetUsd;
   const grossUsdSafe = grossUsd > 0 && Number.isFinite(grossUsd) ? grossUsd : 0;
 
   const feeUsd =
     grossUsdSafe > 0 && SWAP_FEE_PCT > 0 ? grossUsdSafe * SWAP_FEE_PCT : 0;
-
   const netUsdAfterFee = Math.max(grossUsdSafe - feeUsd, 0);
 
   const feeDisplay = fxRate && feeUsd ? feeUsd * fxRate : 0;
   const netDisplay = fxRate && netUsdAfterFee ? netUsdAfterFee * fxRate : 0;
 
-  // What the user receives (after fee)
   const receiveAsset =
     spotPriceUsd && netUsdAfterFee ? netUsdAfterFee / spotPriceUsd : 0;
+  const receiveCashDisplay = netDisplay;
 
-  const receiveCashDisplay = netDisplay; // after fee
-
-  // If user types the opposite unit, we compute the other field for preview (without overwriting input)
   const impliedAssetFromCash =
     spotPriceUsd && cashUsd > 0 ? cashUsd / spotPriceUsd : 0;
-
   const impliedCashFromAssetDisplay =
     fxRate && fxRate > 0 && assetUsd > 0 ? assetUsd * fxRate : 0;
 
-  /* ------------------------------------------------------------------- */
-  /* Sync the non-edited field (avoid ping-pong)                          */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Sync fields ───────── */
 
   useEffect(() => {
     if (!fxRate || fxRate <= 0) return;
@@ -744,11 +763,14 @@ const CoinPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fxRate, spotPriceUsd, lastEdited]);
 
-  /* ------------------------------------------------------------------- */
-  /* Handlers                                                            */
-  /* ------------------------------------------------------------------- */
+  /* ───────── Get current stage config ───────── */
 
-  const resetInputs = () => {
+  const currentStage = modal?.kind === "processing" ? swapStatus : null;
+  const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
+
+  /* ───────── Handlers ───────── */
+
+  const resetInputs = useCallback(() => {
     setCashAmount("");
     setAssetAmount("");
     setIsMaxSell(false);
@@ -756,14 +778,13 @@ const CoinPage: React.FC = () => {
     setShowBreakdown(false);
     setLastEdited(side === "buy" ? "cash" : "asset");
     setInputUnit(side === "buy" ? "cash" : "asset");
-  };
+  }, [side]);
 
   const handleSideChange = (next: "buy" | "sell") => {
     setSide(next);
     resetSwap();
     setLocalErr(null);
     setIsMaxSell(false);
-
     setInputUnit(next === "buy" ? "cash" : "asset");
     setLastEdited(next === "buy" ? "cash" : "asset");
     setCashAmount("");
@@ -795,17 +816,18 @@ const CoinPage: React.FC = () => {
     setAssetAmount(String(tokenBalance));
   };
 
-  const executeTrade = async () => {
+  const closeModal = useCallback(() => {
+    if (!modal || modal.kind === "processing") return;
+    setModal(null);
+    tradeStartedRef.current = false;
+  }, [modal]);
+
+  const executeTrade = useCallback(async () => {
     resetSwap();
     setLocalErr(null);
 
-    setTxModal({
-      open: true,
-      stage: "processing",
-      title: "Processing",
-      message: "Placing your order…",
-      signature: null,
-    });
+    tradeStartedRef.current = true;
+    setModal({ kind: "processing", side, symbol });
 
     try {
       if (!ownerBase58) throw new Error("Missing wallet address.");
@@ -813,6 +835,8 @@ const CoinPage: React.FC = () => {
       if (!spotPriceUsd || spotPriceUsd <= 0)
         throw new Error("Price not ready.");
       if (grossUsdSafe <= 0) throw new Error("Enter an amount.");
+
+      let sig: string;
 
       if (side === "buy") {
         if (grossUsdSafe > cashBalanceInternal + 0.000001) {
@@ -822,7 +846,7 @@ const CoinPage: React.FC = () => {
         const amountDisplay =
           lastEdited === "cash" ? cashNum : impliedCashFromAssetDisplay;
 
-        const sig = await usdcSwap({
+        const result = await usdcSwap({
           kind: "buy",
           fromOwnerBase58: ownerBase58,
           outputMint: mint,
@@ -831,98 +855,102 @@ const CoinPage: React.FC = () => {
           slippageBps: 50,
         });
 
-        await refreshBalances();
-        resetInputs();
+        sig = result.signature;
+      } else {
+        const sellAmountUi =
+          lastEdited === "asset"
+            ? assetNum
+            : spotPriceUsd && fxRate && fxRate > 0
+              ? cashNum / fxRate / spotPriceUsd
+              : 0;
 
-        setTxModal({
-          open: true,
-          stage: "success",
-          title: "Order placed",
-          message: "Your buy order was submitted.",
-          signature: sig ?? null,
+        if (sellAmountUi <= 0) throw new Error("Enter an amount.");
+        if (!isMaxSell && sellAmountUi > tokenBalance + 1e-12) {
+          throw new Error("Not enough balance to sell that amount.");
+        }
+
+        const result = await usdcSwap({
+          kind: "sell",
+          fromOwnerBase58: ownerBase58,
+          inputMint: mint,
+          amountUi: sellAmountUi,
+          inputDecimals: tokenDecimals,
+          slippageBps: 50,
+          isMax: isMaxSell,
         });
 
-        return;
+        sig = result.signature;
       }
-
-      // sell
-      const sellAmountUi =
-        lastEdited === "asset"
-          ? assetNum
-          : spotPriceUsd && fxRate && fxRate > 0
-          ? cashNum / fxRate / spotPriceUsd
-          : 0;
-
-      if (sellAmountUi <= 0) throw new Error("Enter an amount.");
-      if (!isMaxSell && sellAmountUi > tokenBalance + 1e-12) {
-        throw new Error("Not enough balance to sell that amount.");
-      }
-
-      const sig = await usdcSwap({
-        kind: "sell",
-        fromOwnerBase58: ownerBase58,
-        inputMint: mint,
-        amountUi: sellAmountUi,
-        inputDecimals: tokenDecimals,
-        slippageBps: 50,
-        isMax: isMaxSell,
-        sweepNativeSolAfter: isMaxSell,
-      });
 
       await refreshBalances();
       resetInputs();
 
-      setTxModal({
-        open: true,
-        stage: "success",
-        title: "Order placed",
-        message: "Your sell order was submitted.",
-        signature: sig ?? null,
+      setModal({
+        kind: "success",
+        signature: sig,
+        side,
+        symbol,
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setLocalErr(msg);
 
-      setTxModal({
-        open: true,
-        stage: "error",
-        title: "Order failed",
-        message: msg,
-        signature: null,
+      setModal({
+        kind: "error",
+        errorMessage: msg,
+        side,
+        symbol,
       });
-
-      throw e;
     }
-  };
+  }, [
+    resetSwap,
+    side,
+    symbol,
+    ownerBase58,
+    fxRate,
+    spotPriceUsd,
+    grossUsdSafe,
+    cashBalanceInternal,
+    lastEdited,
+    cashNum,
+    impliedCashFromAssetDisplay,
+    usdcSwap,
+    mint,
+    assetNum,
+    isMaxSell,
+    tokenBalance,
+    tokenDecimals,
+    refreshBalances,
+    resetInputs,
+  ]);
 
-  const inputsDisabled = swapLoading;
+  const inputsDisabled = swapBusy;
 
   const perfPct = useMemo(() => {
     const firstPrice = history[0]?.price ?? spotPriceUsd ?? null;
     const lastPrice =
       history[history.length - 1]?.price ?? spotPriceUsd ?? firstPrice ?? null;
-
     if (!firstPrice || !lastPrice) return 0;
     return ((lastPrice - firstPrice) / firstPrice) * 100;
   }, [history, spotPriceUsd]);
 
   const primaryDisabled =
-    swapLoading ||
+    swapBusy ||
     !ownerBase58 ||
     !spotPriceUsd ||
     !fxRate ||
     grossUsdSafe <= 0 ||
     (side === "buy" ? cashBalanceInternal <= 0 : tokenBalance <= 0);
 
-  const errorToShow = localErr || swapErr;
+  const errorToShow = localErr || swapError?.message;
 
-  const cashLine = `Cash: ${formatCurrency(
-    cashBalanceDisplay,
-    displayCurrency
-  )}`;
+  // ✅ remove currency code display everywhere
+  const cashLine = `Cash: ${formatMoneyNoCode(cashBalanceDisplay)}`;
   const assetLine = `You own: ${formatQty(tokenBalance, 6)} ${
     symbol || "ASSET"
-  } · ${formatCurrency(tokenValueDisplay, displayCurrency)}`;
+  } · ${formatMoneyNoCode(tokenValueDisplay)}`;
+
+  /* ───────── Not Found ───────── */
 
   if (!tokenFound) {
     return (
@@ -942,8 +970,8 @@ const CoinPage: React.FC = () => {
               Asset not found
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              This asset isn’t available for the current network ({CLUSTER}). Go
-              back and select an asset from Exchange.
+              This asset isn&apos;t available for the current network ({CLUSTER}
+              ). Go back and select an asset from Exchange.
             </p>
           </div>
         </div>
@@ -954,9 +982,138 @@ const CoinPage: React.FC = () => {
   const pct = typeof priceChange24hPct === "number" ? priceChange24hPct : null;
   const isUp = (pct ?? 0) >= 0;
 
+  /* ───────── Render ───────── */
+
   return (
     <div className="min-h-screen text-foreground">
-      <TxModal state={txModal} onClose={() => setTxModal({ open: false })} />
+      {/* ───────── MODAL ───────── */}
+      {modal && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && modal.kind !== "processing") {
+              closeModal();
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            {modal.kind !== "processing" && (
+              <div className="flex justify-end mb-2">
+                <button
+                  onClick={closeModal}
+                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Content */}
+            <div className="flex flex-col items-center text-center pt-2">
+              {modal.kind === "processing" && stageConfig ? (
+                <>
+                  <StageIcon icon={stageConfig.icon} />
+                  <div className="mt-4">
+                    <div className="text-base font-semibold text-white/90">
+                      {stageConfig.title}
+                    </div>
+                    <div className="mt-1 text-sm text-white/50">
+                      {stageConfig.subtitle}
+                    </div>
+                  </div>
+                  <div className="mt-5 w-full max-w-[200px]">
+                    <ProgressBar progress={stageConfig.progress} />
+                  </div>
+                </>
+              ) : modal.kind === "success" ? (
+                <>
+                  <StageIcon icon="success" />
+                  <div className="mt-4">
+                    <div className="text-base font-semibold text-emerald-100">
+                      {modal.side === "buy"
+                        ? "Purchase complete!"
+                        : "Sale complete!"}
+                    </div>
+                    <div className="mt-1 text-sm text-white/50">
+                      Your {modal.symbol || "asset"}{" "}
+                      {modal.side === "buy" ? "purchase" : "sale"} was
+                      successful
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <StageIcon icon="error" />
+                  <div className="mt-4">
+                    <div className="text-base font-semibold text-rose-100">
+                      Order failed
+                    </div>
+                    <div className="mt-1 text-sm text-white/50">
+                      Something went wrong
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Error message */}
+            {modal.kind === "error" && modal.errorMessage && (
+              <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
+                <div className="text-xs text-rose-200/80 text-center">
+                  {modal.errorMessage}
+                </div>
+              </div>
+            )}
+
+            {/* Transaction link */}
+            {modal.kind === "success" && modal.signature && (
+              <div className="mt-5">
+                <a
+                  href={explorerUrl(modal.signature)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                >
+                  <span>View transaction</span>
+                  <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
+                </a>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            {modal.kind !== "processing" && (
+              <div className="mt-5 flex gap-2">
+                <button
+                  onClick={closeModal}
+                  className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-white/10 border-white/10 text-white/80 hover:bg-white/15"
+                >
+                  Close
+                </button>
+
+                {modal.kind === "success" && (
+                  <Link
+                    href="/invest"
+                    className="flex-1 rounded-2xl bg-emerald-500/20 border border-emerald-300/30 px-4 py-3 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 transition"
+                  >
+                    View assets
+                  </Link>
+                )}
+              </div>
+            )}
+
+            {/* Processing footer */}
+            {modal.kind === "processing" && (
+              <div className="mt-6 text-center text-xs text-white/30">
+                Please don&apos;t close this window
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mx-auto w-full max-w-2xl px-3 pb-10 pt-4 sm:px-4">
         {/* Top bar */}
@@ -972,7 +1129,7 @@ const CoinPage: React.FC = () => {
 
           <button
             type="button"
-            disabled={swapLoading}
+            disabled={swapBusy}
             onClick={() => {
               setPriceRefreshTick((n) => n + 1);
               void refreshBalances();
@@ -984,9 +1141,8 @@ const CoinPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Amplify-style price + chart header */}
+        {/* Price + Chart header */}
         <div className="mt-3 glass-panel bg-white/10 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6">
-          {/* centered token */}
           <div className="flex flex-col items-center text-center">
             <div className="flex items-center gap-2">
               {logo ? (
@@ -1009,7 +1165,7 @@ const CoinPage: React.FC = () => {
               <span className="text-[44px] font-semibold leading-none tracking-tight text-white/92 sm:text-5xl">
                 {priceLoading && spotPriceDisplay === null
                   ? "…"
-                  : formatCurrency(spotPriceDisplay, displayCurrency)}
+                  : formatMoneyNoCode(spotPriceDisplay)}
               </span>
             </div>
 
@@ -1020,8 +1176,8 @@ const CoinPage: React.FC = () => {
                   pct === null
                     ? "text-white/40"
                     : isUp
-                    ? "text-emerald-300"
-                    : "text-rose-300",
+                      ? "text-emerald-300"
+                      : "text-rose-300",
                 ].join(" ")}
               >
                 {pct === null ? null : isUp ? (
@@ -1043,8 +1199,8 @@ const CoinPage: React.FC = () => {
                     perfPct > 0
                       ? "text-emerald-300"
                       : perfPct < 0
-                      ? "text-rose-300"
-                      : "text-white/50"
+                        ? "text-rose-300"
+                        : "text-white/50"
                   }
                 >
                   {formatPct(perfPct)}
@@ -1061,11 +1217,10 @@ const CoinPage: React.FC = () => {
             )}
           </div>
 
-          {/* chart container (mobile full-bleed) */}
+          {/* Chart container */}
           <div className="relative mt-4 overflow-hidden rounded-3xl border border-white/10 bg-black/45 shadow-[0_18px_55px_rgba(0,0,0,0.55)] -mx-4 sm:mx-0">
             <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
 
-            {/* timeframe tabs overlay */}
             <div className="absolute right-3 top-3 z-10">
               <div className="flex gap-1 rounded-full border border-white/10 bg-black/40 p-0.5 text-[11px]">
                 {(Object.keys(TIMEFRAMES) as TimeframeKey[]).map((tf) => {
@@ -1074,7 +1229,7 @@ const CoinPage: React.FC = () => {
                     <button
                       key={tf}
                       type="button"
-                      disabled={swapLoading}
+                      disabled={swapBusy}
                       onClick={() => setTimeframe(tf)}
                       className={`rounded-full px-2.5 py-0.5 transition disabled:opacity-50 ${
                         active
@@ -1113,7 +1268,7 @@ const CoinPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Trade card (unchanged) */}
+        {/* Trade card */}
         <div className="mt-4 glass-panel-soft p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <div className="glass-pill">
@@ -1123,7 +1278,7 @@ const CoinPage: React.FC = () => {
             <div className="inline-flex rounded-full border border-white/10 bg-black/60 p-0.5 text-[11px]">
               <button
                 type="button"
-                disabled={swapLoading}
+                disabled={swapBusy}
                 onClick={() => handleSideChange("buy")}
                 className={`rounded-full px-3 py-1 font-medium transition disabled:opacity-50 ${
                   side === "buy"
@@ -1135,7 +1290,7 @@ const CoinPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                disabled={swapLoading}
+                disabled={swapBusy}
                 onClick={() => handleSideChange("sell")}
                 className={`rounded-full px-3 py-1 font-medium transition disabled:opacity-50 ${
                   side === "sell"
@@ -1272,11 +1427,10 @@ const CoinPage: React.FC = () => {
               </span>
               <span className="font-semibold text-slate-50">
                 {side === "buy"
-                  ? formatCurrency(
+                  ? formatMoneyNoCode(
                       lastEdited === "cash"
                         ? cashNum
-                        : impliedCashFromAssetDisplay,
-                      displayCurrency
+                        : impliedCashFromAssetDisplay
                     )
                   : `${formatQty(
                       lastEdited === "asset" ? assetNum : impliedAssetFromCash,
@@ -1290,15 +1444,14 @@ const CoinPage: React.FC = () => {
               <span className="font-semibold text-slate-50">
                 {side === "buy"
                   ? `${formatQty(receiveAsset, 6)} ${symbol || "ASSET"}`
-                  : formatCurrency(receiveCashDisplay, displayCurrency)}
+                  : formatMoneyNoCode(receiveCashDisplay)}
               </span>
             </div>
 
             <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
               <span>Rate</span>
               <span>
-                1 {symbol || "ASSET"} ≈{" "}
-                {formatCurrency(spotPriceDisplay, displayCurrency)}
+                1 {symbol || "ASSET"} ≈ {formatMoneyNoCode(spotPriceDisplay)}
               </span>
             </div>
           </div>
@@ -1309,7 +1462,7 @@ const CoinPage: React.FC = () => {
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Haven fee</span>
                 <span className="font-medium">
-                  {formatCurrency(feeDisplay, displayCurrency)}{" "}
+                  {formatMoneyNoCode(feeDisplay)}{" "}
                   <span className="text-slate-500">
                     ({SWAP_FEE_PCT_DISPLAY.toFixed(2)}%)
                   </span>
@@ -1319,7 +1472,7 @@ const CoinPage: React.FC = () => {
               <div className="mt-1 flex items-center justify-between">
                 <span className="text-slate-400">Net amount</span>
                 <span className="font-semibold text-slate-50">
-                  {formatCurrency(netDisplay, displayCurrency)}
+                  {formatMoneyNoCode(netDisplay)}
                 </span>
               </div>
 
@@ -1336,27 +1489,24 @@ const CoinPage: React.FC = () => {
               className="haven-primary-btn w-full"
               disabled={primaryDisabled}
               onClick={() => {
-                void executeTrade().catch((e) =>
-                  console.error("[Trade] failed", e)
-                );
+                void executeTrade();
               }}
             >
-              {swapLoading
-                ? "Placing…"
-                : side === "buy"
-                ? `Buy ${symbol || "asset"}`
-                : `Sell ${symbol || "asset"}`}
+              {swapBusy ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Processing...
+                </span>
+              ) : side === "buy" ? (
+                `Buy ${symbol || "asset"}`
+              ) : (
+                `Sell ${symbol || "asset"}`
+              )}
             </button>
 
-            {errorToShow && (
+            {errorToShow && !modal && (
               <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
                 {errorToShow}
-              </div>
-            )}
-
-            {swapSig && (
-              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100">
-                Order submitted: <span className="font-mono">{swapSig}</span>
               </div>
             )}
           </div>

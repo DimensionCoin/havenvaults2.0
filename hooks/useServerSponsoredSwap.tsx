@@ -20,378 +20,339 @@ declare global {
 }
 if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
 
-type JsonObject = Record<string, unknown>;
+/* ───────── EXPORTED TYPES ───────── */
 
-type HttpDebug = {
-  url: string;
-  method: string;
-  status: number;
-  ok: boolean;
-  durationMs: number;
-  headers: Record<string, string>;
-  rawText: string | null;
-  json: unknown;
-};
+export type SwapStatus =
+  | "idle"
+  | "building"
+  | "signing"
+  | "sending"
+  | "confirming"
+  | "done"
+  | "error";
 
-export type SponsoredSwapInput = {
+export type SwapInput = {
   fromOwnerBase58: string;
   inputMint: string;
   outputMint: string;
-  amountUi: string; // user typed, e.g. "12.34"
+  amountUi: string;
   slippageBps?: number;
   isMax?: boolean;
-  accessToken?: string | null;
 };
 
-export type SponsoredSwapAttemptDebug = {
-  attemptId: string;
-  startedAt: string;
-  inputs: {
-    fromOwnerBase58: string;
-    inputMint: string;
-    outputMint: string;
-    amountUi: string;
-    slippageBps: number;
-    isMax?: boolean;
-  };
-  build?: HttpDebug & { endpoint: "build" };
-  send?: HttpDebug & { endpoint: "send" };
+export type SwapResult = {
+  signature: string;
+  inputMint: string;
+  outputMint: string;
+  grossInUnits: number;
+  netInUnits: number;
+  feeUnits: number;
+  buildTimeMs?: number;
+  totalTimeMs: number;
 };
 
-type State = {
-  loading: boolean;
-  signature: string | null;
-  error: string | null;
-  last?: SponsoredSwapAttemptDebug;
+export type SwapError = {
+  message: string;
+  code?: string;
+  stage?: string;
+  retryable?: boolean;
 };
 
-type AugmentedError = Error & {
-  __retryableSession?: boolean;
-  __server?: unknown;
+/* ───────── INTERNAL TYPES ───────── */
+
+type BuildResponse = {
+  transaction: string;
+  recentBlockhash: string;
+  lastValidBlockHeight: number;
+  traceId: string;
+  inputMint: string;
+  outputMint: string;
+  grossInUnits: number;
+  netInUnits: number;
+  feeUnits: number;
+  buildTimeMs?: number;
 };
 
-/* helpers */
-function isJsonObject(v: unknown): v is JsonObject {
-  return typeof v === "object" && v !== null;
-}
-function readString(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
-function readStringProp(obj: JsonObject, key: string): string | null {
-  return readString(obj[key]);
-}
-function headersToRecord(h: Headers) {
-  const rec: Record<string, string> = {};
-  for (const [k, v] of h.entries()) rec[k.toLowerCase()] = v;
-  return rec;
-}
-async function fetchWithDebug(url: string, init: RequestInit) {
-  const t0 =
-    typeof performance !== "undefined" ? performance.now() : Date.now();
-  const res = await fetch(url, init);
-  const rawText = await res.text().catch(() => null);
+type SendResponse = {
+  signature: string;
+  sendTimeMs?: number;
+};
 
-  let json: unknown = null;
-  try {
-    json = rawText ? JSON.parse(rawText) : null;
-  } catch {}
+/* ───────── HELPERS ───────── */
 
-  const t1 =
-    typeof performance !== "undefined" ? performance.now() : Date.now();
-
-  return {
-    res,
-    url,
-    method: (init.method || "GET").toUpperCase(),
-    status: res.status,
-    ok: res.ok,
-    durationMs: Math.round(t1 - t0),
-    headers: headersToRecord(res.headers),
-    rawText,
-    json,
-  } as HttpDebug & { res: Response };
-}
-function extractUserMessage(obj: JsonObject): string | null {
-  const base =
-    typeof obj.userMessage === "string"
-      ? obj.userMessage
-      : typeof obj.error === "string"
-      ? obj.error
-      : typeof obj.message === "string"
-      ? obj.message
-      : null;
-
-  const code = typeof obj.code === "string" ? obj.code : null;
-  const details = typeof obj.details === "string" ? obj.details : null;
-
-  if (!base) return null;
-
-  const parts = [base];
-  if (code) parts.push(`(${code})`);
-  if (details) parts.push(`— ${details}`);
-  return parts.join(" ");
-}
-function markError<T extends Error>(err: T, extra: Partial<AugmentedError>) {
-  Object.assign(err as AugmentedError, extra);
-  return err as AugmentedError;
-}
-function safeErrorMessage(http: HttpDebug, fallback: string) {
-  const j = isJsonObject(http.json) ? http.json : null;
-  const fromJson = j ? extractUserMessage(j) : null;
-  if (fromJson) return fromJson;
-
-  const raw = http.rawText?.trim();
-  if (raw)
-    return `HTTP ${http.status}: ${raw.replace(/\s+/g, " ").slice(0, 180)}`;
-  return fallback;
-}
-function makeAttemptId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-/** Prefer non-embedded wallet if possible */
-function pickSigningWallet(
-  wallets: ConnectedStandardSolanaWallet[],
-  ownerBase58: string
-) {
-  const nonEmbedded = wallets.find(
-    (w) => w.address === ownerBase58 && w.standardWallet?.name !== "Privy"
-  );
-  const byAddr = wallets.find((w) => w.address === ownerBase58);
-  return nonEmbedded ?? byAddr ?? null;
-}
-
-export function useServerSponsoredSwap() {
-  const [{ loading, signature, error, last }, setState] = useState<State>({
-    loading: false,
-    signature: null,
-    error: null,
-    last: undefined,
+async function postJSON<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+    credentials: "include",
   });
 
+  const text = await res.text().catch(() => "");
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const d = data as Record<string, unknown> | null;
+    const msg =
+      d?.userMessage ||
+      d?.error ||
+      d?.message ||
+      `Request failed: ${res.status}`;
+    const e = new Error(String(msg)) as Error & {
+      code?: string;
+      stage?: string;
+      retryable?: boolean;
+    };
+    e.code = d?.code as string | undefined;
+    e.stage = d?.stage as string | undefined;
+    e.retryable =
+      d?.code === "BLOCKHASH_EXPIRED" || d?.code === "SESSION_EXPIRED";
+    throw e;
+  }
+
+  return data as T;
+}
+
+function pickWallet(
+  wallets: ConnectedStandardSolanaWallet[],
+  address: string
+): ConnectedStandardSolanaWallet | null {
+  // Prefer non-embedded (Phantom, etc) over Privy embedded
+  const nonEmbedded = wallets.find(
+    (w) => w.address === address && w.standardWallet?.name !== "Privy"
+  );
+  return nonEmbedded ?? wallets.find((w) => w.address === address) ?? null;
+}
+
+function isUserRejection(e: unknown): boolean {
+  const msg = String((e as Error)?.message || "").toLowerCase();
+  return (
+    msg.includes("user rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("cancelled") ||
+    msg.includes("user canceled")
+  );
+}
+
+function isBlockhashError(e: unknown): boolean {
+  const msg = String((e as Error)?.message || "").toLowerCase();
+  const code = String((e as { code?: string })?.code || "").toLowerCase();
+  return (
+    msg.includes("blockhash") ||
+    msg.includes("expired") ||
+    code.includes("blockhash")
+  );
+}
+
+/* ───────── HOOK ───────── */
+
+export function useServerSponsoredSwap() {
   const { login, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
 
-  const inflight = useRef<AbortController | null>(null);
-  const cleanupInflight = () => {
-    inflight.current?.abort();
-    inflight.current = null;
-  };
+  const [status, setStatus] = useState<SwapStatus>("idle");
+  const [error, setError] = useState<SwapError | null>(null);
+  const [signature, setSignature] = useState<string | null>(null);
 
-  const doOnce = useCallback(
-    async (payload: {
-      attemptId: string;
-      accessToken?: string | null;
-      fromOwnerBase58: string;
-      inputMint: string;
-      outputMint: string;
-      amountUi: string;
-      slippageBps: number;
-      isMax?: boolean;
-    }) => {
-      const attempt: SponsoredSwapAttemptDebug = {
-        attemptId: payload.attemptId,
-        startedAt: new Date().toISOString(),
-        inputs: {
-          fromOwnerBase58: payload.fromOwnerBase58,
-          inputMint: payload.inputMint,
-          outputMint: payload.outputMint,
-          amountUi: payload.amountUi,
-          slippageBps: payload.slippageBps,
-          isMax: payload.isMax,
-        },
-      };
+  const inFlightRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
-      setState((s) => ({ ...s, last: attempt }));
+  // ───────── Sign with wallet ─────────
 
-      const headers: HeadersInit = {
-        "Content-Type": "application/json",
-        ...(payload.accessToken
-          ? { Authorization: `Bearer ${payload.accessToken}` }
-          : {}),
-      };
-
-      inflight.current = new AbortController();
-
-      // 1) BUILD (supports any pair now)
-      const build = await fetchWithDebug("/api/jup/build", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          fromOwnerBase58: payload.fromOwnerBase58,
-          inputMint: payload.inputMint,
-          outputMint: payload.outputMint,
-          amountUi: payload.amountUi,
-          slippageBps: payload.slippageBps,
-          isMax: payload.isMax === true,
-        }),
-        cache: "no-store",
-        credentials: "include",
-        signal: inflight.current.signal,
-      });
-
-      attempt.build = { ...build, endpoint: "build" };
-      setState((s) => ({
-        ...s,
-        last: { ...(s.last || attempt), build: attempt.build },
-      }));
-
-      const buildJson = isJsonObject(build.json) ? build.json : {};
-      const txB64 = readStringProp(buildJson, "transaction");
-
-      if (!build.ok || !txB64) {
-        throw markError(new Error(safeErrorMessage(build, "Build failed.")), {
-          __server: build.json ?? build.rawText,
-        });
-      }
-
-      // 2) USER SIGN
-      const unsignedBytes = Buffer.from(txB64, "base64");
-      const unsignedTx = VersionedTransaction.deserialize(unsignedBytes);
-
-      // sanity: user must be required signer
-      const msgAny = unsignedTx.message as unknown as {
-        header?: { numRequiredSignatures?: number };
-        staticAccountKeys?: PublicKey[];
-      };
-      const required = Number(msgAny.header?.numRequiredSignatures ?? 0);
-      const staticKeys = Array.isArray(msgAny.staticAccountKeys)
-        ? msgAny.staticAccountKeys
-        : [];
-      const signerKeys = staticKeys
-        .slice(0, required)
-        .map((k) => (k instanceof PublicKey ? k : new PublicKey(k)));
-      if (!signerKeys.some((k) => k.toBase58() === payload.fromOwnerBase58)) {
-        throw new Error("Built transaction is missing the user as a signer.");
-      }
-
-      const userWallet = pickSigningWallet(wallets, payload.fromOwnerBase58);
-      if (!userWallet) {
-        throw new Error(
-          "No connected wallet matches this address (connect Phantom/etc first)."
-        );
+  const signWithWallet = useCallback(
+    async (address: string, txBytes: Uint8Array) => {
+      const wallet = pickWallet(wallets, address);
+      if (!wallet) {
+        throw new Error("Wallet not connected. Please reconnect.");
       }
 
       const { signedTransaction } = await signTransaction({
-        transaction: unsignedBytes,
-        wallet: userWallet,
+        transaction: txBytes,
+        wallet,
       });
 
-      const userSignedB64 = Buffer.from(signedTransaction).toString("base64");
-
-      // 3) SEND (server co-signs + broadcasts)
-      const send = await fetchWithDebug("/api/jup/send", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ transaction: userSignedB64 }),
-        cache: "no-store",
-        credentials: "include",
-        signal: inflight.current.signal,
-      });
-
-      attempt.send = { ...send, endpoint: "send" };
-      setState((s) => ({
-        ...s,
-        last: { ...(s.last || attempt), send: attempt.send },
-      }));
-
-      if (send.status === 440) {
-        throw markError(new Error(safeErrorMessage(send, "Session expired.")), {
-          __retryableSession: true,
-          __server: send.json ?? send.rawText,
-        });
-      }
-
-      const sendJson = isJsonObject(send.json) ? send.json : {};
-      const sig = readStringProp(sendJson, "signature");
-
-      if (!send.ok || !sig) {
-        throw markError(
-          new Error(safeErrorMessage(send, "We couldn’t complete this swap.")),
-          { __server: send.json ?? send.rawText }
-        );
-      }
-
-      return sig;
+      return Buffer.from(signedTransaction).toString("base64");
     },
-    [signTransaction, wallets]
+    [wallets, signTransaction]
   );
 
-  const swap = useCallback(
-    async (input: SponsoredSwapInput) => {
-      cleanupInflight();
-      setState({
-        loading: true,
-        signature: null,
-        error: null,
-        last: undefined,
-      });
+  // ───────── Main swap function ─────────
 
-      const attemptId = makeAttemptId();
+  const swap = useCallback(
+    async (input: SwapInput): Promise<SwapResult> => {
+      const startTime = Date.now();
+
+      if (inFlightRef.current) {
+        throw new Error("A swap is already in progress");
+      }
+
+      if (!input.fromOwnerBase58 || !input.inputMint || !input.outputMint) {
+        throw new Error("Invalid swap parameters");
+      }
+
+      inFlightRef.current = true;
+      abortRef.current = new AbortController();
+
+      // Reset state
+      setStatus("idle");
+      setError(null);
+      setSignature(null);
 
       try {
-        const slippageBps = input.slippageBps ?? 50;
+        /* ══════════ PHASE 1: BUILD ══════════ */
+        setStatus("building");
 
-        try {
-          const sig = await doOnce({
-            attemptId,
-            accessToken: input.accessToken ?? null,
-            fromOwnerBase58: input.fromOwnerBase58,
-            inputMint: input.inputMint,
-            outputMint: input.outputMint,
-            amountUi: input.amountUi,
-            slippageBps,
-            isMax: input.isMax === true,
-          });
+        let buildResp: BuildResponse;
 
-          setState((s) => ({ ...s, loading: false, signature: sig }));
-          return sig;
-        } catch (err: unknown) {
-          const e = err as AugmentedError;
-          if (e.__retryableSession) {
-            await login();
-            const fresh = await getAccessToken();
-
-            const sig = await doOnce({
-              attemptId: attemptId + "-retry",
-              accessToken: fresh,
+        // Try up to 2 times for blockhash expiry
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            buildResp = await postJSON<BuildResponse>("/api/jup/build", {
               fromOwnerBase58: input.fromOwnerBase58,
               inputMint: input.inputMint,
               outputMint: input.outputMint,
               amountUi: input.amountUi,
-              slippageBps,
+              slippageBps: input.slippageBps ?? 50,
               isMax: input.isMax === true,
             });
-
-            setState((s) => ({ ...s, loading: false, signature: sig }));
-            return sig;
+            break;
+          } catch (e) {
+            if (attempt === 2 || !isBlockhashError(e)) throw e;
+            // Retry on blockhash error
+            await new Promise((r) => setTimeout(r, 500));
           }
-          throw err;
         }
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : String(e);
-        setState((s) => ({ ...s, loading: false, error: message }));
-        console.error(
-          "[useServerSponsoredSwap] failed:",
-          message,
-          (e as any)?.__server
+
+        /* ══════════ PHASE 2: SIGN ══════════ */
+        setStatus("signing");
+
+        const txBytes = Buffer.from(buildResp!.transaction, "base64");
+        const unsignedTx = VersionedTransaction.deserialize(txBytes);
+
+        // Validate user is a signer
+        const msg = unsignedTx.message as unknown as {
+          header?: { numRequiredSignatures?: number };
+          staticAccountKeys?: PublicKey[];
+        };
+        const numSigners = msg.header?.numRequiredSignatures ?? 0;
+        const signerKeys = (msg.staticAccountKeys ?? [])
+          .slice(0, numSigners)
+          .map((k) => (k instanceof PublicKey ? k : new PublicKey(k)));
+
+        if (!signerKeys.some((k) => k.toBase58() === input.fromOwnerBase58)) {
+          throw new Error("Transaction doesn't include user as signer");
+        }
+
+        let signedB64: string;
+        try {
+          signedB64 = await signWithWallet(input.fromOwnerBase58, txBytes);
+        } catch (e) {
+          if (isUserRejection(e)) {
+            throw new Error("Transaction cancelled");
+          }
+          throw e;
+        }
+
+        /* ══════════ PHASE 3: SEND ══════════ */
+        setStatus("sending");
+
+        let sendResp: SendResponse;
+        try {
+          sendResp = await postJSON<SendResponse>("/api/jup/send", {
+            transaction: signedB64,
+          });
+        } catch (e) {
+          // If blockhash expired during send, could retry build+sign
+          // For now, just throw
+          throw e;
+        }
+
+        setSignature(sendResp.signature);
+
+        /* ══════════ PHASE 4: CONFIRM (optional) ══════════ */
+        setStatus("confirming");
+
+        // We consider it done once broadcast succeeds
+        // Could add confirmation polling here if needed
+
+        setStatus("done");
+
+        const totalTime = Date.now() - startTime;
+        console.log(
+          `[Swap] ${sendResp.signature.slice(0, 8)}... ${totalTime}ms`
         );
+
+        return {
+          signature: sendResp.signature,
+          inputMint: buildResp!.inputMint,
+          outputMint: buildResp!.outputMint,
+          grossInUnits: buildResp!.grossInUnits,
+          netInUnits: buildResp!.netInUnits,
+          feeUnits: buildResp!.feeUnits,
+          buildTimeMs: buildResp!.buildTimeMs,
+          totalTimeMs: totalTime,
+        };
+      } catch (e) {
+        const err = e as Error & {
+          code?: string;
+          stage?: string;
+          retryable?: boolean;
+        };
+        const swapError: SwapError = {
+          message: err.message || "Swap failed",
+          code: err.code,
+          stage: err.stage,
+          retryable: err.retryable || isBlockhashError(e),
+        };
+
+        setError(swapError);
+        setStatus("error");
+
+        console.error("[Swap] Failed:", swapError);
         throw e;
       } finally {
-        cleanupInflight();
+        inFlightRef.current = false;
+        abortRef.current = null;
       }
     },
-    [doOnce, getAccessToken, login]
+    [signWithWallet]
   );
 
+  // ───────── Reset ─────────
+
   const reset = useCallback(() => {
-    cleanupInflight();
-    setState({ loading: false, signature: null, error: null, last: undefined });
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    inFlightRef.current = false;
+    setStatus("idle");
+    setError(null);
+    setSignature(null);
   }, []);
 
+  // ───────── Return ─────────
+
   return useMemo(
-    () => ({ swap, reset, loading, signature, error, last }),
-    [swap, reset, loading, signature, error, last]
+    () => ({
+      swap,
+      reset,
+      status,
+      error,
+      signature,
+      isBusy:
+        inFlightRef.current || !["idle", "done", "error"].includes(status),
+      isIdle: status === "idle",
+      isDone: status === "done",
+      isError: status === "error",
+    }),
+    [swap, reset, status, error, signature]
   );
 }

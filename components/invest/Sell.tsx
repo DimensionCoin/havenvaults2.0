@@ -9,12 +9,25 @@ import React, {
   useCallback,
 } from "react";
 import Image from "next/image";
-import { ArrowDown, ChevronDown } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowDown,
+  ChevronDown,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Wallet,
+  ExternalLink,
+  X,
+} from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
 
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
-import { useServerSponsoredSwap } from "@/hooks/useServerSponsoredSwap";
+import {
+  useServerSponsoredSwap,
+  type SwapStatus,
+} from "@/hooks/useServerSponsoredSwap";
 
 import {
   TOKENS,
@@ -120,14 +133,131 @@ async function fetchMintDecimalsBestEffort(
       new PublicKey(mint),
       "confirmed"
     );
-    const parsed = info.value?.data as
-      | { parsed?: { info?: { decimals?: unknown } } }
-      | null;
+    const parsed = info.value?.data as {
+      parsed?: { info?: { decimals?: unknown } };
+    } | null;
     const dec = parsed?.parsed?.info?.decimals;
     return typeof dec === "number" ? dec : null;
   } catch {
     return null;
   }
+}
+
+/* --------------------------------------------------------------------- */
+/* CoinPage-style modal + stages                                          */
+/* --------------------------------------------------------------------- */
+
+const STAGE_CONFIG: Record<
+  SwapStatus,
+  {
+    title: string;
+    subtitle: string;
+    progress: number;
+    icon: "spinner" | "wallet" | "success" | "error";
+  }
+> = {
+  idle: { title: "", subtitle: "", progress: 0, icon: "spinner" },
+  building: {
+    title: "Preparing order",
+    subtitle: "Finding best route...",
+    progress: 15,
+    icon: "spinner",
+  },
+  signing: {
+    title: "Approving the transaction",
+    subtitle: "Approving the transaction with exchange",
+    progress: 30,
+    icon: "wallet",
+  },
+  sending: {
+    title: "Submitting",
+    subtitle: "Broadcasting to network...",
+    progress: 60,
+    icon: "spinner",
+  },
+  confirming: {
+    title: "Confirming",
+    subtitle: "Waiting for network...",
+    progress: 85,
+    icon: "spinner",
+  },
+  done: {
+    title: "Order complete!",
+    subtitle: "Your swap was successful",
+    progress: 100,
+    icon: "success",
+  },
+  error: {
+    title: "Order failed",
+    subtitle: "Something went wrong",
+    progress: 0,
+    icon: "error",
+  },
+};
+
+type ModalKind = "processing" | "success" | "error";
+
+type ModalState = {
+  kind: ModalKind;
+  signature?: string | null;
+  errorMessage?: string;
+  fromSymbol?: string;
+  toSymbol?: string;
+} | null;
+
+function ProgressBar({ progress }: { progress: number }) {
+  return (
+    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+      <div
+        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+      />
+    </div>
+  );
+}
+
+function StageIcon({
+  icon,
+}: {
+  icon: "spinner" | "wallet" | "success" | "error";
+}) {
+  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
+
+  if (icon === "success") {
+    return (
+      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
+        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      </div>
+    );
+  }
+
+  if (icon === "error") {
+    return (
+      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
+        <XCircle className="h-7 w-7 text-rose-400" />
+      </div>
+    );
+  }
+
+  if (icon === "wallet") {
+    return (
+      <div
+        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
+      >
+        <Wallet className="h-7 w-7 text-amber-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${base} border-white/10 bg-white/5`}>
+      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    </div>
+  );
+}
+
+function explorerUrl(sig: string) {
+  return `https://solscan.io/tx/${sig}`;
 }
 
 /* --------------------------------------------------------------------- */
@@ -182,12 +312,22 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const {
     swap,
-    loading: swapLoading,
-    error: swapErr,
     reset: resetSwap,
+    status: swapStatus,
+    error: swapErr,
+    signature: hookSig,
+    isBusy: swapBusy,
   } = useServerSponsoredSwap();
 
-  // ✅ refresh balances AFTER modal closes
+  // ✅ coinpage-style modal state
+  const [modal, setModal] = useState<ModalState>(null);
+
+  const closeModal = useCallback(() => {
+    if (!modal || modal.kind === "processing") return;
+    setModal(null);
+  }, [modal]);
+
+  // ✅ refresh balances AFTER modal closes (success only)
   const [refreshOnClose, setRefreshOnClose] = useState(false);
   const [lastSwapSig, setLastSwapSig] = useState<string | null>(null);
   const refreshInFlight = useRef(false);
@@ -359,6 +499,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       setQuote(null);
       setQuoteErr(null);
       setQuoteLoading(false);
+      setModal(null);
       resetSwap();
     }
   }, [open, resetSwap]);
@@ -376,7 +517,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const fromUsdPrice = fromWallet?.usdPrice ?? 0;
   const estFromUsd =
-    (isMax ? fromWallet?.amount ?? 0 : parsedAmount) *
+    (isMax ? (fromWallet?.amount ?? 0) : parsedAmount) *
     (Number(fromUsdPrice) || 0);
 
   const canSubmit =
@@ -385,7 +526,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     fromToken.mint !== toToken.mint &&
     !!user?.walletAddress &&
     (isMax ? true : parsedAmount > 0) &&
-    !swapLoading;
+    !swapBusy;
 
   /* -------------------- picker filtered -------------------- */
 
@@ -394,8 +535,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       pickerSide === "from"
         ? walletTokens
         : pickerSide === "to"
-        ? toTokenOptions
-        : [];
+          ? toTokenOptions
+          : [];
     if (!pickerSearch.trim()) return base;
 
     const q = pickerSearch.trim().toLowerCase();
@@ -471,7 +612,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       setQuoteErr(null);
       return;
     }
-    if (!hasFromWallet || (fromWalletDecimals == null && fromWalletDecimals !== 0)) {
+    if (
+      !hasFromWallet ||
+      (fromWalletDecimals == null && fromWalletDecimals !== 0)
+    ) {
       setQuote(null);
       setQuoteErr(null);
       return;
@@ -617,10 +761,15 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
   const handleSubmit = async () => {
     if (!canSubmit || !fromToken || !toToken || !user?.walletAddress) return;
 
-    try {
-      resetSwap();
+    resetSwap();
+    setModal({
+      kind: "processing",
+      fromSymbol: fromToken.symbol,
+      toSymbol: toToken.symbol,
+    });
 
-      const sig = await swap({
+    try {
+      const result = await swap({
         fromOwnerBase58: user.walletAddress,
         inputMint: fromToken.mint,
         outputMint: toToken.mint,
@@ -629,12 +778,33 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
         isMax,
       });
 
-      setLastSwapSig(sig ?? null);
+      setLastSwapSig(result.signature ?? null);
       setRefreshOnClose(true);
-      onOpenChange(false);
+
+      setModal({
+        kind: "success",
+        signature: result.signature,
+        fromSymbol: fromToken.symbol,
+        toSymbol: toToken.symbol,
+      });
     } catch (e) {
-      console.error("[SellModal] swap failed", e);
+      const msg =
+        swapErr?.message ||
+        (e instanceof Error ? e.message : "Swap failed. Please try again.");
+
+      setModal({
+        kind: "error",
+        errorMessage: msg,
+        fromSymbol: fromToken.symbol,
+        toSymbol: toToken.symbol,
+      });
     }
+  };
+
+  const closeAfterSuccess = async () => {
+    // If success modal is showing, close drawer too (CoinPage-style)
+    setModal(null);
+    onOpenChange(false);
   };
 
   const openPicker = (side: PickerSide) => {
@@ -662,6 +832,12 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const hasWalletTokens = walletTokens.length > 0;
 
+  // coinpage stage config uses swapStatus while modal processing
+  const currentStage = modal?.kind === "processing" ? swapStatus : null;
+  const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
+
+  const errorToShow = swapErr?.message || null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -669,7 +845,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           // base styling
           "p-0 overflow-hidden border border-zinc-800 bg-zinc-950 py-2",
 
-          // ✅ DESKTOP: don't touch left/top/translate/inset — Radix already centers it
+          // ✅ DESKTOP: Radix centers it
           "sm:w-[min(92vw,420px)] sm:max-w-[420px] sm:max-h-[90dvh] sm:rounded-[28px]",
           "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
 
@@ -679,8 +855,141 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
         ].join(" ")}
       >
-       
-        
+        {/* ───────── CoinPage-style modal overlay ───────── */}
+        {modal && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && modal.kind !== "processing") {
+                closeModal();
+              }
+            }}
+          >
+            <div
+              className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Close button */}
+              {modal.kind !== "processing" && (
+                <div className="flex justify-end mb-2">
+                  <button
+                    onClick={closeModal}
+                    className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Content */}
+              <div className="flex flex-col items-center text-center pt-2">
+                {modal.kind === "processing" && stageConfig ? (
+                  <>
+                    <StageIcon icon={stageConfig.icon} />
+                    <div className="mt-4">
+                      <div className="text-base font-semibold text-white/90">
+                        {stageConfig.title}
+                      </div>
+                      <div className="mt-1 text-sm text-white/50">
+                        {stageConfig.subtitle}
+                      </div>
+                    </div>
+                    <div className="mt-5 w-full max-w-[200px]">
+                      <ProgressBar progress={stageConfig.progress} />
+                    </div>
+
+                    {modal.fromSymbol && modal.toSymbol && (
+                      <div className="mt-4 text-[11px] text-white/35">
+                        {modal.fromSymbol} → {modal.toSymbol}
+                      </div>
+                    )}
+                  </>
+                ) : modal.kind === "success" ? (
+                  <>
+                    <StageIcon icon="success" />
+                    <div className="mt-4">
+                      <div className="text-base font-semibold text-emerald-100">
+                        Swap complete!
+                      </div>
+                      <div className="mt-1 text-sm text-white/50">
+                        Your trade was successful
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <StageIcon icon="error" />
+                    <div className="mt-4">
+                      <div className="text-base font-semibold text-rose-100">
+                        Order failed
+                      </div>
+                      <div className="mt-1 text-sm text-white/50">
+                        Something went wrong
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Error message */}
+              {modal.kind === "error" && modal.errorMessage && (
+                <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
+                  <div className="text-xs text-rose-200/80 text-center">
+                    {modal.errorMessage}
+                  </div>
+                </div>
+              )}
+
+              {/* Transaction link */}
+              {modal.kind === "success" && modal.signature && (
+                <div className="mt-5">
+                  <a
+                    href={explorerUrl(modal.signature)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                  >
+                    <span>View transaction</span>
+                    <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
+                  </a>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              {modal.kind !== "processing" && (
+                <div className="mt-5 flex gap-2">
+                  <button
+                    onClick={() => {
+                      // close modal only
+                      closeModal();
+                    }}
+                    className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-white/10 border-white/10 text-white/80 hover:bg-white/15"
+                  >
+                    Close
+                  </button>
+
+                  {modal.kind === "success" && (
+                    <button
+                      onClick={() => {
+                        void closeAfterSuccess();
+                      }}
+                      className="flex-1 rounded-2xl bg-emerald-500/20 border border-emerald-300/30 px-4 py-3 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 transition"
+                    >
+                      Done
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Processing footer */}
+              {modal.kind === "processing" && (
+                <div className="mt-6 text-center text-xs text-white/30">
+                  Please don&apos;t close this window
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex h-full flex-col">
           {/* Scrollable body */}
@@ -719,8 +1028,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                           )}
                           <button
                             type="button"
+                            disabled={swapBusy}
                             onClick={handleMax}
-                            className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20"
+                            className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-60"
                           >
                             Max
                           </button>
@@ -733,13 +1043,14 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                         <input
                           type="text"
                           inputMode="decimal"
+                          disabled={swapBusy}
                           value={amount}
                           onChange={(e) => {
                             setIsMax(false);
                             setAmount(sanitizeAmount(e.target.value));
                           }}
                           placeholder="0.00"
-                          className="w-full bg-transparent text-left text-2xl font-semibold text-zinc-50 outline-none placeholder:text-zinc-600"
+                          className="w-full bg-transparent text-left text-2xl font-semibold text-zinc-50 outline-none placeholder:text-zinc-600 disabled:opacity-60"
                         />
                         <p className="mt-1 text-[11px] text-zinc-500">
                           {estFromUsd > 0
@@ -755,8 +1066,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       <div className="w-[152px] text-left">
                         <button
                           type="button"
+                          disabled={swapBusy}
                           onClick={() => openPicker("from")}
-                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2"
+                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2 disabled:opacity-60"
                         >
                           <div className="flex items-center gap-2">
                             <TokenAvatar token={fromToken} />
@@ -808,8 +1120,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   <div className="flex justify-center">
                     <button
                       type="button"
+                      disabled={swapBusy}
                       onClick={handleSwapSides}
-                      className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-emerald-400 hover:text-emerald-200"
+                      className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-emerald-400 hover:text-emerald-200 disabled:opacity-60"
                       title="Swap sides (only works if the Receive token is one you own)"
                     >
                       <ArrowDown className="h-4 w-4" />
@@ -831,8 +1144,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       <div className="w-[152px] text-left">
                         <button
                           type="button"
+                          disabled={swapBusy}
                           onClick={() => openPicker("to")}
-                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2"
+                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2 disabled:opacity-60"
                         >
                           <div className="flex items-center gap-2">
                             <TokenAvatar token={toToken} />
@@ -854,15 +1168,15 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                           {quoteLoading
                             ? "…"
                             : quote
-                            ? `~ ${quote.outUi}`
-                            : "—"}
+                              ? `~ ${quote.outUi}`
+                              : "—"}
                         </p>
                         <p className="mt-1 text-[10px] text-zinc-500">
                           {quoteLoading
                             ? "Fetching live quote…"
                             : quote
-                            ? `Min received: ${quote.minOutUi}`
-                            : "Enter an amount to see an estimate."}
+                              ? `Min received: ${quote.minOutUi}`
+                              : "Enter an amount to see an estimate."}
                         </p>
                       </div>
                     </div>
@@ -925,9 +1239,24 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     </p>
                   )}
 
-                  {swapErr && (
+                  {errorToShow && modal?.kind !== "error" && (
                     <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
-                      {swapErr}
+                      {errorToShow}
+                    </div>
+                  )}
+
+                  {/* If hook has a signature (debug / rare), show small link */}
+                  {hookSig && (
+                    <div className="mt-1 text-[10px] text-zinc-500">
+                      Last tx:{" "}
+                      <a
+                        href={explorerUrl(hookSig)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-emerald-300 hover:text-emerald-200 underline underline-offset-2"
+                      >
+                        view
+                      </a>
                     </div>
                   )}
                 </div>
@@ -948,11 +1277,18 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
               </DialogClose>
             ) : (
               <Button
-                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400"
+                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400 disabled:opacity-60"
                 disabled={!canSubmit}
                 onClick={handleSubmit}
               >
-                {swapLoading ? "Submitting…" : "Swap"}
+                {swapBusy ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Processing...
+                  </span>
+                ) : (
+                  "Swap"
+                )}
               </Button>
             )}
           </DialogFooter>
