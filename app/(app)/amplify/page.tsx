@@ -19,7 +19,7 @@ import { useAmplifyCoingecko } from "@/hooks/useAmplifyCoingecko";
 import { useBoosterPositions } from "@/hooks/useBoosterPositions";
 
 const TOP_TOKENS: AmplifyTokenSymbol[] = ["SOL", "ETH", "BTC"];
-const CHART_TFS: ChartTimeframe[] = ["1H", "1D", "1W", "1M", "1Y", "ALL"];
+const CHART_TFS: ChartTimeframe[] = ["1H", "1D", "1W", "1M", "1Y", "LIVE"];
 
 export default function AmplifyPage() {
   const { user } = useUser();

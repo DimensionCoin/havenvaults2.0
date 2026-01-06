@@ -31,7 +31,7 @@ function formatTimeLabel(t: number, tf: ChartTimeframe) {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
-  if (tf === "1Y" || tf === "ALL") {
+  if (tf === "1Y" || tf === "LIVE") {
     return d.toLocaleDateString(undefined, { year: "numeric", month: "short" });
   }
 

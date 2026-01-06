@@ -3,12 +3,14 @@
 
 import React, { useMemo } from "react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import type { ChartTimeframe } from "./types";
 import { formatMoney } from "./utils";
 import TimeframeTabs from "./TimeframeTabs";
 import LineOnlyChart from "./LineOnlyChart";
+import LiveChart from "./LiveChart";
 import Image from "next/image";
-import { useLiveOraclePrice } from "@/hooks/useLiveOraclePrice";
 
 type Point = { t: number; y: number };
 
@@ -17,8 +19,9 @@ type Props = {
   tokenName: string;
   tokenLogo: string | null;
   displayCurrency: string;
+  fxRate?: number;
 
-  // can still be passed for non-BTC/ETH/SOL tokens
+  // For non-BTC/ETH/SOL tokens (static price)
   price: number | null;
   pctChange: number | null;
 
@@ -56,6 +59,7 @@ export default function PriceChartPanel({
   tokenName,
   tokenLogo,
   displayCurrency,
+  fxRate = 1,
   price,
   pctChange,
   timeframes,
@@ -66,43 +70,64 @@ export default function PriceChartPanel({
   error,
 }: Props) {
   const sym = tokenSymbol.toUpperCase();
-  const wantsOracle = useMemo(() => ORACLE_SYMBOLS.has(sym), [sym]);
+  const isOracleSymbol = useMemo(() => ORACLE_SYMBOLS.has(sym), [sym]);
+  const isLive = activeTimeframe === "LIVE";
 
-  const oracle = useLiveOraclePrice(
-    wantsOracle ? (sym as "BTC" | "ETH" | "SOL") : "BTC"
+  // Subscribe to Convex for live price (only for BTC/ETH/SOL)
+  const convexPrice = useQuery(
+    api.prices.getLatestOne,
+    isOracleSymbol ? { symbol: sym as "BTC" | "ETH" | "SOL" } : "skip"
   );
 
   const fallbackCurrency =
     (typeof displayCurrency === "string" && displayCurrency.trim()) || "USD";
 
-  // ✅ FIX: memoize so deps are stable
   const safeChartData: Point[] = useMemo(() => {
     return Array.isArray(chartData) ? chartData : [];
   }, [chartData]);
 
-  const finalPrice = wantsOracle ? oracle.price : price;
+  // Determine the price to display in header
+  const headerPrice = useMemo(() => {
+    if (isOracleSymbol && convexPrice?.lastPrice) {
+      return convexPrice.lastPrice * fxRate;
+    }
+    return price;
+  }, [isOracleSymbol, convexPrice?.lastPrice, fxRate, price]);
 
-  const finalCurrency =
-    wantsOracle &&
-    typeof oracle.displayCurrency === "string" &&
-    oracle.displayCurrency.trim()
-      ? oracle.displayCurrency
-      : fallbackCurrency;
-
+  // Determine % change
   const chartTimeframePct = useMemo(() => {
-    if (loading) return null;
-    if (error) return null;
+    if (loading || error) return null;
     return calcTimeframePct(safeChartData);
   }, [safeChartData, loading, error]);
 
-  const finalPct = wantsOracle ? chartTimeframePct : pctChange;
+  // For LIVE mode, calculate % from prevPrice
+  const livePct = useMemo(() => {
+    if (!isLive || !convexPrice?.lastPrice || !convexPrice?.prevPrice) {
+      return null;
+    }
+    if (convexPrice.prevPrice === 0) return null;
+    return (
+      ((convexPrice.lastPrice - convexPrice.prevPrice) /
+        convexPrice.prevPrice) *
+      100
+    );
+  }, [isLive, convexPrice?.lastPrice, convexPrice?.prevPrice]);
+
+  const finalPct = isLive
+    ? livePct
+    : isOracleSymbol
+      ? chartTimeframePct
+      : pctChange;
 
   const pct =
     typeof finalPct === "number" && Number.isFinite(finalPct) ? finalPct : null;
   const isUp = (pct ?? 0) >= 0;
 
+  const isConnecting = isOracleSymbol && !convexPrice;
+
   return (
     <div className="glass-panel bg-white/10 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6">
+      {/* Header */}
       <div className="flex flex-col items-center text-center">
         <div className="flex items-center gap-2">
           {tokenLogo ? (
@@ -120,15 +145,25 @@ export default function PriceChartPanel({
           <div className="text-[12px] font-semibold tracking-[0.28em] text-white/55">
             {tokenSymbol}
           </div>
+
+          {/* Live indicator in header when LIVE mode */}
+          {isLive && isOracleSymbol && (
+            <div className="flex items-center gap-1.5 ml-2">
+              <div className="relative">
+                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                <div className="absolute inset-0 h-2 w-2 rounded-full bg-emerald-500 animate-ping opacity-75" />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-2 flex items-baseline justify-center gap-2">
           <span className="text-[44px] font-semibold leading-none tracking-tight text-white/92 sm:text-5xl">
-            {wantsOracle && oracle.isConnecting
+            {isConnecting
               ? "…"
-              : finalPrice === null
+              : headerPrice === null
                 ? "…"
-                : formatMoney(finalPrice, finalCurrency)}
+                : formatMoney(headerPrice, fallbackCurrency)}
           </span>
         </div>
 
@@ -152,10 +187,13 @@ export default function PriceChartPanel({
             {pct === null ? "—" : `${pct.toFixed(2)}%`}
           </span>
 
-          <span className="text-xs text-white/35">({activeTimeframe})</span>
+          <span className="text-xs text-white/35">
+            ({isLive ? "vs prev" : activeTimeframe})
+          </span>
         </div>
       </div>
 
+      {/* Chart area */}
       <div className="relative mt-4 overflow-hidden rounded-3xl border border-white/10 bg-black/45 shadow-[0_18px_55px_rgba(0,0,0,0.55)] -mx-4 sm:mx-0">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
 
@@ -168,7 +206,14 @@ export default function PriceChartPanel({
         </div>
 
         <div className="px-3 pb-3 pt-12 sm:px-4 sm:pb-4">
-          {loading && !safeChartData.length ? (
+          {isLive && isOracleSymbol ? (
+            // LIVE chart from Convex
+            <LiveChart
+              symbol={sym as "BTC" | "ETH" | "SOL"}
+              displayCurrency={fallbackCurrency}
+              fxRate={fxRate}
+            />
+          ) : loading && !safeChartData.length ? (
             <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
               Loading chart…
             </div>
@@ -183,7 +228,7 @@ export default function PriceChartPanel({
           ) : (
             <LineOnlyChart
               data={safeChartData}
-              displayCurrency={finalCurrency}
+              displayCurrency={fallbackCurrency}
               timeframe={activeTimeframe}
             />
           )}

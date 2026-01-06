@@ -1,6 +1,6 @@
 export type AmplifyTokenSymbol = "SOL" | "ETH" | "BTC";
 
-export type ChartTimeframe = "1H" | "1D" | "1W" | "1M" | "1Y" | "ALL";
+export type ChartTimeframe = "LIVE" | "1H" | "1D" | "1W" | "1M" | "1Y";
 export type PredictionTimeframe = "hourly" | "daily" | "monthly" | "yearly";
 
 export type LeverageOption = 1.5 | 2;

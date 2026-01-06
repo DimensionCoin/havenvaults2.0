@@ -2,7 +2,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AmplifyTokenSymbol, ChartTimeframe } from "@/components/amplify/types";
+import type {
+  AmplifyTokenSymbol,
+  ChartTimeframe,
+} from "@/components/amplify/types";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
 
 type HistoryPoint = { t: number; price: number }; // USD from API
@@ -16,11 +19,18 @@ type SpotResp = {
 
 type HistResp = { id: string; prices: HistoryPoint[] };
 
+/**
+ * Map timeframe to CoinGecko params.
+ * NOTE: "LIVE" is NOT handled here - it comes from Convex.
+ */
 function tfConfig(tf: ChartTimeframe): {
   days: string;
   interval: "hourly" | "daily";
-} {
+} | null {
   switch (tf) {
+    case "LIVE":
+      // LIVE is handled by Convex, not CoinGecko
+      return null;
     case "1H":
     case "1D":
       return { days: "1", interval: "hourly" };
@@ -30,8 +40,6 @@ function tfConfig(tf: ChartTimeframe): {
       return { days: "30", interval: "daily" };
     case "1Y":
       return { days: "365", interval: "daily" };
-    case "ALL":
-      return { days: "max", interval: "daily" };
     default:
       return { days: "7", interval: "hourly" };
   }
@@ -56,8 +64,9 @@ export function useAmplifyCoingecko(opts: {
   symbol: AmplifyTokenSymbol;
   timeframe: ChartTimeframe;
   fxRate: number; // USD -> display currency
+  enabled?: boolean; // Allow skipping fetch (e.g., when LIVE is selected)
 }) {
-  const { symbol, timeframe, fxRate } = opts;
+  const { symbol, timeframe, fxRate, enabled = true } = opts;
 
   const meta = useMemo(() => findTokenBySymbol(symbol), [symbol]);
   const cgId = (meta?.id || "").trim();
@@ -69,7 +78,17 @@ export function useAmplifyCoingecko(opts: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Check if this timeframe uses CoinGecko
+  const isLive = timeframe === "LIVE";
+  const shouldFetch = enabled && !isLive;
+
   useEffect(() => {
+    // Skip fetch for LIVE timeframe (handled by Convex)
+    if (!shouldFetch) {
+      setLoading(false);
+      return;
+    }
+
     if (!cgId) {
       setPriceUsd(null);
       setPct24h(null);
@@ -78,8 +97,13 @@ export function useAmplifyCoingecko(opts: {
       return;
     }
 
-    const controller = new AbortController();
     const cfg = tfConfig(timeframe);
+    if (!cfg) {
+      // Shouldn't happen if shouldFetch is correct, but guard anyway
+      return;
+    }
+
+    const controller = new AbortController();
 
     const run = async () => {
       try {
@@ -123,16 +147,17 @@ export function useAmplifyCoingecko(opts: {
 
         if (!histRes.ok) {
           setHistoryUsd([]);
-          setError("Couldn’t load chart data.");
+          setError("Couldn't load chart data.");
           return;
         }
 
         const h = (await histRes.json()) as HistResp;
         const raw = Array.isArray(h?.prices) ? h.prices : [];
         setHistoryUsd(filterWindow(timeframe, raw));
-      } catch (e: any) {
-        if (e?.name === "AbortError") return;
-        setError("Couldn’t load price data.");
+      } catch (e: unknown) {
+        const err = e as { name?: string };
+        if (err?.name === "AbortError") return;
+        setError("Couldn't load price data.");
         setHistoryUsd([]);
       } finally {
         setLoading(false);
@@ -141,14 +166,14 @@ export function useAmplifyCoingecko(opts: {
 
     void run();
     return () => controller.abort();
-  }, [cgId, timeframe]);
+  }, [cgId, timeframe, shouldFetch]);
 
   const priceDisplay = useMemo(() => {
     if (!priceUsd || !Number.isFinite(fxRate) || fxRate <= 0) return null;
     return priceUsd * fxRate;
   }, [priceUsd, fxRate]);
 
-  // ✅ return timestamps + y in display currency
+  // Return timestamps + y in display currency
   const chartData = useMemo(() => {
     if (!historyUsd.length || !Number.isFinite(fxRate) || fxRate <= 0)
       return [];
@@ -165,5 +190,6 @@ export function useAmplifyCoingecko(opts: {
     chartData,
     loading,
     error,
+    isLive, // Expose so parent knows to render LiveChart instead
   };
 }
