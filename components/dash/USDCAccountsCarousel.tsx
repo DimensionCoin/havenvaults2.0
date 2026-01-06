@@ -244,9 +244,9 @@ const USDCAccountsCarousel: React.FC = () => {
   };
 
   const slides: { key: SlideKey; label: string; index: number }[] = [
-    { key: "deposit", label: "Deposit", index: 0 },
-    { key: "flex", label: "Savings", index: 1 },
-    { key: "plus", label: "High-Interest", index: 2 },
+    { key: "deposit", label: "Deposit Account", index: 0 },
+    { key: "flex", label: "Flex Account", index: 1 },
+    { key: "plus", label: "Plus Account", index: 2 },
   ];
 
   const goPrev = () => {
