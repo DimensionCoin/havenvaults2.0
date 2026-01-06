@@ -114,8 +114,8 @@ const MarketCard: React.FC<MarketCardProps> = ({
 
         {/* Stock badge (✅ overlays and doesn't clip) */}
         {token.kind === "stock" && (
-          <span className="absolute -bottom-1 -right-1 rounded-full border border-white/15 bg-black/70 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-emerald-200 shadow">
-            STK
+          <span className="absolute -bottom-1 -right-1 rounded-full border border-white/15 bg-black/70 px-1.5 py-0.5 text-[7px] font-bold tracking-wider text-emerald-200 shadow">
+            Stock
           </span>
         )}
       </div>
