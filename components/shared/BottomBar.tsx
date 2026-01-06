@@ -23,7 +23,7 @@ const navItems: NavItem[] = [
   { href: "/invest", label: "Invest", Icon: LineChart, center: false },
   {
     href: "/exchange",
-    label: "Exchange",
+    label: "Markets",
     Icon: ArrowDownUp,
     center: false,
   },

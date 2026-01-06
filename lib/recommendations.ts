@@ -47,6 +47,7 @@ const categoryLabels: Record<TokenCategory, string> = {
   DePin: "DePin",
   Gaming: "gaming",
   NFT: "NFTs",
+  Privacy: "Privacy",
   Utility: "utility tokens",
 };
 

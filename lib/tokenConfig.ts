@@ -14,6 +14,7 @@ export type TokenCategory =
   | "DePin"
   | "Gaming"
   | "NFT"
+  | "Privacy"
   | "Utility";
 
 export type TokenKind = "crypto" | "stock";
@@ -93,6 +94,28 @@ export const TOKENS: TokenMeta[] = [
     decimals: 8,
     mints: { mainnet: "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs" },
   },
+  {
+    name: "Near",
+    symbol: "NEAR",
+    id: "near",
+    logo: "/logos/near.png",
+    kind: "crypto",
+    categories: ["Infrastructure"],
+    tags: ["L1"],
+    decimals: 8,
+    mints: { mainnet: "3ZLekZYq2qkZiSpnSvabjit34tUkjSwD1JFuW9as9wBG" },
+  },
+  {
+    name: "Monad",
+    symbol: "MON",
+    id: "monad",
+    logo: "/logos/mon.png",
+    kind: "crypto",
+    categories: ["Infrastructure"],
+    tags: ["L1"],
+    decimals: 8,
+    mints: { mainnet: "CrAr4RRJMBVwRsZtT62pEhfA9H5utymC2mVx8e7FreP2" },
+  },
 
   // ---------------- Stocks (tokenized)
   {
@@ -138,6 +161,17 @@ export const TOKENS: TokenMeta[] = [
     tags: ["Index", "Tech"],
     decimals: 8,
     mints: { mainnet: "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ" },
+  },
+  {
+    name: "Exxon Mobil",
+    symbol: "XOM",
+    id: "exxon-mobil-xstock",
+    logo: "/logos/exxon.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index", "Tech"],
+    decimals: 8,
+    mints: { mainnet: "XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh" },
   },
   {
     name: "Apple",
@@ -226,6 +260,28 @@ export const TOKENS: TokenMeta[] = [
     tags: ["Index"],
     decimals: 8,
     mints: { mainnet: "XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV" },
+  },
+  {
+    name: "Johnson & Johnson",
+    symbol: "JNJ",
+    id: "johnson-johnson-xstock",
+    logo: "/logos/jnj.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsGVi5eo1Dh2zUpic4qACcjuWGjNv8GCt3dm5XcX6Dn" },
+  },
+  {
+    name: "Walmart",
+    symbol: "WMT",
+    id: "walmart-xstock",
+    logo: "/logos/wmt.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci" },
   },
   {
     name: "Coca-Cola",
@@ -536,10 +592,21 @@ export const TOKENS: TokenMeta[] = [
     id: "omnibridge-bridged-zcash-solana",
     logo: "/logos/zec.png",
     kind: "crypto",
-    categories: ["DePin"],
+    categories: ["Privacy"],
     tags: ["Privacy"],
     decimals: 9,
     mints: { mainnet: "A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS" },
+  },
+  {
+    name: "GhostWareOS",
+    symbol: "GHOST",
+    id: "ghostwareos",
+    logo: "/logos/ghost.png",
+    kind: "crypto",
+    categories: ["Privacy"],
+    tags: ["Privacy"],
+    decimals: 9,
+    mints: { mainnet: "BBKPiLM9KjdJW7oQSKt99RVWcZdhF6sEHRKnwqeBGHST" },
   },
 
   // NFT / Meme adjacent
@@ -553,6 +620,17 @@ export const TOKENS: TokenMeta[] = [
     tags: ["Brand"],
     decimals: 9,
     mints: { mainnet: "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv" },
+  },
+  {
+    name: "Metaplex",
+    symbol: "MPLX",
+    id: "metaplex",
+    logo: "/logos/mplx.png",
+    kind: "crypto",
+    categories: ["NFT", "Infrastructure"],
+    tags: ["Brand"],
+    decimals: 9,
+    mints: { mainnet: "METAewgxyPbgwsseH8T16a39CQ5VyVxZi9zXiDPY18m" },
   },
 
   // DeFi
