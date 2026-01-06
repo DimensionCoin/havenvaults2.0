@@ -1,7 +1,8 @@
 // components/exchange/MarketList.tsx
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Token, PriceEntry } from "./types";
 import MarketCard from "./MarketCard";
 import {
@@ -12,6 +13,8 @@ import {
 } from "@/lib/tokenConfig";
 
 const CLUSTER = getCluster();
+const INITIAL_COUNT = 12;
+const LOAD_MORE_COUNT = 12;
 
 // Build mint -> meta lookup
 const MINT_TO_META: Record<string, TokenMeta> = (() => {
@@ -52,6 +55,29 @@ const MarketList: React.FC<MarketListProps> = ({
   loading = false,
   emptyMessage = "No markets found",
 }) => {
+  const [visibleCount, setVisibleCount] = useState(INITIAL_COUNT);
+
+  // Reset to initial count when tokens change (filter/search changed)
+  useEffect(() => {
+    setVisibleCount(INITIAL_COUNT);
+  }, [tokens.length]);
+
+  const visibleTokens = tokens.slice(0, visibleCount);
+  const hasMore = visibleCount < tokens.length;
+  const isExpanded = visibleCount > INITIAL_COUNT;
+  const remaining = tokens.length - visibleCount;
+
+  const handleShowMore = () => {
+    setVisibleCount((prev) => Math.min(prev + LOAD_MORE_COUNT, tokens.length));
+  };
+
+  const handleCollapse = () => {
+    setVisibleCount(INITIAL_COUNT);
+    // Scroll back to top of list smoothly
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Loading skeleton
   if (loading && tokens.length === 0) {
     return (
       <div className="space-y-2">
@@ -71,12 +97,13 @@ const MarketList: React.FC<MarketListProps> = ({
     );
   }
 
+  // Empty state
   if (tokens.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-2xl bg-zinc-900/30 py-16 text-center">
-        <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-800">
+      <div className="flex flex-col items-center justify-center rounded-2xl bg-zinc-900/30 py-12 text-center">
+        <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-800">
           <svg
-            className="h-8 w-8 text-zinc-500"
+            className="h-7 w-7 text-zinc-500"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -89,8 +116,8 @@ const MarketList: React.FC<MarketListProps> = ({
             />
           </svg>
         </div>
-        <p className="text-base font-medium text-zinc-300">{emptyMessage}</p>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="text-sm font-medium text-zinc-300">{emptyMessage}</p>
+        <p className="mt-1 text-xs text-zinc-500">
           Try adjusting your search or filters
         </p>
       </div>
@@ -98,25 +125,62 @@ const MarketList: React.FC<MarketListProps> = ({
   }
 
   return (
-    <div className="space-y-2">
-      {tokens.map((token) => {
-        const slug = getTokenSlug(token);
-        const isWishlisted = wishlistSet.has(token.mint);
-        const priceEntry = prices[token.mint];
+    <div className="space-y-3">
+      {/* Token list */}
+      <div className="space-y-2">
+        {visibleTokens.map((token) => {
+          const slug = getTokenSlug(token);
+          const isWishlisted = wishlistSet.has(token.mint);
+          const priceEntry = prices[token.mint];
 
-        return (
-          <MarketCard
-            key={token.mint}
-            token={token}
-            price={priceEntry}
-            slug={slug}
-            isWishlisted={isWishlisted}
-            onToggleWishlist={() => onToggleWishlist(token.mint, isWishlisted)}
-            displayCurrency={displayCurrency}
-            fxRate={fxRate}
-          />
-        );
-      })}
+          return (
+            <MarketCard
+              key={token.mint}
+              token={token}
+              price={priceEntry}
+              slug={slug}
+              isWishlisted={isWishlisted}
+              onToggleWishlist={() =>
+                onToggleWishlist(token.mint, isWishlisted)
+              }
+              displayCurrency={displayCurrency}
+              fxRate={fxRate}
+            />
+          );
+        })}
+      </div>
+
+      {/* Show more / Collapse buttons */}
+      {(hasMore || isExpanded) && (
+        <div className="flex items-center justify-center gap-3 pt-2">
+          {hasMore && (
+            <button
+              type="button"
+              onClick={handleShowMore}
+              className="inline-flex items-center gap-2 rounded-full bg-zinc-800 px-5 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+            >
+              <ChevronDown className="h-4 w-4" />
+              Show more ({remaining})
+            </button>
+          )}
+
+          {isExpanded && (
+            <button
+              type="button"
+              onClick={handleCollapse}
+              className="inline-flex items-center gap-2 rounded-full bg-zinc-800/50 px-5 py-2.5 text-sm font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+            >
+              <ChevronUp className="h-4 w-4" />
+              Show less
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Count indicator */}
+      <p className="text-center text-xs text-zinc-600">
+        Showing {visibleTokens.length} of {tokens.length}
+      </p>
     </div>
   );
 };

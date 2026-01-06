@@ -12,7 +12,7 @@ import {
   Droplets,
   Cpu,
   Gamepad2,
-  Image,
+  Image as ImageIcon,
   Wrench,
   CircleDot,
   HatGlasses,
@@ -45,7 +45,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   LST: <Droplets className="h-4 w-4" />,
   DePin: <Cpu className="h-4 w-4" />,
   Gaming: <Gamepad2 className="h-4 w-4" />,
-  NFT: <Image className="h-4 w-4" />,
+  NFT: <ImageIcon className="h-4 w-4" />,
   Privacy: <HatGlasses className="h-4 w-4" />,
   Utility: <Wrench className="h-4 w-4" />,
 };

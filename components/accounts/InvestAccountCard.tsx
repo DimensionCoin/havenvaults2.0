@@ -114,7 +114,7 @@ const InvestAccountCard: React.FC = () => {
             </span>
             {!hasAssets && (
               <span className="text-[10px] text-zinc-600">
-                You&apos;ll see your tokens here after you invest.
+                You&apos;ll see your assets here after you invest.
               </span>
             )}
           </div>

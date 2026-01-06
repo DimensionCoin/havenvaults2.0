@@ -39,7 +39,6 @@ type WishlistResponse = { wishlist: string[] };
 
 const CLUSTER = getCluster();
 const PRICE_CHUNK = 100;
-const PAGE_SIZE = 20;
 
 // Convert TokenMeta to Token
 const toToken = (meta: TokenMeta): Token | null => {
@@ -52,6 +51,7 @@ const toToken = (meta: TokenMeta): Token | null => {
     logoURI: meta.logo ?? undefined,
     kind: meta.kind,
     tags: meta.tags,
+    categories: meta.categories,
   };
 };
 
@@ -72,7 +72,6 @@ export default function ExchangePage() {
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<MarketTab>("all");
   const [sortOption, setSortOption] = useState<SortOption>("trending");
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Providers
   const { displayCurrency, fxRate } = useBalance();
@@ -141,43 +140,30 @@ export default function ExchangePage() {
     if (activeTab === "favorites") {
       list = list.filter((t) => wishlistSet.has(t.mint));
     } else if (activeTab !== "all") {
-      // activeTab is a TokenCategory - filter by category
-      const category = activeTab;
-      list = list.filter((t) => {
-        const meta = TOKENS.find((m) => getMintFor(m, CLUSTER) === t.mint);
-        return meta?.categories?.includes(category) ?? false;
-      });
+      // Filter by category
+      list = list.filter((t) => t.categories?.includes(activeTab) ?? false);
     }
 
-    // Filter by search (symbol, name, AND tags)
+    // Filter by search (symbol, name, tags, categories)
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((t) => {
         const sym = (t.symbol || "").toLowerCase();
         const name = (t.name || "").toLowerCase();
-
-        // Check if any tag matches the search query
         const tags = t.tags || [];
-        const tagMatch = tags.some((tag) => tag.toLowerCase().includes(q));
+        const categories = t.categories || [];
 
-        // Also check categories from tokenConfig
-        const meta = TOKENS.find((m) => getMintFor(m, CLUSTER) === t.mint);
-        const categories = meta?.categories || [];
-        const categoryMatch = categories.some((cat) =>
-          cat.toLowerCase().includes(q)
+        return (
+          sym.includes(q) ||
+          name.includes(q) ||
+          tags.some((tag) => tag.toLowerCase().includes(q)) ||
+          categories.some((cat) => cat.toLowerCase().includes(q))
         );
-
-        return sym.includes(q) || name.includes(q) || tagMatch || categoryMatch;
       });
     }
 
     return list;
   }, [activeTab, wishlistSet, search]);
-
-  // Reset visible count when filters change
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [search, activeTab, sortOption]);
 
   // ───────────────── Load prices ─────────────────
   const loadPrices = useCallback(
@@ -230,12 +216,12 @@ export default function ExchangePage() {
     [prices]
   );
 
-  // Load prices for visible tokens
+  // Load all prices on mount
   useEffect(() => {
-    const mints = filteredTokens.map((t) => t.mint);
+    const mints = CATALOG.map((t) => t.mint);
     loadPrices(mints);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredTokens.length]);
+  }, []);
 
   // ───────────────── Sort tokens ─────────────────
   const sortedTokens = useMemo(() => {
@@ -264,7 +250,6 @@ export default function ExchangePage() {
         break;
       case "trending":
       default:
-        // Sort by absolute change (most volatile first)
         list.sort(
           (a, b) => Math.abs(getChange(b.mint)) - Math.abs(getChange(a.mint))
         );
@@ -274,46 +259,34 @@ export default function ExchangePage() {
     return list;
   }, [filteredTokens, prices, sortOption]);
 
-  // Get visible tokens (for infinite scroll)
-  const visibleTokens = useMemo(() => {
-    return sortedTokens.slice(0, visibleCount);
-  }, [sortedTokens, visibleCount]);
-
-  // Load more handler
-  const handleLoadMore = useCallback(() => {
-    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, sortedTokens.length));
-  }, [sortedTokens.length]);
-
   // Refresh handler
   const handleRefresh = useCallback(() => {
-    const mints = filteredTokens.map((t) => t.mint);
+    const mints = CATALOG.map((t) => t.mint);
     loadPrices(mints, true);
-  }, [filteredTokens, loadPrices]);
+  }, [loadPrices]);
 
-  const hasMore = visibleCount < sortedTokens.length;
   const showMovers = activeTab === "all" && !search.trim();
+  const isInitialLoading =
+    wishlistLoading || (loadingPrices && Object.keys(prices).length === 0);
 
   return (
-    <div className="min-h-screen  text-zinc-50">
+    <div className="min-h-screen text-zinc-50">
       <div className="mx-auto max-w-2xl px-4 pb-24 pt-4">
         {/* Header */}
-        <header className="mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Link
-                href="/invest"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 transition-colors hover:bg-zinc-800"
-              >
-                <ChevronLeft className="h-5 w-5 text-zinc-400" />
-              </Link>
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight">Markets</h1>
-                <p className="text-sm text-zinc-500">
-                  {CATALOG.length} assets available
-                </p>
-              </div>
+        <header className="mb-5">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/invest"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 transition-colors hover:bg-zinc-800"
+            >
+              <ChevronLeft className="h-5 w-5 text-zinc-400" />
+            </Link>
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold tracking-tight">Markets</h1>
+              <p className="text-sm text-zinc-500">
+                {CATALOG.length} assets available
+              </p>
             </div>
-
             <button
               type="button"
               onClick={handleRefresh}
@@ -333,12 +306,12 @@ export default function ExchangePage() {
           <SearchBar
             value={search}
             onChange={setSearch}
-            placeholder="Search by name, symbol, or tag (e.g. DEX, AI, Meme)..."
+            placeholder="Search name, symbol, or tag..."
           />
         </div>
 
         {/* Category Tabs */}
-        <div className="mb-6">
+        <div className="mb-5">
           <CategoryTabs
             activeTab={activeTab}
             onTabChange={setActiveTab}
@@ -346,22 +319,21 @@ export default function ExchangePage() {
           />
         </div>
 
-        {/* Featured Movers (only on "All" tab without search) */}
-        {showMovers && (
-          <div className="mb-8">
+        {/* Featured Movers */}
+        {showMovers && Object.keys(prices).length > 0 && (
+          <div className="mb-6">
             <FeaturedMovers
               tokens={CATALOG}
               prices={prices}
               displayCurrency={displayCurrency}
               fxRate={fxRate}
-              loading={loadingPrices && Object.keys(prices).length === 0}
             />
           </div>
         )}
 
-        {/* Sort & Count */}
-        <div className="mb-4 flex items-center justify-between">
-          <div className="text-sm text-zinc-500">
+        {/* Results count + Sort */}
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm text-zinc-500">
             {sortedTokens.length === 0 ? (
               "No results"
             ) : (
@@ -372,46 +344,28 @@ export default function ExchangePage() {
                 {sortedTokens.length === 1 ? "market" : "markets"}
               </>
             )}
-          </div>
+          </p>
           <SortDropdown value={sortOption} onChange={setSortOption} />
         </div>
 
         {/* Market List */}
         <MarketList
-          tokens={visibleTokens}
+          tokens={sortedTokens}
           prices={prices}
           wishlistSet={wishlistSet}
           onToggleWishlist={handleToggleWishlist}
           displayCurrency={displayCurrency}
           fxRate={fxRate}
-          loading={
-            wishlistLoading ||
-            (loadingPrices && Object.keys(prices).length === 0)
-          }
+          loading={isInitialLoading}
           emptyMessage={
-            activeTab === "favorites"
-              ? "No favorites yet. Star an asset to add it here."
-              : "No markets match your search"
+            activeTab === "favorites" ? "No favorites yet" : "No markets found"
           }
         />
 
-        {/* Load More */}
-        {hasMore && (
-          <div className="mt-6 flex justify-center">
-            <button
-              type="button"
-              onClick={handleLoadMore}
-              className="rounded-full bg-zinc-900 px-6 py-3 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-            >
-              Load more ({sortedTokens.length - visibleCount} remaining)
-            </button>
-          </div>
-        )}
-
         {/* Currency indicator */}
-        <div className="mt-8 text-center text-xs text-zinc-600">
-          Prices shown in {displayCurrency}
-        </div>
+        <p className="mt-8 text-center text-xs text-zinc-600">
+          Prices in {displayCurrency}
+        </p>
       </div>
     </div>
   );

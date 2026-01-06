@@ -42,7 +42,6 @@ const MarketCard: React.FC<MarketCardProps> = ({
   slug,
   isWishlisted,
   onToggleWishlist,
-  displayCurrency, // (kept for signature parity)
   fxRate,
   loading = false,
 }) => {
