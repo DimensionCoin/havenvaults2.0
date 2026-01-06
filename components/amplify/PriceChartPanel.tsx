@@ -1,10 +1,11 @@
 // components/amplify/PriceChartPanel.tsx
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useUser } from "@/providers/UserProvider";
 import type { ChartTimeframe } from "./types";
 import { formatMoney } from "./utils";
 import TimeframeTabs from "./TimeframeTabs";
@@ -18,10 +19,8 @@ type Props = {
   tokenSymbol: string;
   tokenName: string;
   tokenLogo: string | null;
-  displayCurrency: string;
-  fxRate?: number;
 
-  // For non-BTC/ETH/SOL tokens (static price)
+  // For non-BTC/ETH/SOL tokens (static price in USD)
   price: number | null;
   pctChange: number | null;
 
@@ -29,7 +28,7 @@ type Props = {
   activeTimeframe: ChartTimeframe;
   onChangeTimeframe: (tf: ChartTimeframe) => void;
 
-  chartData: Point[];
+  chartData: Point[]; // Already in display currency from useAmplifyCoingecko
   loading: boolean;
   error: string | null;
 };
@@ -58,8 +57,6 @@ export default function PriceChartPanel({
   tokenSymbol,
   tokenName,
   tokenLogo,
-  displayCurrency,
-  fxRate = 1,
   price,
   pctChange,
   timeframes,
@@ -69,9 +66,101 @@ export default function PriceChartPanel({
   loading,
   error,
 }: Props) {
+  const { user } = useUser();
+
   const sym = tokenSymbol.toUpperCase();
   const isOracleSymbol = useMemo(() => ORACLE_SYMBOLS.has(sym), [sym]);
   const isLive = activeTimeframe === "LIVE";
+
+  // Get user's display currency
+  const displayCurrency = useMemo(() => {
+    const currency = user?.displayCurrency;
+    return typeof currency === "string" && currency.trim()
+      ? currency.trim().toUpperCase()
+      : "USD";
+  }, [user?.displayCurrency]);
+
+  // Fetch FX rate from API (cached for 5 minutes)
+  const [fxRate, setFxRate] = useState<number>(1);
+  const [fxLoading, setFxLoading] = useState(false);
+
+  useEffect(() => {
+    // Skip if USD (no conversion needed)
+    if (displayCurrency === "USD" || displayCurrency === "USDC") {
+      setFxRate(1);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchFx = async () => {
+      // Check session cache first
+      const cacheKey = `fx_rate_${displayCurrency}`;
+      try {
+        const cached = sessionStorage.getItem(cacheKey);
+        if (cached) {
+          const { rate, at } = JSON.parse(cached);
+          // Use cache if less than 5 minutes old
+          if (
+            Date.now() - at < 5 * 60 * 1000 &&
+            Number.isFinite(rate) &&
+            rate > 0
+          ) {
+            if (!cancelled) setFxRate(rate);
+            return;
+          }
+        }
+      } catch {
+        // Invalid cache, continue to fetch
+      }
+
+      setFxLoading(true);
+
+      try {
+        const res = await fetch(
+          `/api/fx?currency=${encodeURIComponent(displayCurrency)}`,
+          {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+          }
+        );
+
+        if (!res.ok) {
+          console.warn("[PriceChartPanel] FX fetch failed:", res.status);
+          return;
+        }
+
+        const data = await res.json();
+        const rate = Number(data?.rate);
+
+        if (Number.isFinite(rate) && rate > 0) {
+          if (!cancelled) {
+            setFxRate(rate);
+            // Cache the rate
+            try {
+              sessionStorage.setItem(
+                cacheKey,
+                JSON.stringify({ rate, at: Date.now() })
+              );
+            } catch {
+              // sessionStorage might not be available
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[PriceChartPanel] FX fetch error:", e);
+      } finally {
+        if (!cancelled) setFxLoading(false);
+      }
+    };
+
+    fetchFx();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [displayCurrency]);
 
   // Subscribe to Convex for live price (only for BTC/ETH/SOL)
   const convexPrice = useQuery(
@@ -79,19 +168,21 @@ export default function PriceChartPanel({
     isOracleSymbol ? { symbol: sym as "BTC" | "ETH" | "SOL" } : "skip"
   );
 
-  const fallbackCurrency =
-    (typeof displayCurrency === "string" && displayCurrency.trim()) || "USD";
-
   const safeChartData: Point[] = useMemo(() => {
     return Array.isArray(chartData) ? chartData : [];
   }, [chartData]);
 
   // Determine the price to display in header
+  // Convex prices are in USD, so we multiply by fxRate
   const headerPrice = useMemo(() => {
     if (isOracleSymbol && convexPrice?.lastPrice) {
       return convexPrice.lastPrice * fxRate;
     }
-    return price;
+    // For non-oracle tokens, price prop is in USD
+    if (price !== null && Number.isFinite(price)) {
+      return price * fxRate;
+    }
+    return null;
   }, [isOracleSymbol, convexPrice?.lastPrice, fxRate, price]);
 
   // Determine % change
@@ -159,11 +250,11 @@ export default function PriceChartPanel({
 
         <div className="mt-2 flex items-baseline justify-center gap-2">
           <span className="text-[44px] font-semibold leading-none tracking-tight text-white/92 sm:text-5xl">
-            {isConnecting
+            {isConnecting || fxLoading
               ? "…"
               : headerPrice === null
                 ? "…"
-                : formatMoney(headerPrice, fallbackCurrency)}
+                : formatMoney(headerPrice, displayCurrency)}
           </span>
         </div>
 
@@ -210,7 +301,7 @@ export default function PriceChartPanel({
             // LIVE chart from Convex
             <LiveChart
               symbol={sym as "BTC" | "ETH" | "SOL"}
-              displayCurrency={fallbackCurrency}
+              displayCurrency={displayCurrency}
               fxRate={fxRate}
             />
           ) : loading && !safeChartData.length ? (
@@ -228,7 +319,7 @@ export default function PriceChartPanel({
           ) : (
             <LineOnlyChart
               data={safeChartData}
-              displayCurrency={fallbackCurrency}
+              displayCurrency={displayCurrency}
               timeframe={activeTimeframe}
             />
           )}

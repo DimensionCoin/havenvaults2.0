@@ -125,7 +125,6 @@ export default function AmplifyPage() {
               tokenSymbol={activeSymbol}
               tokenName={activeMeta?.name ?? activeSymbol}
               tokenLogo={activeMeta?.logo ?? null}
-              displayCurrency={displayCurrency}
               price={safePriceDisplay}
               pctChange={safePct24h}
               timeframes={CHART_TFS}

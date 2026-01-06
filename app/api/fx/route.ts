@@ -1,3 +1,4 @@
+//app/api/fx/route.ts
 import { NextResponse, NextRequest } from "next/server";
 import { PrivyClient } from "@privy-io/server-auth";
 import { jwtVerify } from "jose";
