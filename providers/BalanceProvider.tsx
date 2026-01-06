@@ -10,6 +10,8 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { useUser } from "./UserProvider";
 
 export type WalletToken = {
@@ -25,61 +27,47 @@ export type WalletToken = {
   usdChange24h?: number;
 };
 
-/**
- * ✅ Booster position shape stored in context.
- * This includes everything needed to compute:
- * - per-position withdrawable (collateral + pnl)
- * - portfolio totalUsd (wallet + flex + booster take-home)
- * - lite UI (spotValueUsd, pnlUsd, sizeTokens)
- *
- * IMPORTANT:
- * - entryUsd/sizeUsd/collateralUsd are BASE USD.
- * - pnlUsd/spotValueUsd/takeHomeUsd are BASE USD derived from marks.
- */
 type BoosterStaticPosition = {
-  id: string; // publicKey
+  id: string;
   publicKey: string;
   symbol: "SOL" | "ETH" | "BTC";
   isLong: boolean;
   createdAt: string;
 
-  entryUsd: number; // base USD
-  sizeUsd: number; // base USD (not take-home)
-  collateralUsd: number; // base USD
+  entryUsd: number;
+  sizeUsd: number;
+  collateralUsd: number;
 
-  // ✅ Derived fields (base USD / tokens)
-  sizeTokens: number; // sizeUsd / entryUsd
-  pnlUsd: number; // raw P&L in USD
-  spotValueUsd: number; // position value in USD (sizeUsd + pnlUsd)
-  takeHomeUsd: number; // withdrawable in USD (collateralUsd + pnlUsd)
+  sizeTokens: number;
+  pnlUsd: number;
+  spotValueUsd: number;
+  takeHomeUsd: number;
 };
 
 type BalanceContextValue = {
   loading: boolean;
   tokens: WalletToken[];
 
-  // ✅ total portfolio value (includes boosted take-home)
-  totalUsd: number; // display currency
-  totalChange24hUsd: number; // display currency
+  totalUsd: number;
+  totalChange24hUsd: number;
   totalChange24hPct: number;
 
   lastUpdated: number | null;
 
-  usdcUsd: number; // display currency
+  usdcUsd: number;
   usdcAmount: number;
 
-  savingsFlexUsd: number; // display currency
+  savingsFlexUsd: number;
   savingsFlexAmount: number;
 
   nativeSol: number;
 
   displayCurrency: string;
-  fxRate: number; // display per 1 USD (same meaning you already use)
+  fxRate: number;
 
-  // ✅ boosted positions
-  boosterTakeHomeUsd: number; // display currency (SUM of withdrawables)
+  boosterTakeHomeUsd: number;
   boosterPositionsCount: number;
-  boosterPositions: BoosterStaticPosition[]; // enriched list for UI anywhere
+  boosterPositions: BoosterStaticPosition[];
 
   refresh: () => Promise<void>;
   refreshNow: () => Promise<void>;
@@ -132,22 +120,17 @@ type BoosterApiResponse = {
     symbol: "SOL" | "ETH" | "BTC";
     side: "long" | "short";
     account: {
-      openTime?: string; // seconds string
-      price: string; // u64 1e6
-      sizeUsd: string; // u64 1e6
-      collateralUsd: string; // u64 1e6
+      openTime?: string;
+      price: string;
+      sizeUsd: string;
+      collateralUsd: string;
     };
   }>;
 };
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-// ----- pyth ids -----
-const PYTH_PRICE_IDS: Record<"SOL" | "ETH" | "BTC", string> = {
-  BTC: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
-  ETH: "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
-  SOL: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
-};
+/* ───────── HELPERS ───────── */
 
 function safeNumber(v: unknown, fallback = 0): number {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
@@ -169,58 +152,7 @@ function usdFrom6Str(x?: string | null): number {
   return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
 }
 
-/**
- * Hermes returns parsed price updates.
- * We only need a mark price per symbol.
- */
-async function fetchHermesMarks(
-  symbols: Array<"SOL" | "ETH" | "BTC">,
-  signal?: AbortSignal
-): Promise<Partial<Record<"SOL" | "ETH" | "BTC", number>>> {
-  const uniq = Array.from(new Set(symbols)).filter(Boolean);
-  const ids = uniq.map((s) => PYTH_PRICE_IDS[s]).filter(Boolean);
-  if (!ids.length) return {};
-
-  const qs = ids.map((id) => `ids[]=${encodeURIComponent(id)}`).join("&");
-
-  const res = await fetch(
-    `https://hermes.pyth.network/v2/updates/price/latest?${qs}`,
-    { cache: "no-store", signal }
-  );
-
-  if (!res.ok) return {};
-
-  const body = (await res.json().catch(() => null)) as {
-    parsed?: Array<{ id: string; price?: { price?: string; expo?: number } }>;
-  } | null;
-
-  const parsed = Array.isArray(body?.parsed) ? body!.parsed! : [];
-
-  const idToPrice: Record<string, number> = {};
-  for (const u of parsed) {
-    const id = safeStr(u?.id);
-    const rawStr = safeStr(u?.price?.price);
-    const expo = Number(u?.price?.expo);
-    const raw = Number.parseInt(rawStr, 10);
-
-    if (!id) continue;
-    if (!Number.isFinite(raw) || !Number.isFinite(expo)) continue;
-
-    const px = raw * Math.pow(10, expo);
-    if (!Number.isFinite(px) || px <= 0) continue;
-
-    idToPrice[id] = px;
-  }
-
-  const out: Partial<Record<"SOL" | "ETH" | "BTC", number>> = {};
-  for (const s of uniq) {
-    const id = PYTH_PRICE_IDS[s];
-    const px = idToPrice[id];
-    if (Number.isFinite(px) && px! > 0) out[s] = px!;
-  }
-
-  return out;
-}
+/* ───────── PROVIDER ───────── */
 
 export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -229,6 +161,30 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const ownerAddress = user?.walletAddress || "";
   const ownerReady = Boolean(ownerAddress?.trim());
+
+  /* ───────── Convex price subscription (real-time!) ───────── */
+  const convexPrices = useQuery(api.prices.getLatest);
+
+  const priceMap = useMemo(() => {
+    const map: Record<"SOL" | "ETH" | "BTC", number> = {
+      SOL: 0,
+      ETH: 0,
+      BTC: 0,
+    };
+
+    if (!convexPrices) return map;
+
+    for (const row of convexPrices) {
+      const sym = row.symbol as "SOL" | "ETH" | "BTC";
+      if (sym === "SOL" || sym === "ETH" || sym === "BTC") {
+        map[sym] = row.lastPrice;
+      }
+    }
+
+    return map;
+  }, [convexPrices]);
+
+  /* ───────── State ───────── */
 
   const [tokens, setTokens] = useState<WalletToken[]>([]);
   const [nativeSol, setNativeSol] = useState(0);
@@ -244,30 +200,71 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [displayCurrency, setDisplayCurrency] = useState<string>("USD");
   const [fxRateState, setFxRateState] = useState<number>(1);
 
-  // base totals (wallet + flex) in display currency
   const [baseTotalUsdDisplay, setBaseTotalUsdDisplay] = useState(0);
   const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
   const [totalChange24hPct, setTotalChange24hPct] = useState(0);
 
-  // booster positions: enriched list + withdrawable total
-  const [boosterPositions, setBoosterPositions] = useState<
-    BoosterStaticPosition[]
+  // Raw booster positions (without P&L computed)
+  const [boosterPositionsRaw, setBoosterPositionsRaw] = useState<
+    Array<{
+      id: string;
+      publicKey: string;
+      symbol: "SOL" | "ETH" | "BTC";
+      isLong: boolean;
+      createdAt: string;
+      entryUsd: number;
+      sizeUsd: number;
+      collateralUsd: number;
+    }>
   >([]);
-  const [boosterPositionsCount, setBoosterPositionsCount] = useState(0);
 
-  // NOTE: "Take-home" is SUM of (collateral + pnl) across all booster positions.
-  // Stored in DISPLAY currency for easy use throughout the UI.
-  const [boosterTakeHomeUsd, setBoosterTakeHomeUsd] = useState(0); // display currency
-  const boosterTakeHomeBaseRef = useRef(0); // base USD (for snapshots + recalcs)
+  const refreshInflight = useRef<Promise<void> | null>(null);
 
-  // total = base + booster take-home (both in display currency)
+  /* ───────── Compute booster positions with live prices ───────── */
+
+  const boosterPositions = useMemo<BoosterStaticPosition[]>(() => {
+    return boosterPositionsRaw.map((p) => {
+      const markUsd = priceMap[p.symbol] > 0 ? priceMap[p.symbol] : p.entryUsd;
+
+      const pnlUsd =
+        p.entryUsd > 0 && p.sizeUsd > 0
+          ? p.isLong
+            ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
+            : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
+          : 0;
+
+      const takeHomeUsd = p.collateralUsd + pnlUsd;
+      const spotValueUsd = p.sizeUsd + pnlUsd;
+      const sizeTokens = p.entryUsd > 0 ? p.sizeUsd / p.entryUsd : 0;
+
+      return {
+        ...p,
+        sizeTokens,
+        pnlUsd,
+        spotValueUsd,
+        takeHomeUsd,
+      };
+    });
+  }, [boosterPositionsRaw, priceMap]);
+
+  const boosterPositionsCount = boosterPositions.length;
+
+  // Take-home in display currency
+  const boosterTakeHomeUsd = useMemo(() => {
+    const baseSum = boosterPositions.reduce(
+      (sum, p) => sum + (Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0),
+      0
+    );
+    return baseSum * fxRateState;
+  }, [boosterPositions, fxRateState]);
+
+  // Total = base + booster take-home
   const totalUsd = useMemo(
     () => baseTotalUsdDisplay + boosterTakeHomeUsd,
     [baseTotalUsdDisplay, boosterTakeHomeUsd]
   );
 
-  // prevent refresh dogpile
-  const refreshInflight = useRef<Promise<void> | null>(null);
+  /* ───────── Refresh (fetches wallet, flex, booster positions) ───────── */
 
   const runRefresh = useCallback(
     async (opts?: { bypassUserLoading?: boolean }) => {
@@ -278,14 +275,18 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
         const owner = user?.walletAddress || "";
 
-        // flex linked?
         const flexSubdoc = user?.savingsAccounts?.find(
-          (a: any) => a?.type === "flex"
+          (a: { type?: string }) => a?.type === "flex"
         );
         const flexMarginfiPk =
-          typeof (flexSubdoc as any)?.marginfiAccountPk === "string" &&
-          (flexSubdoc as any).marginfiAccountPk.trim()
-            ? (flexSubdoc as any).marginfiAccountPk.trim()
+          typeof (flexSubdoc as { marginfiAccountPk?: string })
+            ?.marginfiAccountPk === "string" &&
+          (
+            flexSubdoc as { marginfiAccountPk?: string }
+          ).marginfiAccountPk!.trim()
+            ? (
+                flexSubdoc as { marginfiAccountPk?: string }
+              ).marginfiAccountPk!.trim()
             : null;
 
         const hasLinkedFlexAccount = Boolean(flexMarginfiPk);
@@ -297,16 +298,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setUsdcAmount(0);
           setSavingsFlexUsd(0);
           setSavingsFlexAmount(0);
-
           setBaseTotalUsdDisplay(0);
           setTotalChange24hUsd(0);
           setTotalChange24hPct(0);
-
-          setBoosterPositions([]);
-          setBoosterPositionsCount(0);
-          boosterTakeHomeBaseRef.current = 0;
-          setBoosterTakeHomeUsd(0);
-
+          setBoosterPositionsRaw([]);
           setLastUpdated(Date.now());
           setDisplayCurrency("USD");
           setFxRateState(1);
@@ -316,52 +311,37 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         setLoading(true);
 
         try {
-          const walletUrl = `/api/user/wallet/balance?owner=${encodeURIComponent(
-            owner
-          )}`;
-
-          const walletReq = fetch(walletUrl, {
-            method: "GET",
-            cache: "no-store",
-          });
-
-          const fxReq = fetch("/api/fx", {
-            method: "GET",
-            cache: "no-store",
-            credentials: "include",
-          });
-
-          const flexReq = hasLinkedFlexAccount
-            ? fetch("/api/savings/flex/balance", {
-                method: "GET",
-                cache: "no-store",
-                credentials: "include",
-              })
-            : Promise.resolve(null);
-
-          // ✅ booster positions fetch happens HERE (once per refresh)
-          const boosterReq = fetch("/api/booster/positions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ownerBase58: owner }),
-            cache: "no-store",
-          });
-
+          // Parallel fetch: wallet, FX, flex, booster positions
           const [walletRes, fxRes, flexRes, boosterRes] = await Promise.all([
-            walletReq,
-            fxReq,
-            flexReq,
-            boosterReq,
+            fetch(
+              `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
+              { method: "GET", cache: "no-store" }
+            ),
+            fetch("/api/fx", {
+              method: "GET",
+              cache: "no-store",
+              credentials: "include",
+            }),
+            hasLinkedFlexAccount
+              ? fetch("/api/savings/flex/balance", {
+                  method: "GET",
+                  cache: "no-store",
+                  credentials: "include",
+                })
+              : Promise.resolve(null),
+            fetch("/api/booster/positions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ownerBase58: owner }),
+              cache: "no-store",
+            }),
           ]);
 
-          // ---------- wallet ----------
+          // ---------- Wallet ----------
           if (!walletRes.ok) {
-            const text = await walletRes.text().catch(() => "");
             console.error(
-              "[BalanceProvider] /api/user/wallet/balance failed:",
-              walletRes.status,
-              walletRes.statusText,
-              text
+              "[BalanceProvider] wallet fetch failed:",
+              walletRes.status
             );
             setLastUpdated(Date.now());
             return;
@@ -400,17 +380,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             (a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0)
           );
 
-          const walletTotalUsdBase =
-            typeof walletJson.totalUsd === "number" &&
-            !Number.isNaN(walletJson.totalUsd)
-              ? walletJson.totalUsd
-              : 0;
-
-          const walletChangeUsdBase =
-            typeof walletJson.totalChange24hUsd === "number" &&
-            !Number.isNaN(walletJson.totalChange24hUsd)
-              ? walletJson.totalChange24hUsd
-              : 0;
+          const walletTotalUsdBase = safeNumber(walletJson.totalUsd, 0);
+          const walletChangeUsdBase = safeNumber(
+            walletJson.totalChange24hUsd,
+            0
+          );
 
           // ---------- FX ----------
           let fxRate = 1;
@@ -423,8 +397,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             if (typeof fxData.target === "string" && fxData.target.trim()) {
               fxTarget = fxData.target.trim().toUpperCase();
             }
-          } else {
-            console.warn("[BalanceProvider] /api/fx failed:", fxRes.status);
           }
 
           if (!Number.isFinite(fxRate) || fxRate <= 0) {
@@ -432,7 +404,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             fxTarget = "USD";
           }
 
-          // ---------- flex savings ----------
+          // ---------- Flex Savings ----------
           let flexAmount = 0;
           let flexUsdBase = 0;
 
@@ -447,32 +419,17 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               const amountUiStr =
                 typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
               flexAmount = safeNumber(amountUiStr, 0);
-              flexUsdBase = flexAmount; // USDC-like
+              flexUsdBase = flexAmount;
             } else {
-              const t = await flexRes.text().catch(() => "");
               console.warn(
-                "[BalanceProvider] /api/savings/flex/balance failed:",
-                flexRes.status,
-                flexRes.statusText,
-                t
+                "[BalanceProvider] flex fetch failed:",
+                flexRes.status
               );
-              flexAmount = 0;
-              flexUsdBase = 0;
             }
           }
 
-          // ---------- booster positions (fetch + compute withdrawable correctly) ----------
-          // Step 1: parse raw booster positions (base fields)
-          let boosterBase: Array<{
-            id: string;
-            publicKey: string;
-            symbol: "SOL" | "ETH" | "BTC";
-            isLong: boolean;
-            createdAt: string;
-            entryUsd: number;
-            sizeUsd: number;
-            collateralUsd: number;
-          }> = [];
+          // ---------- Booster Positions (raw, no P&L yet) ----------
+          const boosterRaw: typeof boosterPositionsRaw = [];
 
           if (boosterRes.ok) {
             const bj = (await boosterRes
@@ -480,107 +437,45 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               .catch(() => null)) as BoosterApiResponse | null;
             const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
 
-            boosterBase = raw
-              .map((p) => {
-                const symbol = safeSymbol(p?.symbol);
-                if (!symbol) return null;
+            for (const p of raw) {
+              const symbol = safeSymbol(p?.symbol);
+              if (!symbol) continue;
 
-                const pk = safeStr(p?.publicKey);
-                if (!pk) return null;
+              const pk = safeStr(p?.publicKey);
+              if (!pk) continue;
 
-                const entryUsd = usdFrom6Str(p?.account?.price);
-                const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
-                const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
-                if (!(sizeUsd > 0) || !(entryUsd > 0)) return null;
+              const entryUsd = usdFrom6Str(p?.account?.price);
+              const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
+              const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
 
-                const isLong = p?.side === "long";
+              if (!(sizeUsd > 0) || !(entryUsd > 0)) continue;
 
-                const openSecs = Number(safeStr(p?.account?.openTime || "0"));
-                const createdAt =
-                  Number.isFinite(openSecs) &&
-                  openSecs > 0 &&
-                  openSecs < 10_000_000_000
-                    ? new Date(openSecs * 1000).toISOString()
-                    : new Date().toISOString();
+              const isLong = p?.side === "long";
 
-                return {
-                  id: pk,
-                  publicKey: pk,
-                  symbol,
-                  isLong,
-                  createdAt,
-                  entryUsd,
-                  sizeUsd,
-                  collateralUsd,
-                };
-              })
-              .filter(Boolean) as any[];
-          }
+              const openSecs = Number(safeStr(p?.account?.openTime || "0"));
+              const createdAt =
+                Number.isFinite(openSecs) &&
+                openSecs > 0 &&
+                openSecs < 10_000_000_000
+                  ? new Date(openSecs * 1000).toISOString()
+                  : new Date().toISOString();
 
-          // Step 2: fetch marks ONCE (no polling)
-          let marks: Partial<Record<"SOL" | "ETH" | "BTC", number>> = {};
-          if (boosterBase.length) {
-            const controller = new AbortController();
-            try {
-              marks = await fetchHermesMarks(
-                boosterBase.map((p) => p.symbol),
-                controller.signal
-              );
-            } catch {
-              marks = {};
+              boosterRaw.push({
+                id: pk,
+                publicKey: pk,
+                symbol,
+                isLong,
+                createdAt,
+                entryUsd,
+                sizeUsd,
+                collateralUsd,
+              });
             }
           }
 
-          // Step 3: enrich + compute WITHDRAWABLE = collateralUsd + pnlUsd
-          const boosterEnriched: BoosterStaticPosition[] = boosterBase.map(
-            (p) => {
-              const mark = marks[p.symbol];
-              const markUsd =
-                Number.isFinite(mark as number) && (mark as number) > 0
-                  ? (mark as number)
-                  : p.entryUsd;
+          setBoosterPositionsRaw(boosterRaw);
 
-              // raw P&L: sizeUsd * %move (same logic you already had in the polling effect)
-              const pnlUsd =
-                p.entryUsd > 0 && p.sizeUsd > 0
-                  ? p.isLong
-                    ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
-                    : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
-                  : 0;
-
-              const takeHomeUsd = p.collateralUsd + pnlUsd;
-
-              // position "value" shown in UI: sizeUsd + pnl
-              const spotValueUsd = p.sizeUsd + pnlUsd;
-
-              // token qty: sizeUsd / entry
-              const sizeTokens = p.entryUsd > 0 ? p.sizeUsd / p.entryUsd : 0;
-
-              return {
-                ...p,
-                sizeTokens,
-                pnlUsd,
-                spotValueUsd,
-                takeHomeUsd,
-              };
-            }
-          );
-
-          setBoosterPositions(boosterEnriched);
-          setBoosterPositionsCount(boosterEnriched.length);
-
-          // ✅ SUM withdrawable in BASE USD, store in ref for snapshots
-          const boosterTakeHomeBase = boosterEnriched.reduce((sum, p) => {
-            const net = Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0;
-            return sum + net;
-          }, 0);
-
-          boosterTakeHomeBaseRef.current = boosterTakeHomeBase;
-
-          // ✅ store TAKE-HOME in DISPLAY currency (this is what you add to totalUsd)
-          setBoosterTakeHomeUsd(boosterTakeHomeBase * fxRate);
-
-          // ---------- totals (BASE USD, excluding booster; booster added via take-home state) ----------
+          // ---------- Totals (base USD, excluding booster which is computed via useMemo) ----------
           const combinedBaseUsd =
             walletTotalUsdBase + (hasLinkedFlexAccount ? flexUsdBase : 0);
 
@@ -592,7 +487,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           const changePct =
             prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
 
-          // ---------- convert to DISPLAY currency ----------
+          // ---------- Convert to display currency ----------
           const convertOpt = (n?: number): number | undefined =>
             typeof n === "number" && !Number.isNaN(n) ? n * fxRate : undefined;
 
@@ -606,45 +501,48 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           );
 
           setTokens(nonUsdcTokensDisplay);
-
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
-
           setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
           setSavingsFlexUsd((hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate);
-
           setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
           setTotalChange24hPct(changePct);
-
           setDisplayCurrency(fxTarget);
           setFxRateState(fxRate);
-
           setLastUpdated(Date.now());
 
-          // ---------- snapshot (BASE USD) ----------
-          // snapshot uses booster take-home BASE (no loops)
+          // ---------- Snapshot (uses current prices from Convex) ----------
+          // Compute booster take-home with current prices for snapshot
+          const boosterTakeHomeBase = boosterRaw.reduce((sum, p) => {
+            const markUsd =
+              priceMap[p.symbol] > 0 ? priceMap[p.symbol] : p.entryUsd;
+            const pnlUsd =
+              p.entryUsd > 0 && p.sizeUsd > 0
+                ? p.isLong
+                  ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
+                  : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
+                : 0;
+            return sum + p.collateralUsd + pnlUsd;
+          }, 0);
+
           const snapshotTotalBase = combinedBaseUsd + boosterTakeHomeBase;
 
           if (snapshotTotalBase > 0) {
-            try {
-              await fetch("/api/user/balance/snapshot", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  owner,
-                  totalUsd: snapshotTotalBase,
-                  breakdown: {
-                    ...(hasLinkedFlexAccount
-                      ? { savingsFlex: flexUsdBase }
-                      : {}),
-                    boosterTakeHome: boosterTakeHomeBase,
-                  },
-                }),
-              });
-            } catch (e) {
+            fetch("/api/user/balance/snapshot", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                owner,
+                totalUsd: snapshotTotalBase,
+                breakdown: {
+                  ...(hasLinkedFlexAccount ? { savingsFlex: flexUsdBase } : {}),
+                  boosterTakeHome: boosterTakeHomeBase,
+                },
+              }),
+            }).catch((e) => {
               console.error("[BalanceProvider] snapshot failed:", e);
-            }
+            });
           }
         } catch (err) {
           console.error("[BalanceProvider] refresh failed:", err);
@@ -661,7 +559,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         refreshInflight.current = null;
       }
     },
-    [user, userLoading]
+    [user, userLoading, priceMap]
   );
 
   const refresh = useCallback(async () => {
@@ -672,41 +570,30 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     await runRefresh({ bypassUserLoading: true });
   }, [runRefresh]);
 
-  // ✅ initial refresh only when owner becomes available / changes
+  // Initial refresh when owner becomes available
   useEffect(() => {
     if (!ownerReady) return;
     void runRefresh({ bypassUserLoading: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerReady, ownerAddress]);
 
-  // ✅ NO POLLING.
-  // If you want updates, call refresh() explicitly (e.g., after trade/close).
-
   const value: BalanceContextValue = {
     loading,
     tokens,
-
     totalUsd,
     totalChange24hUsd,
     totalChange24hPct,
-
     lastUpdated,
-
     usdcUsd,
     usdcAmount,
-
     savingsFlexUsd,
     savingsFlexAmount,
-
     nativeSol,
-
     displayCurrency,
     fxRate: fxRateState,
-
     boosterTakeHomeUsd,
     boosterPositionsCount,
     boosterPositions,
-
     refresh,
     refreshNow,
   };

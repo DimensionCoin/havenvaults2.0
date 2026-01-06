@@ -2,7 +2,9 @@
 
 import React, { useMemo, useCallback } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useBalance } from "@/providers/BalanceProvider";
+import { findTokenBySymbol } from "@/lib/tokenConfig";
 
 /* ───────── TYPES ───────── */
 
@@ -95,15 +97,13 @@ function formatMoneyNoCode(n: number, currency: string) {
       maximumFractionDigits: 2,
     }).formatToParts(value);
 
-    // join everything EXCEPT any accidental currency "code"/"name" parts
-    // (typically it's just "currency" with symbol, but we keep it safe)
+    // Keep "$", "€", "£", etc. Remove longer currency displays like "CA$"
     return parts
-      .filter((p) => p.type !== "currency" || p.value.length <= 2) // keep "$", "€", "£", etc.
+      .filter((p) => p.type !== "currency" || p.value.length <= 2)
       .map((p) => p.value)
       .join("")
       .trim();
   } catch {
-    // fallback (worst-case): "$" prefix
     const abs = Number.isFinite(value) ? value : 0;
     return `$${abs.toFixed(2)}`;
   }
@@ -198,6 +198,7 @@ const OpenPositionsMini: React.FC = () => {
 
             {topRows.map((p, idx) => {
               const symbol = safeStr(p.symbol, "SOL").toUpperCase();
+              const meta = findTokenBySymbol(symbol);
 
               const positionValueUsd = safeNum(
                 p.spotValueUsd,
@@ -234,7 +235,15 @@ const OpenPositionsMini: React.FC = () => {
                 >
                   {/* LEFT */}
                   <div className="min-w-0">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Image
+                        src={meta?.logo || "/placeholder.svg"}
+                        alt={`${symbol} logo`}
+                        width={22}
+                        height={22}
+                        className="h-5 w-5 rounded-full border border-white/15 bg-white/5"
+                      />
+
                       <span className="text-[13px] font-semibold">
                         {symbol}
                       </span>
@@ -258,7 +267,7 @@ const OpenPositionsMini: React.FC = () => {
                       {formatMoneyNoCode(collateralLocal, displayCurrency)}
                     </p>
 
-                    {/* ✅ P&L label LEFT of value */}
+                    {/* P&L label LEFT of value */}
                     <div className="mt-2 inline-flex items-baseline gap-2">
                       <span className="text-[11px] text-zinc-400">P&amp;L</span>
                       <span

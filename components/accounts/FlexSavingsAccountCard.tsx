@@ -72,7 +72,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     "USD"
   ).toUpperCase();
 
-  // ✅ Only treat as “open account” when we have a real marginfiAccountPk
+  // ✅ Only treat as "open account" when we have a real marginfiAccountPk
   const linkedMarginfiPk =
     typeof savingsFlex?.marginfiAccountPk === "string" &&
     savingsFlex.marginfiAccountPk.trim()
@@ -83,10 +83,10 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
   // because `account` may exist even when the marginfi link isn't real.
   const hasAccount = Boolean(linkedMarginfiPk);
 
-  // address to show on the “open” style card
+  // address to show on the "open" style card
   const accountPkToShow = linkedMarginfiPk || "";
 
-  // ✅ FIX: Always prefer BalanceProvider’s live balance for display.
+  // ✅ FIX: Always prefer BalanceProvider's live balance for display.
   // Only fall back to account.totalDeposited if provider value is missing.
   const effectiveBalance = useMemo(() => {
     if (Number.isFinite(savingsFlexUsd)) return savingsFlexUsd as number;
@@ -291,10 +291,11 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
             setDrawerOpen(open);
             if (!open) setDrawerMode(null);
           }}
+          availableBalance={effectiveBalance}
         />
       )}
     </Drawer>
   );
-};;
+};
 
 export default FlexSavingsAccountCard;
