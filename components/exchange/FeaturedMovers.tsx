@@ -79,11 +79,11 @@ const MoverCard: React.FC<{
       ].join(" ")}
     >
       {/* subtle top fade like CoinPage chart */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/35 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/35 to-transparent " />
 
-      <div className="relative p-4">
+      <div className="relative p-4 ">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 ">
             {token.logoURI ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -113,13 +113,13 @@ const MoverCard: React.FC<{
             <div className="text-[13px] font-semibold text-slate-50">
               {priceDisplay === null ? "—" : formatMoneyNoCode(priceDisplay)}
             </div>
-            <div className="mt-0.5 text-[11px] text-white/35">Price</div>
+            <div className="mt-1.5  mb-text-[11px] text-white/35">Price</div>
           </div>
 
           <span
             className={[
-              "shrink-0 inline-flex items-center gap-1 rounded-full",
-              "border px-2 py-0.5 text-[11px] font-semibold",
+              "shrink-0 inline-flex items-center gap-1 rounded-full ",
+              "border px-2 py-0.5 text-[11px] font-semibold ",
               isPositive
                 ? "border-emerald-300/25 bg-emerald-500/15 text-emerald-200"
                 : "border-rose-300/25 bg-rose-500/15 text-rose-200",
@@ -141,7 +141,6 @@ const MoverCard: React.FC<{
 const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
   tokens,
   prices,
-  displayCurrency,
   fxRate,
   loading = false,
 }) => {
@@ -220,7 +219,7 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
             right="24h"
           />
 
-          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 ">
             {gainers.map(({ token, price }) => (
               <MoverCard
                 key={token.mint}
@@ -243,7 +242,7 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
             right="24h"
           />
 
-          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 ">
             {losers.map(({ token, price }) => (
               <MoverCard
                 key={token.mint}
