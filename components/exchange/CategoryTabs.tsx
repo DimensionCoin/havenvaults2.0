@@ -15,6 +15,7 @@ import {
   Image,
   Wrench,
   CircleDot,
+  HatGlasses,
 } from "lucide-react";
 import {
   TOKENS,
@@ -45,7 +46,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   DePin: <Cpu className="h-4 w-4" />,
   Gaming: <Gamepad2 className="h-4 w-4" />,
   NFT: <Image className="h-4 w-4" />,
-  Privacy: <Image className="h-4 w-4" />,
+  Privacy: <HatGlasses className="h-4 w-4" />,
   Utility: <Wrench className="h-4 w-4" />,
 };
 
