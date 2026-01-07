@@ -49,6 +49,7 @@ const categoryLabels: Record<TokenCategory, string> = {
   NFT: "NFTs",
   Privacy: "Privacy",
   Utility: "utility tokens",
+  PreMarket: "PreMarket",
 };
 
 /* ─────────────────────────────────────────────
@@ -130,6 +131,7 @@ const SEGMENT_CONFIG: Record<Segment, SegmentConfig> = {
       "Gaming",
       "Utility",
       "NFT",
+      "PreMarket",
     ],
     categoryWeights: {
       "Top MC": 2,

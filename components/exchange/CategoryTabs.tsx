@@ -16,6 +16,7 @@ import {
   Wrench,
   CircleDot,
   HatGlasses,
+  Axis3d,
 } from "lucide-react";
 import {
   TOKENS,
@@ -39,6 +40,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   favorites: <Star className="h-4 w-4" />,
   "Top MC": <CircleDot className="h-4 w-4" />,
   Stocks: <Landmark className="h-4 w-4" />,
+  PreMarket: <Axis3d className="h-4 w-4" />,
   DeFi: <Coins className="h-4 w-4" />,
   Infrastructure: <Layers className="h-4 w-4" />,
   Meme: <Laugh className="h-4 w-4" />,
@@ -65,6 +67,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   NFT: "NFT",
   Privacy: "Privacy",
   Utility: "Utility",
+  PreMarket: "PreMarket",
 };
 
 const CategoryTabs: React.FC<CategoryTabsProps> = ({
@@ -90,6 +93,7 @@ const CategoryTabs: React.FC<CategoryTabsProps> = ({
     const categoryOrder: TokenCategory[] = [
       "Top MC",
       "Stocks",
+      "PreMarket",
       "DeFi",
       "Meme",
       "LST",

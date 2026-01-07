@@ -15,6 +15,7 @@ export type TokenCategory =
   | "Gaming"
   | "NFT"
   | "Privacy"
+  | "PreMarket"
   | "Utility";
 
 export type TokenKind = "crypto" | "stock";
@@ -360,7 +361,17 @@ export const TOKENS: TokenMeta[] = [
     decimals: 8,
     mints: { mainnet: "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p" },
   },
-
+  {
+    name: "SpaceX",
+    symbol: "SPACEX",
+    id: "spacex-prestocks-2",
+    logo: "/logos/spacex.png",
+    kind: "stock",
+    categories: ["PreMarket", "Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh" },
+  },
   // ---------------- DeFi / Infra / DePin / Memes / LSTs
   {
     name: "Raydium",
