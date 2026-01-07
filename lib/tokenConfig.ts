@@ -397,7 +397,7 @@ export const TOKENS: TokenMeta[] = [
   {
     name: "OpenAI",
     symbol: "OPENAI",
-    id: "xai-prestocks-2",
+    id: "openai-prestocks-2",
     logo: "/logos/openai.png",
     kind: "stock",
     categories: ["PreMarket", "Stocks"],

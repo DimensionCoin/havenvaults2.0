@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, {
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 
 import AmplifyHeader from "@/components/amplify/AmplifyHeader";
 import PriceChartPanel from "@/components/amplify/PriceChartPanel";
@@ -20,6 +26,7 @@ import { useUser } from "@/providers/UserProvider";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
 import { useAmplifyCoingecko } from "@/hooks/useAmplifyCoingecko";
 import { useBoosterPositions } from "@/hooks/useBoosterPositions";
+import PredictionPositions from "@/components/amplify/PredictionPositions";
 
 import { Layers, Bot, Sparkles, BarChart3 } from "lucide-react";
 
@@ -49,57 +56,79 @@ const TAB_META: Record<
 };
 
 function TabBar({
-  active,
-  onChange,
+  activeTab,
+  onTabChange,
 }: {
-  active: AmplifyTab;
-  onChange: (t: AmplifyTab) => void;
+  activeTab: AmplifyTab;
+  onTabChange: (t: AmplifyTab) => void;
 }) {
-  return (
-    <div className="glass-panel-soft px-3 py-2">
-      <div className="no-scrollbar -mx-2 flex gap-2 overflow-x-auto px-2">
-        {(Object.keys(TAB_META) as AmplifyTab[]).map((key) => {
-          const t = TAB_META[key];
-          const isActive = key === active;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
 
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => onChange(key)}
-              className={[
-                "shrink-0 inline-flex items-center gap-2 rounded-full px-4 py-2 text-[12px] font-semibold transition",
-                "border",
-                isActive
-                  ? "bg-primary text-primary-foreground border-emerald-300/30 shadow-[0_0_0_1px_rgba(63,243,135,0.85)]"
-                  : "border-white/10 bg-black/40 text-slate-200 hover:bg-white/5 hover:text-emerald-300",
-              ].join(" ")}
-            >
+  // Build tabs array from TAB_META (same shape as CategoryTabs)
+  const tabs = useMemo(() => {
+    return (Object.keys(TAB_META) as AmplifyTab[]).map((id) => ({
+      id,
+      label: TAB_META[id].label,
+      icon: TAB_META[id].icon,
+      badge: TAB_META[id].badge,
+    }));
+  }, []);
+
+  // Scroll active tab into view on mount/change
+  useEffect(() => {
+    if (activeRef.current && scrollRef.current) {
+      const container = scrollRef.current;
+      const button = activeRef.current;
+      const containerRect = container.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+
+      if (buttonRect.left < containerRect.left) {
+        container.scrollLeft -= containerRect.left - buttonRect.left + 16;
+      } else if (buttonRect.right > containerRect.right) {
+        container.scrollLeft += buttonRect.right - containerRect.right + 16;
+      }
+    }
+  }, [activeTab]);
+
+  return (
+    <div
+      ref={scrollRef}
+      className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1"
+    >
+      {tabs.map((tab) => {
+        const isActive = activeTab === tab.id;
+        const showCount = !!tab.badge; // mirrors CategoryTabs' pattern
+
+        return (
+          <button
+            key={tab.id}
+            ref={isActive ? activeRef : undefined}
+            type="button"
+            onClick={() => onTabChange(tab.id)}
+            className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
+              isActive
+                ? "bg-zinc-100 text-zinc-900"
+                : "bg-zinc-900/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            }`}
+          >
+            {tab.icon}
+            <span>{tab.label}</span>
+
+            {showCount && (
               <span
-                className={[
-                  "inline-flex items-center justify-center",
-                  isActive ? "text-black" : "text-slate-200",
-                ].join(" ")}
+                className={`rounded-full px-1.5 py-0.5 text-xs ${
+                  isActive
+                    ? "bg-zinc-900 text-zinc-100"
+                    : "bg-zinc-700 text-zinc-300"
+                }`}
               >
-                {t.icon}
+                {tab.badge}
               </span>
-              <span>{t.label}</span>
-              {t.badge ? (
-                <span
-                  className={[
-                    "ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                    isActive
-                      ? "bg-black/20 text-black"
-                      : "bg-white/10 text-white/60",
-                  ].join(" ")}
-                >
-                  {t.badge}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -220,7 +249,7 @@ export default function AmplifyPage() {
     <div className="min-h-screen text-foreground">
       <div className="mx-auto w-full max-w-6xl px-3 pb-12 pt-4 sm:px-4 lg:px-6">
         <div className="mb-3 space-y-3">
-          <TabBar active={tab} onChange={setTab} />
+          <TabBar activeTab={tab} onTabChange={setTab} />
 
           {isTradingStyleTab && (
             <AmplifyHeader
@@ -261,29 +290,56 @@ export default function AmplifyPage() {
                 onAfterAction={handleAfterAction}
               />
             ) : (
-              <PredictionMarketsPanel
-                tokenSymbol={activeSymbol}
+              <div className="relative">
+                {/* The real panel stays mounted, but is blurred/disabled */}
+                <div className="pointer-events-none select-none blur-[1px] opacity-70">
+                  <PredictionMarketsPanel
+                    tokenSymbol={activeSymbol}
+                    displayCurrency={displayCurrency}
+                    price={safePriceDisplay}
+                    timeframes={PREDICT_TFS}
+                    activeTimeframe={predictTf}
+                    onChangeTimeframe={setPredictTf}
+                    onOpenMock={() => {}}
+                  />
+                </div>
+
+                {/* Overlay */}
+                <div className="absolute inset-0 rounded-3xl border border-white/10 bg-black/35 backdrop-blur-xs">
+                  <div className="flex h-full w-full items-center justify-center p-6">
+                    <div className="text-center">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2">
+                        <Sparkles className="h-4 w-4 text-emerald-300" />
+                        <span className="text-sm font-semibold text-white/90">
+                          Predictions coming soon
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-white/50">
+                        We&apos;re polishing markets + settlement. You&apos;ll
+                        see this soon.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {tab === "multiplier" ? (
+              <PositionsPanel
+                ownerBase58={ownerBase58}
                 displayCurrency={displayCurrency}
-                price={safePriceDisplay}
-                timeframes={PREDICT_TFS}
-                activeTimeframe={predictTf}
-                onChangeTimeframe={setPredictTf}
-                onOpenMock={(pos) => {
-                  handleAfterAction();
-                }}
+                fxRate={fxRate}
+                rows={safeBoosterRows}
+                loading={!!booster.loading}
+                onClosed={handleAfterAction}
+              />
+            ) : (
+              <PredictionPositions
+                displayCurrency={displayCurrency}
+                fxRate={fxRate}
+                loading={false}
+                rows={[]}
               />
             )}
-
-            {/* NOTE: This still shows booster positions.
-               If Predict needs its own positions UI, we should swap this too later. */}
-            <PositionsPanel
-              ownerBase58={ownerBase58}
-              displayCurrency={displayCurrency}
-              fxRate={fxRate}
-              rows={safeBoosterRows}
-              loading={!!booster.loading}
-              onClosed={handleAfterAction}
-            />
 
             {!ownerBase58 && user ? (
               <div className="text-xs text-amber-200/80">
