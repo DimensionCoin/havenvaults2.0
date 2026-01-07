@@ -1,26 +1,70 @@
 "use client";
 
-import React from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Shield, Lock, Zap, ArrowUpRight } from "lucide-react";
+import {
+  ArrowRight,
+  Zap,
+  Sparkles,
+  Wallet,
+  BarChart3,
+} from "lucide-react";
+import { FloatingParticles } from "@/components/floating-particles";
+import { AnimatedCounter } from "@/components/animated-counter";
+import { GlowingOrbs } from "@/components/glowing-orbs";
+import { HolographicCard } from "@/components/holographic-card";
 
 const Landing = () => {
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const heroRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => window.removeEventListener("mousemove", handleMouseMove);
+  }, []);
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      {/* Ambient glow (match app vibe) */}
-      <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -top-72 left-1/2 h-[620px] w-[620px] -translate-x-1/2 rounded-full bg-primary/18 blur-3xl" />
-        <div className="absolute bottom-[-320px] right-[-220px] h-[680px] w-[680px] rounded-full bg-emerald-500/10 blur-3xl" />
-        <div className="absolute inset-y-0 left-0 w-[40%] bg-gradient-to-tr from-primary/10 via-transparent to-transparent" />
+      {/* Animated grid background */}
+      <div className="pointer-events-none fixed inset-0 grid-pattern opacity-50" />
+
+      {/* Scan line effect */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-primary/30 to-transparent animate-scan-line" />
       </div>
 
-      <div className="relative mx-auto flex min-h-screen max-w-5xl flex-col px-4 py-6 sm:px-6 lg:px-10">
+      {/* Mouse follow glow */}
+      <div
+        className="pointer-events-none fixed h-[600px] w-[600px] rounded-full bg-primary/10 blur-[120px] transition-transform duration-300 ease-out"
+        style={{
+          transform: `translate(${mousePosition.x - 300}px, ${mousePosition.y - 300}px)`,
+        }}
+      />
+
+      {/* Floating particles */}
+      <FloatingParticles />
+
+      {/* Glowing orbs */}
+      <GlowingOrbs />
+
+      {/* Ambient glow layers */}
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute -top-72 left-1/2 h-[800px] w-[800px] -translate-x-1/2 rounded-full bg-primary/20 blur-[150px] animate-pulse-glow" />
+        <div className="absolute bottom-[-400px] right-[-300px] h-[700px] w-[700px] rounded-full bg-accent/15 blur-[120px] animate-morph" />
+        <div className="absolute top-1/2 left-[-200px] h-[500px] w-[500px] rounded-full bg-primary/10 blur-[100px] animate-float" />
+      </div>
+
+      <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-10">
         {/* Top nav */}
-        <header className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-2xl border border-white/20 bg-black/30 backdrop-blur-xl">
+        <header className="relative z-50 flex items-center justify-between">
+          <div className="flex items-center gap-3 group">
+            <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-primary/30 bg-card/50 backdrop-blur-xl transition-all duration-500 group-hover:border-primary/60 group-hover:shadow-[0_0_30px_rgba(63,243,135,0.3)]">
               <Image
                 src="/logo.jpg"
                 alt="Haven"
@@ -28,14 +72,15 @@ const Landing = () => {
                 className="object-contain"
                 priority
               />
+              <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
 
             <div className="flex flex-col">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.26em] text-white/70">
+              <span className="text-sm font-bold tracking-[0.3em] text-foreground uppercase">
                 Haven
               </span>
-              <span className="text-[11px] text-white/50">
-                Saving & investing, simplified.
+              <span className="text-[10px] text-muted-foreground tracking-wider">
+                Saving & investing, simplified
               </span>
             </div>
           </div>
@@ -44,106 +89,179 @@ const Landing = () => {
             <Link href="/sign-in">
               <Button
                 variant="ghost"
-                className="hidden rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-white/80 backdrop-blur-xl hover:bg-white/10 sm:inline-flex"
+                className="hidden sm:inline-flex rounded-full border border-border bg-card/30 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-xl hover:bg-card/50 hover:border-primary/30 transition-all duration-300"
               >
                 Sign in
               </Button>
             </Link>
 
             <Link href="/sign-in">
-              <Button className="rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] hover:brightness-105">
+              <Button className="rounded-full bg-primary px-6 py-2 text-sm font-bold text-primary-foreground shadow-[0_0_30px_rgba(63,243,135,0.5)] hover:shadow-[0_0_50px_rgba(63,243,135,0.7)] hover:brightness-110 transition-all duration-300 group">
                 Get started
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
               </Button>
             </Link>
           </div>
         </header>
 
-        {/* Center content */}
-        <section className="flex flex-1 flex-col items-center justify-center py-12">
-          <div className="w-full max-w-2xl">
-            {/* Hero panel */}
-            <div className="rounded-3xl border border-zinc-800 bg-white/10 p-5 sm:p-7">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-white/70">
-                  <Lock className="h-3 w-3" />
-                  Non-custodial
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-white/70">
-                  <Zap className="h-3 w-3 text-primary" />
-                  Gas sponsored in-app
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-white/70">
-                  <Shield className="h-3 w-3 text-primary" />
-                  Secure by design
-                </span>
-              </div>
+        {/* Hero section */}
+        <section
+          ref={heroRef}
+          className="flex flex-1 flex-col items-center justify-center py-12 md:py-20"
+        >
+          {/* Announcement badge */}
+          <div className="mb-8 animate-float">
+            <div className="glass-card neon-border rounded-full px-5 py-2 flex items-center gap-3">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+              </span>
+              <span className="text-xs font-medium text-muted-foreground">
+                Non-custodial · You own your keys
+              </span>
+              <ArrowRight className="h-3 w-3 text-primary" />
+            </div>
+          </div>
 
-              <h1 className="mt-4 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                A better way to save and invest.
-              </h1>
+          {/* Main headline - Updated to match Haven's actual value prop */}
+          <div className="text-center max-w-4xl">
+            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[0.95]">
+              <span className="block text-foreground">A better way to</span>
+              <span className="block holographic-text mt-2">
+                save and invest
+              </span>
+            </h1>
 
-              <p className="mt-3 text-sm text-white/70 sm:text-base">
-                Haven makes it easy to put money to work with simple accounts,
-                clear tracking, and powerful tools — without the usual setup,
-                confusion, or hidden friction.
-              </p>
+            <p className="mt-8 text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+              Haven makes it easy to put money to work with simple accounts,
+              clear tracking, and powerful tools — without the usual setup,
+              confusion, or hidden friction. Your funds, secured by Solana.
+            </p>
+          </div>
 
-              {/* What we solve */}
-              <div className="mt-5 space-y-2">
-                {[
-                  {
-                    title: "What Haven solves",
-                    body: "Most apps are either too complicated or too limited. Haven gives you a clean home for saving, investing, and managing your money in one place.",
-                  },
-                  {
-                    title: "What you get",
-                    body: "Savings accounts, investing access, portfolio tracking, and tools designed to maximize returns — all inside one dashboard.",
-                  },
-                  {
-                    title: "Why sign up",
-                    body: "Start in minutes, stay in control, and grow with features that scale from beginner to power user.",
-                  },
-                ].map((row) => (
-                  <div
-                    key={row.title}
-                    className="rounded-2xl border border-zinc-800 bg-black/25 px-4 py-3"
-                  >
-                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/60">
-                      {row.title}
+          {/* CTA buttons */}
+          <div className="mt-10 flex flex-col sm:flex-row items-center gap-4">
+            <Link href="/sign-in">
+              <button className="group relative overflow-hidden rounded-full bg-primary px-8 py-4 text-base font-bold text-primary-foreground shadow-[0_0_40px_rgba(63,243,135,0.4)] transition-all duration-500 hover:shadow-[0_0_60px_rgba(63,243,135,0.6)]">
+                <span className="relative z-10 flex items-center gap-2">
+                  Create account
+                  <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                </span>
+              </button>
+            </Link>
+
+            <span className="text-sm text-muted-foreground flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              Sign in → dashboard → start using tools
+            </span>
+          </div>
+
+          {/* Stats row - Updated with real Haven stats */}
+          <div className="mt-16 w-full max-w-4xl">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { value: 8, suffix: "%", label: "Up to APY", prefix: "" },
+                { value: 50, suffix: "+", label: "Assets to buy", prefix: "" },
+                { value: 1, suffix: "s", label: "Transactions", prefix: "<" },
+                { value: 24, suffix: "/7", label: "Stock market", prefix: "" },
+              ].map((stat, i) => (
+                <HolographicCard key={i} delay={i * 0.1}>
+                  <div className="text-center p-5">
+                    <div className="text-2xl sm:text-3xl font-bold text-foreground">
+                      <span className="text-primary">{stat.prefix}</span>
+                      <AnimatedCounter target={stat.value} decimals={0} />
+                      <span className="text-primary">{stat.suffix}</span>
                     </div>
-                    <div className="mt-1 text-[12px] leading-relaxed text-white/70">
-                      {row.body}
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {stat.label}
                     </div>
                   </div>
-                ))}
-              </div>
-
-              {/* CTA */}
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <Link href="/sign-in" className="w-full sm:w-auto">
-                  <button className="haven-primary-btn w-full sm:w-auto px-5">
-                    Create account
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                </Link>
-
-                <div className="flex items-center gap-2 text-[11px] text-white/55">
-                  <ArrowUpRight className="h-4 w-4 text-primary" />
-                  <span>Sign in → dashboard → start using tools</span>
-                </div>
-              </div>
+                </HolographicCard>
+              ))}
             </div>
-
-            {/* Minimal footer note */}
-            <p className="mt-4 text-center text-[11px] text-white/40">
-              Haven is non-custodial — you remain in control of your assets.
-            </p>
           </div>
         </section>
 
-        <footer className="pb-6 text-center text-[10px] text-white/30">
-          © {new Date().getFullYear()} Haven Labs.
+        {/* Features grid */}
+        <section id="features" className="py-16">
+          <div className="text-center mb-12">
+            <span className="inline-flex items-center gap-2 text-sm font-medium text-primary mb-4">
+              <Sparkles className="h-4 w-4" />
+              Why Haven
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
+              Finance of the future
+            </h2>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-5">
+            {[
+              {
+                icon: Wallet,
+                title: "True Ownership",
+                description:
+                  "Non-custodial means you own your keys. Your assets are secured by the Solana blockchain, not a centralized company.",
+              },
+              {
+                icon: BarChart3,
+                title: "Earn & Invest",
+                description:
+                  "Earn 3-8% APY on your savings. Access 50+ assets, stocks & crypto, and exclusive Pre-ICO opportunities.",
+              },
+              {
+                icon: Zap,
+                title: "Instant & Always On",
+                description:
+                  "1-second transactions, 24/7 markets. No bank hours, no waiting days for transfers. Finance that never sleeps.",
+              },
+            ].map((feature, i) => (
+              <div
+                key={i}
+                className="group relative overflow-hidden rounded-2xl glass-card p-6 hover:border-primary/30 transition-all duration-500"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="relative z-10">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 mb-5 group-hover:shadow-[0_0_20px_rgba(63,243,135,0.3)] transition-all duration-500">
+                    <feature.icon className="h-6 w-6 text-primary" />
+                  </div>
+                  <h3 className="text-lg font-bold text-foreground mb-2">
+                    {feature.title}
+                  </h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    {feature.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Trust note - Accurate disclaimer */}
+        <section className="py-8">
+          <p className="text-center text-xs text-muted-foreground max-w-xl mx-auto">
+            Haven is non-custodial — you remain in control of your assets at all
+            times. Your funds are secured by the Solana blockchain, not Haven.
+          </p>
+        </section>
+
+        {/* Footer */}
+        <footer className="py-8 border-t border-border/50">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-sm text-muted-foreground">
+              © {new Date().getFullYear()} Haven Labs.
+            </p>
+            <div className="flex items-center gap-6">
+              {["Privacy", "Terms", "Security"].map((link) => (
+                <Link
+                  key={link}
+                  href="#"
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {link}
+                </Link>
+              ))}
+            </div>
+          </div>
         </footer>
       </div>
     </main>

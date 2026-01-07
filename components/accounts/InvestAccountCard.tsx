@@ -69,13 +69,13 @@ const InvestAccountCard: React.FC = () => {
     if (!hasAssets) return "Tap to start investing with Haven";
 
     if (spotCount > 0 && boosterCount > 0) {
-      return `${spotCount} token position${spotCount === 1 ? "" : "s"} + ${
+      return `${spotCount} Asset position${spotCount === 1 ? "" : "s"} + ${
         boosterCount
       } boosted position${boosterCount === 1 ? "" : "s"}`;
     }
 
     if (boosterCount > 0) {
-      return `${boosterCount} boosted position${boosterCount === 1 ? "" : "s"}`;
+      return `${boosterCount} Multiplied position${boosterCount === 1 ? "" : "s"}`;
     }
 
     return `${spotCount} position${spotCount === 1 ? "" : "s"} in your portfolio`;
