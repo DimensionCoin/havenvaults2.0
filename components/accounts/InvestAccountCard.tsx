@@ -71,7 +71,7 @@ const InvestAccountCard: React.FC = () => {
     if (spotCount > 0 && boosterCount > 0) {
       return `${spotCount} Asset position${spotCount === 1 ? "" : "s"} + ${
         boosterCount
-      } boosted position${boosterCount === 1 ? "" : "s"}`;
+      } Multiplied position${boosterCount === 1 ? "" : "s"}`;
     }
 
     if (boosterCount > 0) {

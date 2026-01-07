@@ -11,10 +11,10 @@ import {
   Wallet,
   BarChart3,
 } from "lucide-react";
-import { FloatingParticles } from "@/components/floating-particles";
-import { AnimatedCounter } from "@/components/animated-counter";
-import { GlowingOrbs } from "@/components/glowing-orbs";
-import { HolographicCard } from "@/components/holographic-card";
+import { FloatingParticles } from "@/components/landing/floating-particles";
+import { AnimatedCounter } from "@/components/landing/animated-counter";
+import { GlowingOrbs } from "@/components/landing/glowing-orbs";
+import { HolographicCard } from "@/components/landing/holographic-card";
 
 const Landing = () => {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
@@ -89,16 +89,16 @@ const Landing = () => {
             <Link href="/sign-in">
               <Button
                 variant="ghost"
-                className="hidden sm:inline-flex rounded-full border border-border bg-card/30 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-xl hover:bg-card/50 hover:border-primary/30 transition-all duration-300"
+                className="rounded-full border border-border bg-card/30 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-xl hover:bg-card/50 hover:border-primary/30 transition-all duration-300"
               >
                 Sign in
               </Button>
             </Link>
 
             <Link href="/sign-in">
-              <Button className="rounded-full bg-primary px-6 py-2 text-sm font-bold text-primary-foreground shadow-[0_0_30px_rgba(63,243,135,0.5)] hover:shadow-[0_0_50px_rgba(63,243,135,0.7)] hover:brightness-110 transition-all duration-300 group">
+              <Button className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_0_30px_rgba(63,243,135,0.5)] hover:shadow-[0_0_50px_rgba(63,243,135,0.7)] hover:brightness-110 transition-all duration-300 group">
                 Get started
-                <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
+                <ArrowRight className=" h-4 w-4 group-hover:translate-x-1 transition-transform" />
               </Button>
             </Link>
           </div>

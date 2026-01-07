@@ -13,6 +13,7 @@ import PriceChartPanel from "@/components/amplify/PriceChartPanel";
 import MultiplierPanel from "@/components/amplify/MultiplierPanel";
 import PredictionMarketsPanel from "@/components/amplify/PredictionMarketsPanel";
 import PositionsPanel from "@/components/amplify/PositionsPanel";
+import BundlesPanel from "@/components/bundles/BundlesPanel";
 
 import type {
   AmplifyTokenSymbol,
@@ -353,9 +354,11 @@ export default function AmplifyPage() {
           </div>
         ) : tab === "bundles" ? (
           <div className="space-y-4">
-            <PlaceholderPanel
-              title="Bundles"
-              subtitle="Pre-built portfolios you can buy in one tap."
+            <BundlesPanel
+              ownerBase58={ownerBase58}
+              displayCurrency={displayCurrency}
+              fxRate={fxRate}
+              maxSpendDisplay={depositBalanceDisplay} // optional: cap by USDC balance in display
             />
           </div>
         ) : (
