@@ -69,7 +69,7 @@ const InvestAccountCard: React.FC = () => {
     if (!hasAssets) return "Tap to start investing with Haven";
 
     if (spotCount > 0 && boosterCount > 0) {
-      return `${spotCount} Asset position${spotCount === 1 ? "" : "s"} + ${
+      return `${spotCount} Asset${spotCount === 1 ? "" : "s"} + ${
         boosterCount
       } Multiplied position${boosterCount === 1 ? "" : "s"}`;
     }
@@ -78,7 +78,7 @@ const InvestAccountCard: React.FC = () => {
       return `${boosterCount} Multiplied position${boosterCount === 1 ? "" : "s"}`;
     }
 
-    return `${spotCount} position${spotCount === 1 ? "" : "s"} in your portfolio`;
+    return `${spotCount} Asset${spotCount === 1 ? "" : "s"} in your portfolio`;
   }, [hasAssets, nonUsdcTokens.length, boosterPositionsCount]);
 
   return (

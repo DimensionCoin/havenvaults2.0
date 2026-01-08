@@ -95,11 +95,11 @@ function TabBar({
   return (
     <div
       ref={scrollRef}
-      className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1"
+      className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1"
     >
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
-        const showCount = !!tab.badge; // mirrors CategoryTabs' pattern
+        const showCount = !!tab.badge;
 
         return (
           <button
@@ -107,18 +107,18 @@ function TabBar({
             ref={isActive ? activeRef : undefined}
             type="button"
             onClick={() => onTabChange(tab.id)}
-            className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
+            className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
               isActive
                 ? "bg-zinc-100 text-zinc-900"
                 : "bg-zinc-900/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
             }`}
           >
             {tab.icon}
-            <span>{tab.label}</span>
+            <span className="whitespace-nowrap">{tab.label}</span>
 
             {showCount && (
               <span
-                className={`rounded-full px-1.5 py-0.5 text-xs ${
+                className={`rounded-full px-1.5 py-0.5 text-[10px] ${
                   isActive
                     ? "bg-zinc-900 text-zinc-100"
                     : "bg-zinc-700 text-zinc-300"
@@ -356,9 +356,6 @@ export default function AmplifyPage() {
           <div className="space-y-4">
             <BundlesPanel
               ownerBase58={ownerBase58}
-              displayCurrency={displayCurrency}
-              fxRate={fxRate}
-              maxSpendDisplay={depositBalanceDisplay} // optional: cap by USDC balance in display
             />
           </div>
         ) : (
