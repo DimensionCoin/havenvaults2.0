@@ -67,10 +67,7 @@ const tokenProgramCache = new Map<string, PublicKey>();
 const decimalsCache = new Map<string, number>();
 
 // ALT cache with TTL (5 min)
-const altCache = new Map<
-  string,
-  { account: AddressLookupTableAccount; expires: number }
->();
+const altCache = new Map<string, { account: AddressLookupTableAccount; expires: number }>();
 const ALT_CACHE_TTL = 5 * 60 * 1000;
 
 /* ───────── HELPERS ───────── */
@@ -90,10 +87,7 @@ function jsonError(
   return NextResponse.json(payload, { status });
 }
 
-async function getTokenProgramId(
-  conn: Connection,
-  mint: PublicKey
-): Promise<PublicKey> {
+async function getTokenProgramId(conn: Connection, mint: PublicKey): Promise<PublicKey> {
   const key = mint.toBase58();
   const cached = tokenProgramCache.get(key);
   if (cached) return cached;
@@ -109,11 +103,7 @@ async function getTokenProgramId(
   return programId;
 }
 
-async function getDecimals(
-  conn: Connection,
-  mint: PublicKey,
-  programId: PublicKey
-): Promise<number> {
+async function getDecimals(conn: Connection, mint: PublicKey, programId: PublicKey): Promise<number> {
   const key = mint.toBase58();
   const cached = decimalsCache.get(key);
   if (cached !== undefined) return cached;
@@ -130,10 +120,7 @@ async function getDecimals(
   return decimals;
 }
 
-async function getAltCached(
-  conn: Connection,
-  key: string
-): Promise<AddressLookupTableAccount | null> {
+async function getAltCached(conn: Connection, key: string): Promise<AddressLookupTableAccount | null> {
   const now = Date.now();
   const cached = altCache.get(key);
   if (cached && cached.expires > now) {
@@ -347,9 +334,7 @@ export async function POST(req: Request) {
     /* ───────── Amount + Balance check ───────── */
     stage = "amount";
 
-    const balResp = await conn
-      .getTokenAccountBalance(userInputAta, "confirmed")
-      .catch(() => null);
+    const balResp = await conn.getTokenAccountBalance(userInputAta, "confirmed").catch(() => null);
     const available = Number(balResp?.value?.amount || "0");
 
     let amountUnits = 0;
@@ -416,14 +401,12 @@ export async function POST(req: Request) {
     /* ───────── PARALLEL: Quote + Blockhash ───────── */
     stage = "quoteAndBlockhash";
 
-    const quoteUrl =
-      `${JUP_QUOTE}?` +
-      new URLSearchParams({
-        inputMint: inputMint.toBase58(),
-        outputMint: outputMint.toBase58(),
-        amount: String(netUnits),
-        slippageBps: String(slippageBps),
-      });
+    const quoteUrl = `${JUP_QUOTE}?` + new URLSearchParams({
+      inputMint: inputMint.toBase58(),
+      outputMint: outputMint.toBase58(),
+      amount: String(netUnits),
+      slippageBps: String(slippageBps),
+    });
 
     const [quoteRes, blockhashData] = await Promise.all([
       jupFetch(quoteUrl),
@@ -475,7 +458,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const swapData = (await swapIxRes.json()) as {
+    const swapData = await swapIxRes.json() as {
       setupInstructions?: unknown[];
       swapInstruction?: unknown;
       cleanupInstructions?: unknown[];
@@ -505,8 +488,7 @@ export async function POST(req: Request) {
     stage = "buildInstructions";
 
     const setupIxs = (swapData.setupInstructions ?? []).map(toIx);
-    const { sponsoredAtaIxs, nonAtaSetupIxs } =
-      rebuildAtaCreatesAsSponsored(setupIxs);
+    const { sponsoredAtaIxs, nonAtaSetupIxs } = rebuildAtaCreatesAsSponsored(setupIxs);
 
     const mustHaveAtas = [
       createAssociatedTokenAccountIdempotentInstruction(
@@ -532,19 +514,18 @@ export async function POST(req: Request) {
       ),
     ];
 
-    const feeIx =
-      feeUnits > 0
-        ? createTransferCheckedInstruction(
-            userInputAta,
-            inputMint,
-            treasuryInputAta,
-            userOwner,
-            feeUnits,
-            inputDecimals,
-            [],
-            inputProgId
-          )
-        : null;
+    const feeIx = feeUnits > 0
+      ? createTransferCheckedInstruction(
+          userInputAta,
+          inputMint,
+          treasuryInputAta,
+          userOwner,
+          feeUnits,
+          inputDecimals,
+          [],
+          inputProgId
+        )
+      : null;
 
     const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
 
@@ -603,9 +584,7 @@ export async function POST(req: Request) {
     const b64 = Buffer.from(tx.serialize()).toString("base64");
     const buildTime = Date.now() - startTime;
 
-    console.log(
-      `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0, 8)}→${outputMintStr.slice(0, 8)} amt=${amountUnits}`
-    );
+    console.log(`[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0,8)}→${outputMintStr.slice(0,8)} amt=${amountUnits}`);
 
     return NextResponse.json({
       transaction: b64,

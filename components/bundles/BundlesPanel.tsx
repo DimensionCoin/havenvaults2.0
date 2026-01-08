@@ -1,7 +1,13 @@
 // components/bundles/BundlesPanel.tsx
 "use client";
 
-import React, { useMemo, useState, useCallback } from "react";
+import React, {
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import Image from "next/image";
 import {
   Loader2,
@@ -14,94 +20,97 @@ import {
   Shield,
   Zap,
   Search,
-  Filter,
+  RefreshCw,
+  AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 
 import { BUNDLES, type RiskLevel } from "./bundlesConfig";
 import { findTokenBySymbol, requireMintBySymbol } from "@/lib/tokenConfig";
-import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
 import { useBalance } from "@/providers/BalanceProvider";
 
+// Privy imports
+import { usePrivy } from "@privy-io/react-auth";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  useSignTransaction,
+  useSignMessage,
+  useWallets,
+  type ConnectedStandardSolanaWallet,
+} from "@privy-io/react-auth/solana";
+import { Buffer } from "buffer";
+
+// Polyfill
+if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TYPES
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 type Props = {
   ownerBase58: string;
 };
 
+type SwapStatus =
+  | "idle"
+  | "building"
+  | "signing"
+  | "sending"
+  | "done"
+  | "error";
+
 type BuyRow = {
   symbol: string;
-  status:
-    | "idle"
-    | "building"
-    | "signing"
-    | "sending"
-    | "confirming"
-    | "done"
-    | "error";
+  outputMint: string;
+  status: SwapStatus;
   sig?: string;
   error?: string;
   amountDisplay: number;
+  amountUsd: number;
+  txBase64?: string;
+  signedTxBase64?: string;
 };
 
-// Risk icon mapping
+type BuildResponse = {
+  transaction: string;
+  inputMint: string;
+  outputMint: string;
+};
+
+type SendResponse = {
+  signature: string;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const USDC_MINT =
+  process.env.NEXT_PUBLIC_USDC_MINT ||
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDC_DECIMALS = 6;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 function getRiskIcon(risk: RiskLevel) {
   if (risk === "low") return Shield;
   if (risk === "medium") return TrendingUp;
   if (risk === "high") return Zap;
-  if (risk === "degen") return Sparkles;
   return Sparkles;
 }
 
-// Haven-style risk pill
 function riskPill(risk: RiskLevel) {
   const Icon = getRiskIcon(risk);
-
-  const configs: Record<
-    RiskLevel,
-    { bg: string; border: string; text: string; glow: string }
-  > = {
-    low: {
-      bg: "bg-gradient-to-r from-emerald-500/12 to-teal-500/12",
-      border: "border-emerald-400/25",
-      text: "text-emerald-200",
-      glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]",
-    },
-    medium: {
-      bg: "bg-gradient-to-r from-emerald-500/12 to-teal-500/12",
-      border: "border-emerald-400/25",
-      text: "text-emerald-200",
-      glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]",
-    },
-    high: {
-      bg: "bg-gradient-to-r from-emerald-500/12 to-teal-500/12",
-      border: "border-emerald-400/25",
-      text: "text-emerald-200",
-      glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]",
-    },
-    degen: {
-      bg: "bg-gradient-to-r from-emerald-500/12 to-teal-500/12",
-      border: "border-emerald-400/25",
-      text: "text-emerald-200",
-      glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]",
-    },
+  const colors = {
+    low: "border-[#3ff387]/30 bg-[#3ff387]/10 text-[#3ff387]",
+    medium: "border-amber-400/30 bg-amber-400/10 text-amber-400",
+    high: "border-orange-400/30 bg-orange-400/10 text-orange-400",
+    degen: "border-red-400/30 bg-red-400/10 text-red-400",
   };
-
-  const config = configs[risk];
-
   return (
     <div
-      className={[
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-all",
-        config.bg,
-        config.border,
-        config.text,
-        config.glow,
-      ].join(" ")}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${colors[risk]}`}
     >
       <Icon className="h-3 w-3" />
       {risk}
@@ -116,50 +125,117 @@ function cleanNumberInput(raw: string) {
   return `${parts[0]}.${parts.slice(1).join("")}`;
 }
 
-// Compact token icons
+function pickWallet(
+  wallets: ConnectedStandardSolanaWallet[],
+  address: string
+): ConnectedStandardSolanaWallet | null {
+  const nonEmbedded = wallets.find(
+    (w) => w.address === address && w.standardWallet?.name !== "Privy"
+  );
+  return nonEmbedded ?? wallets.find((w) => w.address === address) ?? null;
+}
+
+function isUserRejection(e: unknown): boolean {
+  const msg = String((e as Error)?.message || "").toLowerCase();
+  return (
+    msg.includes("user rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("cancelled") ||
+    msg.includes("user canceled")
+  );
+}
+
+async function postJSON<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  const text = await res.text().catch(() => "");
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const d = data as Record<string, unknown> | null;
+    const msg =
+      d?.userMessage ||
+      d?.error ||
+      d?.message ||
+      `Request failed: ${res.status}`;
+    throw new Error(String(msg));
+  }
+
+  return data as T;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOKEN ICONS COMPONENT - Enhanced with larger icons and glow effect
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 function TokenIconsCompact({ symbols }: { symbols: string[] }) {
-  const shown = symbols.slice(0, 4);
+  const shown = symbols.slice(0, 5);
   const extra = Math.max(0, symbols.length - shown.length);
 
   return (
     <div className="flex items-center">
       <div className="flex -space-x-3">
-        {shown.map((s, idx) => {
+        {shown.map((s, i) => {
           const meta = findTokenBySymbol(s);
           return (
             <div
               key={s}
-              className="group/icon relative h-8 w-8 overflow-hidden rounded-full border-2 border-black/50 bg-gradient-to-br from-white/10 to-white/5 transition-all hover:scale-110 hover:z-10"
+              className="relative h-9 w-9 overflow-hidden rounded-full border-2 border-[#02010a] bg-zinc-800 ring-1 ring-white/10 transition-transform hover:scale-110 hover:z-10"
+              style={{ zIndex: shown.length - i }}
               title={s}
-              style={{ animationDelay: `${idx * 50}ms` }}
             >
               <Image
                 src={meta?.logo || "/placeholder.svg"}
-                alt={`${s} logo`}
+                alt={s}
                 fill
-                className="object-cover transition-transform group-hover/icon:scale-110"
+                className="object-cover"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 transition-opacity group-hover/icon:opacity-100" />
             </div>
           );
         })}
       </div>
-
       {extra > 0 && (
-        <div className="ml-2.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-emerald-300/15 bg-gradient-to-br from-white/10 to-white/5 backdrop-blur-sm">
-          <span className="text-[11px] font-bold text-white/80">+{extra}</span>
+        <div className="ml-1 flex h-9 w-9 items-center justify-center rounded-full border-2 border-[#02010a] bg-zinc-800/80 ring-1 ring-white/10">
+          <span className="text-[11px] font-bold text-white/70">+{extra}</span>
         </div>
       )}
     </div>
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 export default function BundlesPanel({ ownerBase58 }: Props) {
-  const swap = useServerSponsoredUsdcSwap();
+  // ─────────────────────────────────────────────────────────────────────────
+  // Privy & Wallet
+  // ─────────────────────────────────────────────────────────────────────────
+  const { authenticated, ready: privyReady } = usePrivy();
+  const { wallets } = useWallets();
+  const { signTransaction } = useSignTransaction();
+  const { signMessage } = useSignMessage();
 
-  // Get balance from provider - this is the correct source!
+  // ─────────────────────────────────────────────────────────────────────────
+  // Balance
+  // ─────────────────────────────────────────────────────────────────────────
   const { usdcUsd, displayCurrency, fxRate } = useBalance();
+  const availableBalance = usdcUsd;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // UI State
+  // ─────────────────────────────────────────────────────────────────────────
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(BUNDLES[0]?.id ?? "");
   const [amountDisplay, setAmountDisplay] = useState<string>("");
@@ -168,6 +244,49 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     RiskLevel | "all"
   >("all");
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Execution State
+  // ─────────────────────────────────────────────────────────────────────────
+  const [rows, setRows] = useState<BuyRow[]>([]);
+  const [phase, setPhase] = useState<
+    "idle" | "building" | "signing" | "sending" | "done"
+  >("idle");
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const abortRef = useRef(false);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Privy Cache Warming
+  // ─────────────────────────────────────────────────────────────────────────
+  const cacheWarmedRef = useRef(false);
+
+  useEffect(() => {
+    if (!authenticated || !privyReady || cacheWarmedRef.current) return;
+
+    const warmCache = async () => {
+      const embeddedWallet = wallets.find(
+        (w) => w.address === ownerBase58 && w.standardWallet?.name === "Privy"
+      );
+      if (!embeddedWallet) return;
+
+      try {
+        await signMessage({
+          message: new TextEncoder().encode("warm"),
+          wallet: embeddedWallet,
+        });
+        cacheWarmedRef.current = true;
+        console.log("[Privy] Cache warmed ✓");
+      } catch {
+        // user might reject
+      }
+    };
+
+    const t = setTimeout(warmCache, 800);
+    return () => clearTimeout(t);
+  }, [authenticated, privyReady, wallets, signMessage, ownerBase58]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Computed Values
+  // ─────────────────────────────────────────────────────────────────────────
   const selected = useMemo(
     () => BUNDLES.find((b) => b.id === selectedId) ?? BUNDLES[0],
     [selectedId]
@@ -175,17 +294,14 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
   const filteredBundles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-
     return BUNDLES.filter((bundle) => {
       const matchesSearch =
         q === "" ||
         bundle.name.toLowerCase().includes(q) ||
         bundle.subtitle.toLowerCase().includes(q) ||
         bundle.symbols.some((s) => s.toLowerCase().includes(q));
-
       const matchesRisk =
         selectedRiskFilter === "all" || bundle.risk === selectedRiskFilter;
-
       return matchesSearch && matchesRisk;
     });
   }, [searchQuery, selectedRiskFilter]);
@@ -197,273 +313,468 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     return amt / n;
   }, [amountDisplay, selected]);
 
-  const [rows, setRows] = useState<BuyRow[]>([]);
-  const busy = swap.isBusy;
-
-  // Available balance is USDC in display currency
-  const availableBalance = usdcUsd;
-
   const canBuy = useMemo(() => {
     const amt = Number(amountDisplay);
     if (!ownerBase58) return false;
     if (!selected) return false;
     if (!Number.isFinite(amt) || amt <= 0) return false;
     if (amt > availableBalance) return false;
-    if ((selected.symbols?.length ?? 0) < 3) return false;
+    if ((selected.symbols?.length ?? 0) < 2) return false;
     return true;
   }, [amountDisplay, ownerBase58, selected, availableBalance]);
 
-  const openBundle = useCallback(
-    (id: string) => {
-      setSelectedId(id);
-      setRows([]);
-      swap.reset?.();
-      setOpen(true);
+  const progress = useMemo(() => {
+    if (rows.length === 0) return 0;
+    const doneCount = rows.filter((r) => r.status === "done").length;
+    return (doneCount / rows.length) * 100;
+  }, [rows]);
+
+  const allDone = rows.length > 0 && rows.every((r) => r.status === "done");
+  const hasErrors = rows.some((r) => r.status === "error");
+  const isExecuting = phase !== "idle" && phase !== "done";
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Sign Helper
+  // ─────────────────────────────────────────────────────────────────────────
+  const signWithWallet = useCallback(
+    async (txBytes: Uint8Array): Promise<string> => {
+      const wallet = pickWallet(wallets, ownerBase58);
+      if (!wallet) throw new Error("Wallet not connected");
+
+      const { signedTransaction } = await signTransaction({
+        transaction: txBytes,
+        wallet,
+      });
+
+      return Buffer.from(signedTransaction).toString("base64");
     },
-    [swap]
+    [wallets, ownerBase58, signTransaction]
   );
 
-  const closeModal = useCallback(() => {
-    if (busy) return;
-    setOpen(false);
-  }, [busy]);
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 1: Build all transactions in parallel
+  // ─────────────────────────────────────────────────────────────────────────
+  const buildAllTransactions = useCallback(
+    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
+      setPhase("building");
 
-  const startBundleBuy = useCallback(async () => {
-    if (!canBuy || !selected) return;
+      setRows(rowsData.map((r) => ({ ...r, status: "building" })));
 
-    const amt = Number(amountDisplay);
-    const symbols = selected.symbols;
-    const per = amt / symbols.length;
+      const buildPromises = rowsData.map(async (row) => {
+        try {
+          const amountUnits = Math.floor(row.amountUsd * 10 ** USDC_DECIMALS);
 
-    setRows(
-      symbols.map((symbol) => ({
-        symbol,
-        status: "idle",
-        amountDisplay: per,
-      }))
-    );
+          const buildResp = await postJSON<BuildResponse>("/api/jup/build", {
+            fromOwnerBase58: ownerBase58,
+            inputMint: USDC_MINT,
+            outputMint: row.outputMint,
+            amountUnits,
+            slippageBps: 100,
+          });
 
-    for (const symbol of symbols) {
-      const outputMint = requireMintBySymbol(symbol);
+          return { ...row, txBase64: buildResp.transaction };
+        } catch (e) {
+          return {
+            ...row,
+            status: "error" as SwapStatus,
+            error: String((e as Error)?.message),
+          };
+        }
+      });
 
-      setRows((prev) =>
-        prev.map((r) =>
-          r.symbol === symbol ? { ...r, status: "building" } : r
+      const results = await Promise.all(buildPromises);
+      setRows(results);
+
+      return results;
+    },
+    [ownerBase58]
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 2: Sign all transactions
+  // ─────────────────────────────────────────────────────────────────────────
+  const signAllTransactions = useCallback(
+    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
+      setPhase("signing");
+
+      const toSign = rowsData.filter((r) => r.txBase64 && r.status !== "error");
+
+      if (toSign.length === 0) {
+        return rowsData;
+      }
+
+      setRows(
+        rowsData.map((r) =>
+          r.txBase64 && r.status !== "error" ? { ...r, status: "signing" } : r
         )
       );
 
-      try {
-        setRows((prev) =>
-          prev.map((r) =>
-            r.symbol === symbol ? { ...r, status: "signing" } : r
-          )
-        );
+      const signedRows = [...rowsData];
 
-        const res = await swap.swap({
-          kind: "buy",
-          fromOwnerBase58: ownerBase58,
-          outputMint,
-          amountDisplay: per,
-          fxRate,
-          slippageBps: 50,
-        });
+      for (let i = 0; i < signedRows.length; i++) {
+        const row = signedRows[i];
+        if (!row.txBase64 || row.status === "error") continue;
 
-        setRows((prev) =>
-          prev.map((r) =>
-            r.symbol === symbol
-              ? { ...r, status: "done", sig: res.signature }
-              : r
-          )
-        );
-      } catch (e) {
-        const msg = String((e as Error)?.message || "Swap failed");
-        setRows((prev) =>
-          prev.map((r) =>
-            r.symbol === symbol ? { ...r, status: "error", error: msg } : r
-          )
-        );
+        if (abortRef.current) {
+          signedRows[i] = { ...row, status: "error", error: "Cancelled" };
+          continue;
+        }
+
+        try {
+          const txBytes = Buffer.from(row.txBase64, "base64");
+          const signedB64 = await signWithWallet(txBytes);
+          signedRows[i] = {
+            ...row,
+            signedTxBase64: signedB64,
+            status: "signing",
+          };
+
+          setRows([...signedRows]);
+        } catch (e) {
+          if (isUserRejection(e)) {
+            abortRef.current = true;
+            signedRows[i] = { ...row, status: "error", error: "Cancelled" };
+            for (let j = i + 1; j < signedRows.length; j++) {
+              if (signedRows[j].status !== "error") {
+                signedRows[j] = {
+                  ...signedRows[j],
+                  status: "error",
+                  error: "Cancelled",
+                };
+              }
+            }
+            break;
+          }
+          signedRows[i] = {
+            ...row,
+            status: "error",
+            error: String((e as Error)?.message),
+          };
+        }
       }
+
+      setRows(signedRows);
+      return signedRows;
+    },
+    [signWithWallet]
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 3: Send all signed transactions in parallel
+  // ─────────────────────────────────────────────────────────────────────────
+  const sendAllTransactions = useCallback(
+    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
+      setPhase("sending");
+
+      const toSend = rowsData.filter(
+        (r) => r.signedTxBase64 && r.status !== "error"
+      );
+
+      if (toSend.length === 0) {
+        return rowsData;
+      }
+
+      setRows(
+        rowsData.map((r) =>
+          r.signedTxBase64 && r.status !== "error"
+            ? { ...r, status: "sending" }
+            : r
+        )
+      );
+
+      const sendPromises = rowsData.map(async (row) => {
+        if (!row.signedTxBase64 || row.status === "error") {
+          return row;
+        }
+
+        try {
+          const sendResp = await postJSON<SendResponse>("/api/jup/send", {
+            transaction: row.signedTxBase64,
+          });
+
+          return {
+            ...row,
+            status: "done" as SwapStatus,
+            sig: sendResp.signature,
+          };
+        } catch (e) {
+          return {
+            ...row,
+            status: "error" as SwapStatus,
+            error: String((e as Error)?.message),
+          };
+        }
+      });
+
+      const results = await Promise.all(sendPromises);
+      setRows(results);
+
+      return results;
+    },
+    []
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Main Execution Flow
+  // ─────────────────────────────────────────────────────────────────────────
+  const startBundleBuy = useCallback(async () => {
+    if (!canBuy || !selected || isExecuting) return;
+
+    const amt = Number(amountDisplay);
+    const symbols = selected.symbols;
+    const perUsd = amt / fxRate / symbols.length;
+    const perDisplay = amt / symbols.length;
+
+    abortRef.current = false;
+    setGlobalError(null);
+
+    const initialRows: BuyRow[] = symbols.map((symbol) => ({
+      symbol,
+      outputMint: requireMintBySymbol(symbol),
+      status: "idle",
+      amountDisplay: perDisplay,
+      amountUsd: perUsd,
+    }));
+
+    setRows(initialRows);
+
+    try {
+      console.log("[Bundle] Phase 1: Building transactions...");
+      const builtRows = await buildAllTransactions(initialRows);
+
+      if (abortRef.current) return;
+
+      const buildErrors = builtRows.filter((r) => r.status === "error");
+      if (buildErrors.length === builtRows.length) {
+        setGlobalError("Failed to build transactions");
+        setPhase("idle");
+        return;
+      }
+
+      console.log("[Bundle] Phase 2: Signing transactions...");
+      const signedRows = await signAllTransactions(builtRows);
+
+      if (abortRef.current) return;
+
+      const signErrors = signedRows.filter((r) => r.status === "error");
+      if (signErrors.length === signedRows.length) {
+        setPhase("idle");
+        return;
+      }
+
+      console.log("[Bundle] Phase 3: Sending transactions...");
+      const sentRows = await sendAllTransactions(signedRows);
+
+      const successCount = sentRows.filter((r) => r.status === "done").length;
+      console.log(
+        `[Bundle] Complete: ${successCount}/${sentRows.length} succeeded`
+      );
+
+      setPhase("done");
+    } catch (e) {
+      console.error("[Bundle] Error:", e);
+      setGlobalError(String((e as Error)?.message));
+      setPhase("idle");
     }
-  }, [canBuy, selected, amountDisplay, ownerBase58, fxRate, swap]);
+  }, [
+    canBuy,
+    selected,
+    amountDisplay,
+    fxRate,
+    isExecuting,
+    buildAllTransactions,
+    signAllTransactions,
+    sendAllTransactions,
+  ]);
 
-  const allDone = rows.length > 0 && rows.every((r) => r.status === "done");
-  const progress =
-    rows.length > 0
-      ? (rows.filter((r) => r.status === "done").length / rows.length) * 100
-      : 0;
+  // ─────────────────────────────────────────────────────────────────────────
+  // Retry Failed
+  // ─────────────────────────────────────────────────────────────────────────
+  const retryFailed = useCallback(async () => {
+    if (isExecuting) return;
 
+    const failedRows = rows.filter(
+      (r) => r.status === "error" && r.error !== "Cancelled"
+    );
+    if (failedRows.length === 0) return;
+
+    abortRef.current = false;
+
+    const resetRows = rows.map((r) =>
+      r.status === "error" && r.error !== "Cancelled"
+        ? {
+            ...r,
+            status: "idle" as SwapStatus,
+            error: undefined,
+            txBase64: undefined,
+            signedTxBase64: undefined,
+          }
+        : r
+    );
+    setRows(resetRows);
+
+    try {
+      const toRetry = resetRows.filter((r) => r.status === "idle");
+      console.log(`[Bundle] Retrying ${toRetry.length} failed transactions...`);
+
+      const builtRows = await buildAllTransactions(resetRows);
+      if (abortRef.current) return;
+
+      const signedRows = await signAllTransactions(builtRows);
+      if (abortRef.current) return;
+
+      await sendAllTransactions(signedRows);
+      setPhase("done");
+    } catch (e) {
+      console.error("[Bundle] Retry error:", e);
+      setGlobalError(String((e as Error)?.message));
+      setPhase("idle");
+    }
+  }, [
+    rows,
+    isExecuting,
+    buildAllTransactions,
+    signAllTransactions,
+    sendAllTransactions,
+  ]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Modal Controls
+  // ─────────────────────────────────────────────────────────────────────────
+  const openBundle = useCallback((id: string) => {
+    setSelectedId(id);
+    setRows([]);
+    setPhase("idle");
+    setGlobalError(null);
+    setAmountDisplay("");
+    setOpen(true);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    if (isExecuting) {
+      abortRef.current = true;
+    }
+    setOpen(false);
+  }, [isExecuting]);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && open) closeModal();
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [open, closeModal]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Status Label
+  // ─────────────────────────────────────────────────────────────────────────
+  const phaseLabel = useMemo(() => {
+    switch (phase) {
+      case "building":
+        return "Preparing transactions...";
+      case "signing":
+        return "Sign to confirm...";
+      case "sending":
+        return "Sending transactions...";
+      default:
+        return "Processing...";
+    }
+  }, [phase]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER - Complete UI overhaul for futuristic, user-friendly design
+  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-black/40 via-black/30 to-black/40 p-6 shadow-2xl backdrop-blur-xl">
-      {/* Haven green ambient background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/6 via-transparent to-teal-500/6 opacity-60" />
-      <div className="absolute -top-24 -right-24 h-48 w-48 rounded-full bg-emerald-500/10 blur-3xl" />
-      <div className="absolute -bottom-24 -left-24 h-48 w-48 rounded-full bg-teal-500/10 blur-3xl" />
-
-      <div className="relative z-10">
+    <>
+      {/* Main Panel */}
+      <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent p-6 backdrop-blur-sm">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#3ff387]/20 to-[#3ff387]/5 ring-1 ring-[#3ff387]/20">
+            <Sparkles className="h-5 w-5 text-[#3ff387]" />
+          </div>
           <div>
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-400/20 bg-gradient-to-br from-emerald-500/20 to-teal-500/20 shadow-lg shadow-emerald-500/10">
-                <Sparkles className="h-4 w-4 text-emerald-200" />
-              </div>
-              <h3 className="text-lg font-bold tracking-tight text-white/95">
-                Curated Bundles
-              </h3>
-            </div>
-            <p className="mt-2 max-w-md text-sm leading-relaxed text-white/50">
-              Diversify instantly with expert-curated portfolios. One-tap
-              balanced exposure.
+            <h3 className="text-lg font-semibold text-white">Token Bundles</h3>
+            <p className="text-sm text-white/50">
+              Diversify your portfolio with one tap
             </p>
           </div>
         </div>
 
-        {/* Search and Filters */}
-        <div className="mt-5 space-y-3">
-          {/* Search */}
-          <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
-              <Search className="h-4 w-4 text-white/40" />
-            </div>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search bundles, assets..."
-              className="w-full rounded-xl border border-white/10 bg-black/30 py-3 pl-11 pr-10 text-sm text-white/90 placeholder:text-white/40 outline-none transition-all focus:border-emerald-400/30 focus:bg-black/40 focus:shadow-lg focus:shadow-emerald-500/10"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-white/40 transition-colors hover:text-white/70"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          {/* Risk pills */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-            <div className="flex items-center gap-2 text-xs text-white/50">
-              <Filter className="h-3.5 w-3.5" />
-              <span className="whitespace-nowrap font-semibold">Risk:</span>
-            </div>
-
-            {(["all", "low", "medium", "high", "degen"] as const).map(
-              (risk) => {
-                const isActive = selectedRiskFilter === risk;
-                const Icon =
-                  risk === "all" ? Sparkles : getRiskIcon(risk as RiskLevel);
-
-                return (
-                  <button
-                    key={risk}
-                    type="button"
-                    onClick={() => setSelectedRiskFilter(risk)}
-                    className={[
-                      "flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-all",
-                      isActive
-                        ? "border-emerald-400/40 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-200 shadow-lg shadow-emerald-500/20"
-                        : "border-white/10 bg-white/5 text-white/50 hover:border-white/20 hover:bg-white/10 hover:text-white/70",
-                    ].join(" ")}
-                  >
-                    <Icon className="h-3 w-3" />
-                    {risk}
-                  </button>
-                );
-              }
-            )}
-          </div>
-
-          {/* Count + clear */}
-          {(searchQuery || selectedRiskFilter !== "all") && (
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-white/50">
-                {filteredBundles.length}{" "}
-                {filteredBundles.length === 1 ? "bundle" : "bundles"} found
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  setSelectedRiskFilter("all");
-                }}
-                className="font-semibold text-emerald-300/70 transition-colors hover:text-emerald-300"
-              >
-                Clear filters
-              </button>
-            </div>
-          )}
+        {/* Search */}
+        <div className="relative mb-5">
+          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search bundles or tokens..."
+            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3.5 pl-11 pr-4 text-sm text-white placeholder:text-white/40 outline-none transition-all focus:border-[#3ff387]/30 focus:bg-white/[0.05] focus:ring-1 focus:ring-[#3ff387]/20"
+          />
         </div>
 
-        {/* Bundle grid */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+        {/* Risk Filter */}
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-1 scrollbar-hide">
+          {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
+            <button
+              key={risk}
+              type="button"
+              onClick={() => setSelectedRiskFilter(risk)}
+              className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold capitalize transition-all ${
+                selectedRiskFilter === risk
+                  ? "bg-[#3ff387]/20 text-[#3ff387] ring-1 ring-[#3ff387]/30"
+                  : "bg-white/[0.03] text-white/50 hover:bg-white/[0.06] hover:text-white/70"
+              }`}
+            >
+              {risk === "all" ? "All Bundles" : risk}
+            </button>
+          ))}
+        </div>
+
+        {/* Bundle Grid - 2 columns on md, 1 on mobile, wider cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredBundles.length === 0 ? (
-            <div className="col-span-2 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.02] to-transparent p-8 text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/5">
-                <Search className="h-6 w-6 text-white/40" />
+            <div className="col-span-full py-12 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.03]">
+                <Search className="h-5 w-5 text-white/30" />
               </div>
-              <p className="text-sm font-semibold text-white/60">
-                No bundles found
-              </p>
-              <p className="mt-1 text-xs text-white/40">
-                Try adjusting your search or filters
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  setSelectedRiskFilter("all");
-                }}
-                className="mt-4 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/70 transition-all hover:bg-white/10 hover:text-white"
-              >
-                Clear all filters
-              </button>
+              <p className="text-sm text-white/40">No bundles found</p>
             </div>
           ) : (
-            filteredBundles.map((b, idx) => {
-              const Icon = getRiskIcon(b.risk);
+            filteredBundles.map((b) => {
               return (
                 <button
                   key={b.id}
                   type="button"
                   onClick={() => openBundle(b.id)}
-                  style={{ animationDelay: `${idx * 75}ms` }}
-                  className="group relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-white/[0.02] p-4 text-left transition-all duration-300 hover:scale-[1.02] hover:border-white/20 hover:shadow-xl hover:shadow-emerald-500/5 active:scale-[0.98]"
+                  className="group relative flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition-all duration-300 hover:border-[#3ff387]/30 hover:bg-white/[0.06] hover:shadow-lg hover:shadow-[#3ff387]/5"
                 >
-                  {/* Hover overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/0 to-teal-500/0 opacity-0 transition-opacity duration-300 group-hover:from-emerald-500/10 group-hover:to-teal-500/10 group-hover:opacity-100" />
-
-                  <div className="relative z-10">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-1 flex items-center gap-2">
-                          <Icon className="h-4 w-4 text-white/60 transition-colors group-hover:text-white/80" />
-                          <h4 className="truncate text-sm font-bold text-white/90 transition-colors group-hover:text-white">
-                            {b.name}
-                          </h4>
-                        </div>
-                        <p className="line-clamp-2 text-xs text-white/40 transition-colors group-hover:text-white/50">
-                          {b.subtitle}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4">
-                      <TokenIconsCompact symbols={b.symbols} />
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between gap-2">
-                      {riskPill(b.risk)}
-                      <div className="text-[11px] font-semibold text-white/40">
-                        {b.symbols.length} assets
-                      </div>
-                    </div>
+                  {/* Top row: Icons + Risk */}
+                  <div className="flex items-start justify-between mb-4">
+                    <TokenIconsCompact symbols={b.symbols} />
+                    {riskPill(b.risk)}
                   </div>
 
-                  {/* Shine */}
-                  <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/5 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+                  {/* Bundle info */}
+                  <div className="flex-1">
+                    <h4 className="text-base font-semibold text-white mb-1 group-hover:text-[#3ff387] transition-colors">
+                      {b.name}
+                    </h4>
+                    <p className="text-xs text-white/50 mb-3 line-clamp-2">
+                      {b.subtitle}
+                    </p>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                    <span className="text-xs text-white/40">
+                      {b.symbols.length} assets
+                    </span>
+                    <div className="flex items-center gap-1 text-xs font-medium text-[#3ff387] opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span>Invest</span>
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </div>
+                  </div>
                 </button>
               );
             })
@@ -472,291 +783,289 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
       </div>
 
       {/* Modal */}
-      <Dialog
-        open={open}
-        onOpenChange={(v) => (v ? setOpen(true) : closeModal())}
-      >
-        <DialogContent className="max-w-xl rounded-3xl border border-white/10 bg-black/90 p-0 text-white shadow-2xl backdrop-blur-2xl sm:max-w-2xl">
-          {/* Progress */}
-          {rows.length > 0 && (
-            <div className="absolute left-0 right-0 top-0 h-1 overflow-hidden rounded-t-3xl bg-white/5">
-              <div
-                className="h-full bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-500 transition-all duration-500 ease-out"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          )}
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+          onClick={closeModal}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-[#02010a]/90 backdrop-blur-md" />
 
-          <div className="p-6 sm:p-8">
-            <DialogHeader>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3">
-                    {selected && (
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-400/20 bg-gradient-to-br from-emerald-500/20 to-teal-500/20">
-                        {React.createElement(getRiskIcon(selected.risk), {
-                          className: "h-5 w-5 text-emerald-200",
-                        })}
-                      </div>
-                    )}
-                    <div>
-                      <DialogTitle className="text-xl font-bold text-white/95">
-                        {selected?.name ?? "Bundle"}
-                      </DialogTitle>
-                      <div className="mt-1 text-sm text-white/50">
-                        {selected?.subtitle ?? ""}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  disabled={busy}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/70 transition-all hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </DialogHeader>
-
-            <div className="mt-6 flex items-center justify-between">
-              {selected && (
-                <div className="flex items-center gap-4">
-                  <TokenIconsCompact symbols={selected.symbols} />
-                  {riskPill(selected.risk)}
-                </div>
-              )}
-            </div>
-
-            {/* Amount */}
-            <div className="mt-6 rounded-2xl border border-white/15 bg-gradient-to-br from-white/5 to-white/[0.02] p-5 transition-all focus-within:border-emerald-400/30 focus-within:shadow-lg focus-within:shadow-emerald-500/10">
-              <label className="text-xs font-bold uppercase tracking-wider text-white/60">
-                Investment Amount
-              </label>
-
-              <div className="mt-3 flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3 transition-all focus-within:border-emerald-400/30 focus-within:bg-black/40">
-                <span className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-bold text-white/70">
-                  {displayCurrency}
-                </span>
-                <input
-                  value={amountDisplay}
-                  inputMode="decimal"
-                  onChange={(e) =>
-                    setAmountDisplay(cleanNumberInput(e.target.value))
-                  }
-                  placeholder="0.00"
-                  disabled={busy}
-                  className="flex-1 bg-transparent text-lg font-semibold text-white/95 outline-none placeholder:text-white/30 disabled:opacity-60"
+          {/* Modal Content */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl border border-white/10 bg-gradient-to-b from-zinc-900 to-[#02010a] shadow-2xl shadow-black/50"
+          >
+            {/* Progress Bar */}
+            {rows.length > 0 && (
+              <div className="absolute top-0 left-0 right-0 h-1 bg-white/5 rounded-t-3xl overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-[#3ff387] to-[#3ff387]/70 transition-all duration-500 ease-out"
+                  style={{ width: `${progress}%` }}
                 />
               </div>
+            )}
 
-              {/* Available Balance - now correctly from useBalance */}
-              <div className="mt-3 flex items-center justify-between text-xs">
-                <span className="text-white/40">Available Balance</span>
-                <button
-                  type="button"
-                  onClick={() => setAmountDisplay(availableBalance.toFixed(2))}
-                  disabled={busy}
-                  className="font-semibold text-emerald-300/70 transition-colors hover:text-emerald-300 disabled:opacity-50"
-                >
-                  {availableBalance.toFixed(2)} {displayCurrency}
-                </button>
+            {/* Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-zinc-900/95 backdrop-blur-sm px-6 py-5">
+              <div className="flex items-center gap-4">
+                {selected && (
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#3ff387]/20 to-[#3ff387]/5 ring-1 ring-[#3ff387]/20">
+                    {React.createElement(getRiskIcon(selected.risk), {
+                      className: "h-5 w-5 text-[#3ff387]",
+                    })}
+                  </div>
+                )}
+                <div>
+                  <h2 className="text-lg font-semibold text-white">
+                    {selected?.name ?? "Bundle"}
+                  </h2>
+                  <p className="text-sm text-white/50">
+                    {selected?.symbols.length} assets •{" "}
+                    <span className="capitalize">{selected?.risk}</span> risk
+                  </p>
+                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={closeModal}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-white/60 transition-all hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
 
-            {/* Preview */}
-            <div className="mt-5 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.03] to-transparent p-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-400/60" />
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-white/60">
-                    Distribution
-                  </h4>
-                </div>
-                <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-white/50">
-                  Equal weight
-                </div>
-              </div>
+            {/* Content */}
+            <div className="p-6 space-y-5">
+              {/* Amount Input - Only show before execution */}
+              {phase === "idle" && rows.length === 0 && (
+                <>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+                    <label className="text-xs font-medium text-white/50 mb-3 block uppercase tracking-wider">
+                      Investment Amount
+                    </label>
 
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-white/95">
-                  {perTokenDisplay > 0 ? perTokenDisplay.toFixed(2) : "0.00"}
-                </span>
-                <span className="text-sm text-white/50">
-                  {displayCurrency} per asset
-                </span>
-              </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg font-medium text-white/60">
+                        {displayCurrency}
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={amountDisplay}
+                        onChange={(e) =>
+                          setAmountDisplay(cleanNumberInput(e.target.value))
+                        }
+                        placeholder="0.00"
+                        className="flex-1 bg-transparent text-3xl font-bold text-white outline-none placeholder:text-white/20"
+                      />
+                    </div>
 
-              <div className="mt-4 space-y-2">
-                {(selected?.symbols ?? []).map((s, idx) => {
-                  const meta = findTokenBySymbol(s);
-                  return (
-                    <div
-                      key={s}
-                      style={{ animationDelay: `${idx * 40}ms` }}
-                      className="flex items-center justify-between rounded-xl border border-white/10 bg-black/20 px-4 py-3 transition-all hover:bg-black/30"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="relative h-7 w-7 overflow-hidden rounded-full border-2 border-white/10 bg-gradient-to-br from-white/10 to-white/5">
-                          <Image
-                            src={meta?.logo || "/placeholder.svg"}
-                            alt={`${s} logo`}
-                            fill
-                            className="object-cover"
-                          />
-                        </div>
-                        <span className="text-sm font-bold text-white/85">
-                          {s}
+                    <div className="mt-4 flex items-center justify-between text-sm">
+                      <span className="text-white/40">Available Balance</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAmountDisplay(availableBalance.toFixed(2))
+                        }
+                        className="font-medium text-[#3ff387] hover:text-[#3ff387]/80 transition-colors"
+                      >
+                        {availableBalance.toFixed(2)} {displayCurrency}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Distribution Preview */}
+                  {perTokenDisplay > 0 && (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <span className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                          Distribution Preview
+                        </span>
+                        <span className="text-xs text-[#3ff387]/80 bg-[#3ff387]/10 px-2 py-1 rounded-full">
+                          Equal weight
                         </span>
                       </div>
 
-                      <span className="text-sm font-semibold text-white/60">
-                        {perTokenDisplay > 0
-                          ? perTokenDisplay.toFixed(2)
-                          : "0.00"}
-                      </span>
+                      <div className="space-y-3">
+                        {(selected?.symbols ?? []).map((s) => {
+                          const meta = findTokenBySymbol(s);
+                          return (
+                            <div
+                              key={s}
+                              className="flex items-center justify-between py-2 px-3 rounded-xl bg-white/[0.02] border border-white/5"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="relative h-8 w-8 rounded-full overflow-hidden bg-zinc-800 ring-1 ring-white/10">
+                                  <Image
+                                    src={meta?.logo || "/placeholder.svg"}
+                                    alt={s}
+                                    fill
+                                    className="object-cover"
+                                  />
+                                </div>
+                                <span className="text-sm font-medium text-white">
+                                  {s}
+                                </span>
+                              </div>
+                              <span className="text-sm font-medium text-white/70">
+                                {perTokenDisplay.toFixed(2)} {displayCurrency}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* CTA */}
-            <button
-              type="button"
-              onClick={startBundleBuy}
-              disabled={!canBuy || busy}
-              className={[
-                "group relative mt-6 w-full overflow-hidden rounded-2xl px-6 py-4 text-base font-bold transition-all duration-300",
-                canBuy && !busy
-                  ? "border border-emerald-400/30 bg-gradient-to-r from-emerald-500/20 via-teal-500/20 to-emerald-500/20 text-emerald-100 shadow-lg shadow-emerald-500/20 hover:scale-[1.02] hover:shadow-xl hover:shadow-emerald-500/30 active:scale-[0.98]"
-                  : "cursor-not-allowed border border-white/10 bg-white/5 text-white/35",
-              ].join(" ")}
-            >
-              {canBuy && !busy && (
-                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-1000 group-hover:translate-x-full" />
+                  )}
+                </>
               )}
 
-              <span className="relative flex items-center justify-center gap-2.5">
-                {busy ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Executing Bundle Purchase
-                  </>
-                ) : allDone ? (
-                  <>
-                    <CheckCircle2 className="h-5 w-5" />
-                    Bundle Complete
-                  </>
-                ) : (
-                  <>
-                    Purchase Bundle
-                    <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
-                  </>
-                )}
-              </span>
-            </button>
+              {/* Execution Status */}
+              {rows.length > 0 && (
+                <div className="space-y-3">
+                  {/* Phase indicator */}
+                  {isExecuting && (
+                    <div className="flex items-center justify-center gap-3 py-4 px-4 rounded-2xl bg-[#3ff387]/5 border border-[#3ff387]/20">
+                      <Loader2 className="h-5 w-5 animate-spin text-[#3ff387]" />
+                      <span className="text-sm font-medium text-[#3ff387]">
+                        {phaseLabel}
+                      </span>
+                    </div>
+                  )}
 
-            {!busy && rows.length === 0 && (
-              <p className="mt-3 text-center text-xs text-white/40">
-                Atomic execution • Each asset secured individually
-              </p>
-            )}
-
-            {/* Execution */}
-            {rows.length > 0 && (
-              <div className="mt-6">
-                <div className="mb-4 flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-white/60">
-                    Transaction Status
-                  </h4>
-                  <div className="text-xs font-semibold text-white/50">
-                    {rows.filter((r) => r.status === "done").length} of{" "}
-                    {rows.length} complete
-                  </div>
-                </div>
-
-                <div className="max-h-60 space-y-2.5 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                  {rows.map((r, idx) => {
+                  {rows.map((r) => {
                     const meta = findTokenBySymbol(r.symbol);
-                    const ok = r.status === "done";
-                    const bad = r.status === "error";
-                    const active = !ok && !bad;
+                    const isDone = r.status === "done";
+                    const isError = r.status === "error";
+                    const isActive = [
+                      "building",
+                      "signing",
+                      "sending",
+                    ].includes(r.status);
 
                     return (
                       <div
                         key={r.symbol}
-                        style={{ animationDelay: `${idx * 50}ms` }}
-                        className={[
-                          "flex items-center justify-between gap-4 rounded-xl border p-4 transition-all duration-300",
-                          ok ? "border-emerald-400/30 bg-emerald-500/10" : "",
-                          bad ? "border-rose-400/30 bg-rose-500/10" : "",
-                          active
-                            ? "animate-pulse border-white/10 bg-white/5"
-                            : "",
-                        ].join(" ")}
+                        className={`flex items-center justify-between rounded-2xl border p-4 transition-all ${
+                          isDone
+                            ? "border-[#3ff387]/30 bg-[#3ff387]/5"
+                            : isError
+                              ? "border-red-500/30 bg-red-500/5"
+                              : isActive
+                                ? "border-[#3ff387]/20 bg-[#3ff387]/5"
+                                : "border-white/10 bg-white/[0.02]"
+                        }`}
                       >
                         <div className="flex items-center gap-3">
-                          <div className="relative h-9 w-9 overflow-hidden rounded-full border-2 border-white/10 bg-gradient-to-br from-white/10 to-white/5">
+                          <div className="relative h-10 w-10 rounded-full overflow-hidden bg-zinc-800 ring-1 ring-white/10">
                             <Image
                               src={meta?.logo || "/placeholder.svg"}
-                              alt={`${r.symbol} logo`}
+                              alt={r.symbol}
                               fill
                               className="object-cover"
                             />
                           </div>
                           <div>
-                            <div className="text-sm font-bold text-white/90">
+                            <p className="text-sm font-semibold text-white">
                               {r.symbol}
-                            </div>
-                            <div className="text-xs text-white/45">
+                            </p>
+                            <p className="text-xs text-white/50">
                               {r.amountDisplay.toFixed(2)} {displayCurrency}
-                            </div>
+                            </p>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2.5">
-                          {ok && (
-                            <CheckCircle2 className="h-5 w-5 text-emerald-300" />
+                        <div className="flex items-center gap-2">
+                          {isDone && (
+                            <CheckCircle2 className="h-6 w-6 text-[#3ff387]" />
                           )}
-                          {bad && <XCircle className="h-5 w-5 text-rose-300" />}
-                          {active && (
-                            <Loader2 className="h-5 w-5 animate-spin text-white/60" />
+                          {isError && (
+                            <XCircle className="h-6 w-6 text-red-400" />
                           )}
-
-                          <span
-                            className={[
-                              "text-xs font-semibold",
-                              ok ? "text-emerald-300" : "",
-                              bad ? "text-rose-300" : "",
-                              active ? "text-white/60" : "",
-                            ].join(" ")}
-                          >
-                            {ok ? "Complete" : bad ? "Failed" : r.status}
-                          </span>
+                          {isActive && (
+                            <Loader2 className="h-6 w-6 text-[#3ff387] animate-spin" />
+                          )}
+                          {r.status === "idle" && (
+                            <div className="h-6 w-6 rounded-full border-2 border-white/20" />
+                          )}
                         </div>
                       </div>
                     );
                   })}
-                </div>
 
-                {swap.error && (
-                  <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
-                    <div className="flex items-start gap-3">
-                      <XCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-300" />
-                      <div className="text-sm text-rose-200/90">
-                        {swap.error.message}
+                  {/* Error Summary */}
+                  {hasErrors && !isExecuting && (
+                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5">
+                      <div className="flex items-start gap-4">
+                        <AlertTriangle className="h-6 w-6 text-amber-400 shrink-0" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-amber-200">
+                            Some transactions failed
+                          </p>
+                          <button
+                            type="button"
+                            onClick={retryFailed}
+                            className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-amber-400 hover:text-amber-300 transition-colors"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            Retry failed transactions
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* Global Error */}
+                  {globalError && (
+                    <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-5">
+                      <p className="text-sm text-red-300">{globalError}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CTA Button */}
+              <button
+                type="button"
+                onClick={allDone ? closeModal : startBundleBuy}
+                disabled={(!canBuy && !allDone) || isExecuting}
+                className={`w-full rounded-2xl py-4 text-base font-bold transition-all ${
+                  allDone
+                    ? "bg-[#3ff387] text-[#02010a] hover:bg-[#3ff387]/90 shadow-lg shadow-[#3ff387]/20"
+                    : canBuy && !isExecuting
+                      ? "bg-[#3ff387] text-[#02010a] hover:bg-[#3ff387]/90 shadow-lg shadow-[#3ff387]/20"
+                      : "bg-white/5 text-white/30 cursor-not-allowed"
+                }`}
+              >
+                {isExecuting ? (
+                  <span className="flex items-center justify-center gap-3">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    {phaseLabel}
+                  </span>
+                ) : allDone ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <CheckCircle2 className="h-5 w-5" />
+                    Complete
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    Purchase Bundle
+                    <ArrowRight className="h-5 w-5" />
+                  </span>
                 )}
-              </div>
-            )}
+              </button>
+
+              {/* Footer Note */}
+              {phase === "idle" && rows.length === 0 && (
+                <p className="text-center text-xs text-white/40">
+                  All transactions execute in parallel for maximum speed
+                </p>
+              )}
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
-    </div>
+        </div>
+      )}
+    </>
   );
 }

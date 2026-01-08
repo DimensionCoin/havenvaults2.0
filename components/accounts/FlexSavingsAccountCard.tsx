@@ -65,12 +65,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
 
   const effectiveLoading = loadingProp ?? (userLoading || balanceLoading);
 
-  const currency = (
-    displayCurrencyProp?.trim() ||
-    balanceCurrency?.trim() ||
-    user?.displayCurrency?.trim() ||
-    "USD"
-  ).toUpperCase();
+  
 
   // ✅ Only treat as "open account" when we have a real marginfiAccountPk
   const linkedMarginfiPk =
