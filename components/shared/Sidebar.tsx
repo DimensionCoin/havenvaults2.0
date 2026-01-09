@@ -25,35 +25,40 @@ const Sidebar: React.FC = () => {
 
   return (
     // hidden on small, visible md+; thin left sidebar
-    <aside className="hidden md:flex fixed left-0 top-0 bottom-0 z-40 w-20 lg:w-23 flex-col border-r border-zinc-800 bg-black/40 backdrop-blur-xl">
+    <aside className="hidden md:flex fixed left-0 top-0 bottom-0 z-40 w-20 lg:w-24 flex-col border-r border-border bg-card/80 backdrop-blur-xl shadow-fintech-lg">
+     
+
       {/* Nav items */}
-      <nav className="mt-7 flex flex-1 flex-col items-center gap-2">
+      <nav className="mt-6 flex flex-1 flex-col items-center gap-2 px-2">
         {navItems.map(({ href, label, Icon }) => {
           const isActive =
             href === "/dashboard"
               ? pathname === href
               : pathname.startsWith(href);
 
-          const baseItem =
-            "group flex w-16 lg:w-18 flex-col items-center gap-1 rounded-2xl px-2 py-2 text-[10px] font-medium transition";
-          const itemClasses = isActive
-            ? `${baseItem} bg-primary text-black`
-            : `${baseItem} text-zinc-400 hover:bg-zinc-900/80`;
-
           return (
-            <Link key={href} href={href} className={itemClasses}>
+            <Link
+              key={href}
+              href={href}
+              className={[
+                "group flex w-full max-w-[64px] flex-col items-center gap-1 rounded-2xl px-2 py-2",
+                "text-[10px] font-medium transition-colors",
+                "border border-transparent",
+                isActive
+                  ? "bg-primary text-primary-foreground border-primary/30 shadow-[0_10px_28px_rgba(41,198,104,0.18)] dark:shadow-[0_12px_30px_rgba(63,243,135,0.14)]"
+                  : "bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground hover:border-border",
+              ].join(" ")}
+              aria-current={isActive ? "page" : undefined}
+            >
               <Icon
-                className={`${
+                className={[
+                  href === "/dashboard" ? "h-5 w-5" : "h-4 w-4",
                   isActive
-                    ? "text-black"
-                    : "text-zinc-200 group-hover:text-white"
-                } ${href === "/dashboard" ? "h-5 w-5" : "h-4 w-4"}`}
+                    ? "text-secondary-foreground"
+                    : "text-foreground/80 group-hover:text-foreground",
+                ].join(" ")}
               />
-              <span
-                className={
-                  isActive ? "text-[10px]" : "text-[10px] text-zinc-400"
-                }
-              >
+              <span className={isActive ? "text-secondary-foreground" : ""}>
                 {label}
               </span>
             </Link>
@@ -61,7 +66,7 @@ const Sidebar: React.FC = () => {
         })}
       </nav>
 
-      {/* bottom spacer if you want something later (settings, etc.) */}
+      {/* Bottom spacer (future: settings/help) */}
       <div className="h-6" />
     </aside>
   );

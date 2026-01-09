@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Sparkles,
 } from "lucide-react";
+import ThemeToggle from "@/components/shared/ThemeToggle";
 
 const Landing = () => {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
@@ -31,7 +32,7 @@ const Landing = () => {
   }, []);
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#050505] text-white">
+    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
       {/* Subtle grid */}
       <div
         className="pointer-events-none fixed inset-0 opacity-[0.03]"
@@ -44,7 +45,7 @@ const Landing = () => {
 
       {/* Mouse follow glow - subtle */}
       <div
-        className="pointer-events-none fixed h-[500px] w-[500px] rounded-full bg-emerald-500/[0.07] blur-[100px] transition-transform duration-500 ease-out hidden md:block"
+        className="pointer-events-none fixed h-[500px] w-[500px] rounded-full bg-primary/[0.07] blur-[100px] transition-transform duration-500 ease-out hidden md:block"
         style={{
           transform: `translate(${mousePosition.x - 250}px, ${mousePosition.y - 250}px)`,
         }}
@@ -52,14 +53,14 @@ const Landing = () => {
 
       {/* Top ambient glow */}
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -top-[400px] left-1/2 h-[800px] w-[1200px] -translate-x-1/2 rounded-full bg-emerald-500/[0.08] blur-[120px]" />
+        <div className="absolute -top-[400px] left-1/2 h-[800px] w-[1200px] -translate-x-1/2 rounded-full bg-primary/[0.08] blur-[120px]" />
       </div>
 
       <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6 sm:px-8">
         {/* Navigation */}
         <header className="relative z-50 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3 group">
-            <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-all group-hover:border-emerald-500/30">
+            <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-border bg-background/60 backdrop-blur-sm transition-all group-hover:border-primary/30">
               <Image
                 src="/logo.jpg"
                 alt="Haven"
@@ -71,16 +72,17 @@ const Landing = () => {
             <span className="text-lg font-semibold tracking-tight">Haven</span>
           </Link>
 
+          <ThemeToggle />
           <div className="flex items-center gap-3">
             <Link
               href="/sign-in"
-              className="hidden sm:inline-flex rounded-full px-5 py-2.5 text-sm font-medium text-white/70 transition-colors hover:text-white"
+              className="hidden sm:inline-flex rounded-full px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               Sign in
             </Link>
             <Link
               href="/sign-in"
-              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-black transition-all hover:bg-emerald-400"
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-black transition-all hover:bg-primary/90 "
             >
               Get started
               <ArrowRight className="h-4 w-4" />
@@ -92,11 +94,11 @@ const Landing = () => {
         <section className="flex flex-1 flex-col items-center justify-center py-16 md:py-24">
           {/* Trust badge */}
           <div className="mb-8">
-            <div className="inline-flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 backdrop-blur-sm">
-              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20">
-                <Lock className="h-3 w-3 text-emerald-400" />
+            <div className="inline-flex items-center gap-2.5 rounded-full border border-border bg-background/60 px-4 py-2 backdrop-blur-sm">
+              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20">
+                <Lock className="h-3 w-3 text-primary" />
               </div>
-              <span className="text-sm text-white/60">
+              <span className="text-sm text-muted-foreground">
                 Non-custodial · Your keys, your money
               </span>
             </div>
@@ -105,13 +107,13 @@ const Landing = () => {
           {/* Headline */}
           <div className="text-center max-w-3xl">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1]">
-              <span className="text-white">Banking that </span>
-              <span className="bg-gradient-to-r from-emerald-400 via-emerald-300 to-teal-400 bg-clip-text text-transparent">
+              <span className="text-foreground">Banking that </span>
+              <span className="bg-gradient-to-r from-primary via-primary to-primary bg-clip-text text-transparent">
                 works for you
               </span>
             </h1>
 
-            <p className="mt-6 text-lg sm:text-xl text-white/50 max-w-2xl mx-auto leading-relaxed">
+            <p className="mt-6 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
               Haven gives you a savings account with real yield, instant
               investing, and complete control — all without the complexity of
               crypto.
@@ -122,15 +124,15 @@ const Landing = () => {
           <div className="mt-10 flex flex-col sm:flex-row items-center gap-4">
             <Link
               href="/sign-in"
-              className="group relative overflow-hidden rounded-full bg-emerald-500 px-8 py-4 text-base font-semibold text-black transition-all hover:bg-emerald-400 hover:shadow-[0_0_40px_rgba(16,185,129,0.3)]"
+              className="group relative overflow-hidden rounded-full bg-primary px-8 py-4 text-base font-semibold text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-[0_0_40px_hsl(var(--primary)/0.30)]"
             >
-              <span className="flex items-center gap-2">
+              <span className="flex items-center gap-2 text-black">
                 Open your account
                 <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
               </span>
             </Link>
 
-            <span className="text-sm text-white/40">
+            <span className="text-sm text-muted-foreground">
               Free to start · No minimum deposit
             </span>
           </div>
@@ -145,24 +147,26 @@ const Landing = () => {
             ].map((stat, i) => (
               <div
                 key={i}
-                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 text-center backdrop-blur-sm"
+                className="rounded-2xl border border-border bg-background/60 p-5 text-center backdrop-blur-sm"
               >
-                <div className="text-2xl font-bold text-emerald-400">
+                <div className="text-2xl font-bold text-primary">
                   {stat.value}
                 </div>
-                <div className="mt-1 text-xs text-white/40">{stat.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {stat.label}
+                </div>
               </div>
             ))}
           </div>
         </section>
 
         {/* Problem/Solution */}
-        <section className="py-20 border-t border-white/[0.06]">
+        <section className="py-20 border-t border-border">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-white">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
               The bank account you deserve
             </h2>
-            <p className="mt-4 text-lg text-white/40 max-w-xl mx-auto">
+            <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
               Traditional banks pay you nothing. Crypto is confusing. Haven is
               the middle ground.
             </p>
@@ -170,8 +174,8 @@ const Landing = () => {
 
           <div className="grid md:grid-cols-2 gap-6">
             {/* Traditional Banking - Problems */}
-            <div className="rounded-3xl border border-white/[0.06] bg-white/[0.02] p-8">
-              <div className="inline-flex items-center gap-2 rounded-full bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 mb-6">
+            <div className="rounded-3xl border border-border bg-background/60 p-8">
+              <div className="inline-flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive mb-6">
                 Traditional Banking
               </div>
               <ul className="space-y-4">
@@ -182,8 +186,11 @@ const Landing = () => {
                   "Hidden fees everywhere",
                   "They control your money",
                 ].map((item, i) => (
-                  <li key={i} className="flex items-start gap-3 text-white/50">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-red-500/50 shrink-0" />
+                  <li
+                    key={i}
+                    className="flex items-start gap-3 text-muted-foreground"
+                  >
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-destructive/50 shrink-0" />
                     {item}
                   </li>
                 ))}
@@ -191,8 +198,8 @@ const Landing = () => {
             </div>
 
             {/* Haven - Solutions */}
-            <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/[0.03] p-8">
-              <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 mb-6">
+            <div className="rounded-3xl border border-primary/30 bg-primary/[0.06] p-8">
+              <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary mb-6">
                 <Sparkles className="h-3 w-3" />
                 Haven
               </div>
@@ -204,8 +211,11 @@ const Landing = () => {
                   "Transparent, minimal fees",
                   "You own your money completely",
                 ].map((item, i) => (
-                  <li key={i} className="flex items-start gap-3 text-white/80">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400 shrink-0" />
+                  <li
+                    key={i}
+                    className="flex items-start gap-3 text-foreground/90"
+                  >
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-primary shrink-0" />
                     {item}
                   </li>
                 ))}
@@ -215,12 +225,12 @@ const Landing = () => {
         </section>
 
         {/* Features */}
-        <section className="py-20 border-t border-white/[0.06]">
+        <section className="py-20 border-t border-border">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-white">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
               Everything you need, nothing you don&apos;t
             </h2>
-            <p className="mt-4 text-lg text-white/40 max-w-xl mx-auto">
+            <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
               We handle the complexity of DeFi so you can focus on what matters
               — growing your money.
             </p>
@@ -267,15 +277,15 @@ const Landing = () => {
             ].map((feature, i) => (
               <div
                 key={i}
-                className="group rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 transition-all hover:border-white/10 hover:bg-white/[0.03]"
+                className="group rounded-2xl border border-border bg-background/60 p-6 transition-all hover:border-border hover:bg-accent"
               >
-                <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 mb-4 transition-all group-hover:bg-emerald-500/15">
+                <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary mb-4 transition-all group-hover:bg-primary/15">
                   <feature.icon className="h-5 w-5" />
                 </div>
-                <h3 className="text-base font-semibold text-white mb-2">
+                <h3 className="text-base font-semibold text-foreground mb-2">
                   {feature.title}
                 </h3>
-                <p className="text-sm text-white/40 leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   {feature.description}
                 </p>
               </div>
@@ -284,12 +294,12 @@ const Landing = () => {
         </section>
 
         {/* How it works */}
-        <section className="py-20 border-t border-white/[0.06]">
+        <section className="py-20 border-t border-border">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-white">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
               Get started in minutes
             </h2>
-            <p className="mt-4 text-lg text-white/40">
+            <p className="mt-4 text-lg text-muted-foreground">
               No paperwork. No waiting. No crypto knowledge required.
             </p>
           </div>
@@ -316,17 +326,17 @@ const Landing = () => {
               },
             ].map((item, i) => (
               <div key={i} className="relative">
-                <div className="text-6xl font-bold text-white/[0.03] absolute -top-4 left-0">
+                <div className="text-6xl font-bold text-foreground/5 absolute -top-4 left-0">
                   {item.step}
                 </div>
                 <div className="relative pt-8">
-                  <div className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/10 text-sm font-semibold text-emerald-400 mb-4">
+                  <div className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary mb-4">
                     {item.step}
                   </div>
-                  <h3 className="text-lg font-semibold text-white mb-2">
+                  <h3 className="text-lg font-semibold text-foreground mb-2">
                     {item.title}
                   </h3>
-                  <p className="text-sm text-white/40 leading-relaxed">
+                  <p className="text-sm text-muted-foreground leading-relaxed">
                     {item.description}
                   </p>
                 </div>
@@ -336,23 +346,23 @@ const Landing = () => {
         </section>
 
         {/* Social proof / Trust */}
-        <section className="py-20 border-t border-white/[0.06]">
-          <div className="rounded-3xl border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent p-10 text-center">
-            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 mb-6">
+        <section className="py-20 border-t border-border">
+          <div className="rounded-3xl border border-border bg-gradient-to-b from-background/60 to-transparent p-10 text-center">
+            <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary mb-6">
               <Shield className="h-4 w-4" />
               Built on Solana
             </div>
 
-            <h2 className="text-2xl sm:text-3xl font-bold text-white max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-foreground max-w-2xl mx-auto">
               Your money is secured by blockchain technology, not a bank vault
             </h2>
 
-            <p className="mt-4 text-white/40 max-w-xl mx-auto">
+            <p className="mt-4 text-muted-foreground max-w-xl mx-auto">
               Every transaction is verified on Solana — one of the fastest, most
               secure blockchains. You can verify your funds anytime, anywhere.
             </p>
 
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-x-8 gap-y-4 text-sm text-white/30">
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-x-8 gap-y-4 text-sm text-muted-foreground">
               <span>Audited protocols</span>
               <span className="hidden sm:inline">·</span>
               <span>Open source</span>
@@ -366,31 +376,31 @@ const Landing = () => {
 
         {/* Final CTA */}
         <section className="py-20 text-center">
-          <h2 className="text-3xl sm:text-4xl font-bold text-white">
+          <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
             Ready to make your money work?
           </h2>
-            <p className="mt-4 text-lg text-white/40 max-w-lg mx-auto">
-            Join thousands who&apos;ve moved past 0% savings accounts. Your future
-            self will thank you.
+          <p className="mt-4 text-lg text-muted-foreground max-w-lg mx-auto">
+            Join thousands who&apos;ve moved past 0% savings accounts. Your
+            future self will thank you.
           </p>
 
           <div className="mt-8">
             <Link
               href="/sign-in"
-              className="group inline-flex items-center gap-2 rounded-full bg-emerald-500 px-8 py-4 text-base font-semibold text-black transition-all hover:bg-emerald-400 hover:shadow-[0_0_40px_rgba(16,185,129,0.3)]"
+              className="group inline-flex items-center gap-2 rounded-full bg-primary px-8 py-4 text-base font-semibold text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-[0_0_40px_hsl(var(--primary)/0.30)]"
             >
               Create free account
               <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
             </Link>
           </div>
 
-          <p className="mt-4 text-sm text-white/30">
+          <p className="mt-4 text-sm text-muted-foreground">
             No credit check · No minimum balance · Start in 2 minutes
           </p>
         </section>
 
         {/* Footer */}
-        <footer className="py-8 border-t border-white/[0.06]">
+        <footer className="py-8 border-t border-border">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="relative h-8 w-8 overflow-hidden rounded-lg">
@@ -401,7 +411,7 @@ const Landing = () => {
                   className="object-contain"
                 />
               </div>
-              <span className="text-sm text-white/40">
+              <span className="text-sm text-muted-foreground">
                 © {new Date().getFullYear()} Haven Labs
               </span>
             </div>
@@ -415,7 +425,7 @@ const Landing = () => {
                 <Link
                   key={link.label}
                   href={link.href}
-                  className="text-sm text-white/40 transition-colors hover:text-white/60"
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {link.label}
                 </Link>
@@ -423,7 +433,7 @@ const Landing = () => {
             </div>
           </div>
 
-          <p className="mt-6 text-xs text-white/20 text-center max-w-2xl mx-auto">
+          <p className="mt-6 text-xs text-muted-foreground text-center max-w-2xl mx-auto">
             Haven is non-custodial software. You maintain sole control of your
             private keys and assets. Haven Labs does not have access to your
             funds. Cryptocurrency investments are volatile and may lose value.

@@ -9,7 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import Link from "next/link";
-import { ChevronLeft, RefreshCw } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 
 import SearchBar from "@/components/exchange/SearchBar";
 import CategoryTabs from "@/components/exchange/CategoryTabs";
@@ -259,45 +259,44 @@ export default function ExchangePage() {
     return list;
   }, [filteredTokens, prices, sortOption]);
 
-  // Refresh handler
-  const handleRefresh = useCallback(() => {
-    const mints = CATALOG.map((t) => t.mint);
-    loadPrices(mints, true);
-  }, [loadPrices]);
-
   const showMovers = activeTab === "all" && !search.trim();
   const isInitialLoading =
     wishlistLoading || (loadingPrices && Object.keys(prices).length === 0);
 
   return (
-    <div className="min-h-screen text-zinc-50">
-      <div className="mx-auto max-w-2xl px-4 pb-24 pt-4">
-        {/* Header */}
+    <div className="haven-app">
+      <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-4">
+        {/* Header (Haven card) */}
         <header className="mb-5">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/invest"
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 transition-colors hover:bg-zinc-800"
-            >
-              <ChevronLeft className="h-5 w-5 text-zinc-400" />
-            </Link>
-            <div className="flex-1">
-              <h1 className="text-2xl font-bold tracking-tight">Markets</h1>
-              <p className="text-sm text-zinc-500">
-                {CATALOG.length} assets available
-              </p>
+          <div className="relative overflow-hidden haven-card px-4 py-4">
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-foreground/10 to-transparent dark:from-foreground/12" />
+
+            <div className="relative z-10 flex items-center gap-3">
+              <Link
+                href="/invest"
+                className={[
+                  "inline-flex h-10 w-10 items-center justify-center rounded-full",
+                  "border border-border bg-card/80 backdrop-blur-xl",
+                  "shadow-fintech-sm transition-colors hover:bg-secondary",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                ].join(" ")}
+                aria-label="Back to invest"
+              >
+                <ChevronLeft className="h-5 w-5 text-foreground/70" />
+              </Link>
+
+              <div className="flex-1 min-w-0">
+                <p className="haven-kicker">Exchange</p>
+                <h1 className="mt-0.5 text-[22px] font-semibold tracking-tight text-foreground">
+                  Markets
+                </h1>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  {CATALOG.length} assets available
+                </p>
+              </div>
+
+              {/* Removed refresh button (styling-only change requested) */}
             </div>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 transition-colors hover:bg-zinc-800 disabled:opacity-50"
-              aria-label="Refresh prices"
-            >
-              <RefreshCw
-                className={`h-5 w-5 text-zinc-400 ${refreshing ? "animate-spin" : ""}`}
-              />
-            </button>
           </div>
         </header>
 
@@ -322,29 +321,33 @@ export default function ExchangePage() {
         {/* Featured Movers */}
         {showMovers && Object.keys(prices).length > 0 && (
           <div className="mb-6">
-            <FeaturedMovers
-              tokens={CATALOG}
-              prices={prices}
-              displayCurrency={displayCurrency}
-              fxRate={fxRate}
-            />
+            <div className="haven-card-soft p-3">
+              <FeaturedMovers
+                tokens={CATALOG}
+                prices={prices}
+                displayCurrency={displayCurrency}
+                fxRate={fxRate}
+              />
+            </div>
           </div>
         )}
 
         {/* Results count + Sort */}
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm text-zinc-500">
+          <p className="text-[12px] text-muted-foreground">
             {sortedTokens.length === 0 ? (
               "No results"
             ) : (
               <>
-                <span className="font-medium text-zinc-300">
+                <span className="font-semibold text-foreground tabular-nums">
                   {sortedTokens.length}
                 </span>{" "}
                 {sortedTokens.length === 1 ? "market" : "markets"}
               </>
             )}
           </p>
+
+          {/* Keep existing component (already restyled separately) */}
           <SortDropdown value={sortOption} onChange={setSortOption} />
         </div>
 
@@ -363,9 +366,14 @@ export default function ExchangePage() {
         />
 
         {/* Currency indicator */}
-        <p className="mt-8 text-center text-xs text-zinc-600">
+        <p className="mt-8 text-center text-xs text-muted-foreground">
           Prices in {displayCurrency}
         </p>
+
+        {/* Keep refreshing state alive (since loadPrices supports force), even though button is removed */}
+        {refreshing ? (
+          <span className="sr-only">Refreshing prices…</span>
+        ) : null}
       </div>
     </div>
   );

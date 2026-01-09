@@ -110,17 +110,18 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
   const changeIsUp = (totalChange24hUsd ?? 0) > 0;
   const changeIsDown = (totalChange24hUsd ?? 0) < 0;
 
+  // ✅ swapped to theme tokens (no zinc/white hardcoding)
   const changeColor = changeIsUp
-    ? "text-emerald-300"
+    ? "text-primary"
     : changeIsDown
-      ? "text-red-300"
-      : "text-zinc-300";
+      ? "text-destructive"
+      : "text-muted-foreground";
 
   const changeChipBg = changeIsUp
-    ? "border-emerald-500/25 bg-emerald-500/10"
+    ? "border-primary/25 bg-primary/10"
     : changeIsDown
-      ? "border-red-500/25 bg-red-500/10"
-      : "border-white/10 bg-white/5";
+      ? "border-destructive/25 bg-destructive/10"
+      : "border-border bg-background/50";
 
   const changeLabelUsd =
     !totalChange24hUsd || !Number.isFinite(totalChange24hUsd)
@@ -151,11 +152,11 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
     disabled?: boolean;
   }) => {
     const base =
-      "w-full h-11 rounded-2xl px-3 transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40";
-    const solid =
-      "border border-white/10 bg-black/25 text-white hover:bg-secondary";
-    const ghost =
-      "border border-white/10 bg-white/5 text-white hover:bg-white/10";
+      "w-full h-11 rounded-2xl px-3 transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
+    // use your shared theme classes for consistent look
+    const solid = "haven-btn-primary text-black";
+    const ghost = "haven-btn-primary  text-black";
 
     return (
       <button
@@ -169,7 +170,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
         ].join(" ")}
       >
         <div className="flex items-center justify-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/10 bg-black/5 text-black">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/60 text-foreground">
             {icon}
           </span>
           <span className="text-sm font-semibold">{label}</span>
@@ -181,12 +182,12 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
   return (
     <div className="w-full">
       <div className="rounded-3xl">
-        {/* ───────────────────────── Header / Balance / 2 Buttons ───────────────────────── */}
-        <div className="rounded-3xl border border-white/10 bg-black/35 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.04)] backdrop-blur-xl sm:p-5">
+        {/* ───────────────── Header / Balance / 2 Buttons ───────────────── */}
+        <div className="haven-card p-4 sm:p-5 backdrop-blur-xl">
           {/* Header */}
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-full border border-white/15 bg-black/60 text-[10px] text-zinc-400">
+              <div className="flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-full border border-border bg-background/60 text-[10px] text-muted-foreground">
                 {avatarUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -195,17 +196,17 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="text-xs font-semibold text-white">
+                  <span className="text-xs font-semibold text-foreground">
                     {initials}
                   </span>
                 )}
               </div>
 
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-white">
+                <p className="truncate text-sm font-semibold text-foreground">
                   Hi, {firstName}
                 </p>
-                <p className="truncate text-[11px] text-zinc-400">
+                <p className="truncate text-[11px] text-muted-foreground">
                   Welcome back
                 </p>
               </div>
@@ -214,14 +215,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
 
           {/* Balance */}
           <div className="mt-4">
-            <p className="text-[11px] font-medium text-zinc-400">
+            <p className="text-[11px] font-medium text-muted-foreground">
               Your asset balance
             </p>
 
             {loading ? (
-              <div className="mt-2 h-11 w-48 animate-pulse rounded-2xl bg-white/10" />
+              <div className="mt-2 h-11 w-48 animate-pulse rounded-2xl bg-accent/60" />
             ) : (
-              <p className="mt-1 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+              <p className="mt-1 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
                 {/* ✅ INVESTMENTS + POSITIONS (same as InvestAccountCard) */}
                 {formatUsd(investTotalUsd)}
               </p>
@@ -237,28 +238,29 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                 ].join(" ")}
               >
                 {loading ? (
-                  <span className="h-4 w-14 animate-pulse rounded-full bg-white/10" />
+                  <span className="h-4 w-14 animate-pulse rounded-full bg-accent/60" />
                 ) : (
                   changeLabelPct
                 )}
               </span>
-              <span className="text-[11px] text-zinc-400">
+
+              <span className="text-[11px] text-muted-foreground">
                 {loading ? "Last 24h" : `${changeLabelUsd} today`}
               </span>
             </div>
 
-            {/* 2 buttons: always short on mobile, roomy on desktop */}
+            {/* 2 buttons */}
             <div className="mt-4 grid grid-cols-2 gap-3">
               <ActionButton
                 label="Swap assets"
-                icon={<ArrowDownLeft className="h-4 w-4 text-white" />}
+                icon={<ArrowDownLeft className="h-4 w-4 text-foreground" />}
                 onClick={onSell ?? onBuy}
                 variant="solid"
                 disabled={loading}
               />
               <ActionButton
                 label="Send assets"
-                icon={<ArrowUpRight className="h-4 w-4 text-white" />}
+                icon={<ArrowUpRight className="h-4 w-4 text-foreground" />}
                 onClick={onSend ?? onReceive}
                 variant="ghost"
                 disabled={loading}
@@ -267,14 +269,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
           </div>
         </div>
 
-        {/* ───────────────────────── Assets List ───────────────────────── */}
+        {/* ───────────────── Assets List ───────────────── */}
         <div className="mt-5">
           <div className="mb-2 flex items-center justify-between px-1">
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-400">
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
               Assets
             </p>
             {!loading && (
-              <span className="text-[11px] text-zinc-500">
+              <span className="text-[11px] text-muted-foreground">
                 {walletAssets.length} asset
                 {walletAssets.length === 1 ? "" : "s"}
               </span>
@@ -286,28 +288,30 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
               {Array.from({ length: 4 }).map((_, i) => (
                 <div
                   key={i}
-                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/35 px-4 py-4"
+                  className="flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-4"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 animate-pulse rounded-full bg-white/10" />
+                    <div className="h-10 w-10 animate-pulse rounded-full bg-accent/60" />
                     <div className="space-y-2">
-                      <div className="h-3 w-28 animate-pulse rounded bg-white/10" />
-                      <div className="h-3 w-36 animate-pulse rounded bg-white/10" />
+                      <div className="h-3 w-28 animate-pulse rounded bg-accent/60" />
+                      <div className="h-3 w-36 animate-pulse rounded bg-accent/60" />
                     </div>
                   </div>
-                  <div className="h-3 w-16 animate-pulse rounded bg-white/10" />
+                  <div className="h-3 w-16 animate-pulse rounded bg-accent/60" />
                 </div>
               ))}
             </div>
           ) : showEmptyState ? (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-black/25 py-8 text-center">
-              <p className="text-sm font-medium text-zinc-200">No assets yet</p>
-              <p className="mt-1 text-[12px] text-zinc-500">
+            <div className="rounded-2xl border border-dashed border-border bg-background/40 py-8 text-center">
+              <p className="text-sm font-medium text-foreground">
+                No assets yet
+              </p>
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 When you swap into an asset, it’ll show up here.
               </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+            <div className="overflow-hidden rounded-2xl border border-border bg-background/40">
               {walletAssets.map((t, idx) => {
                 const isUp =
                   (t.usdChange24h ?? 0) > 0 ||
@@ -317,10 +321,10 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                   (t.usdChange24h === undefined && (t.priceChange24h ?? 0) < 0);
 
                 const rowChangeColor = isUp
-                  ? "text-emerald-300"
+                  ? "text-primary"
                   : isDown
-                    ? "text-red-300"
-                    : "text-zinc-400";
+                    ? "text-destructive"
+                    : "text-muted-foreground";
 
                 const changeUsdLabel =
                   t.usdChange24h !== undefined
@@ -341,14 +345,14 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                     key={t.mint}
                     href={getInvestHref(t)}
                     className={[
-                      "flex items-center justify-between gap-3 px-4 py-4 text-white transition",
-                      "hover:bg-white/5",
-                      idx !== 0 ? "border-t border-white/8" : "",
+                      "flex items-center justify-between gap-3 px-4 py-4 transition",
+                      "hover:bg-accent",
+                      idx !== 0 ? "border-t border-border/70" : "",
                     ].join(" ")}
                   >
                     {/* Left */}
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-full border border-white/12 bg-black/55 text-[11px] font-semibold text-zinc-200">
+                      <div className="flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-full border border-border bg-background/60 text-[11px] font-semibold text-foreground">
                         {t.logoURI ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -362,10 +366,10 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
                       </div>
 
                       <div className="min-w-0">
-                        <p className="truncate text-[14px] font-semibold text-white">
+                        <p className="truncate text-[14px] font-semibold text-foreground">
                           {t.symbol?.toUpperCase() || t.name || "Unknown"}
                         </p>
-                        <p className="truncate text-[12px] text-zinc-400">
+                        <p className="truncate text-[12px] text-muted-foreground">
                           {t.amount.toLocaleString("en-US", {
                             maximumFractionDigits: 6,
                           })}
@@ -375,7 +379,7 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({
 
                     {/* Right */}
                     <div className="shrink-0 text-right">
-                      <p className="text-[14px] font-semibold text-white">
+                      <p className="text-[14px] font-semibold text-foreground">
                         {formatUsd(t.usdValue)}
                       </p>
                       <p

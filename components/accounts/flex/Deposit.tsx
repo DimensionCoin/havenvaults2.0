@@ -1,3 +1,4 @@
+// components/accounts/flex/Deposit.tsx
 "use client";
 
 import React, {
@@ -67,13 +68,13 @@ const STAGE_CONFIG: Record<
   },
   signing: {
     title: "Approving transaction",
-    subtitle: "apprving the transaction ",
+    subtitle: "Approving the transaction…",
     progress: 28,
     icon: "wallet",
   },
   sending: {
     title: "Submitting",
-    subtitle: "Broadcasting to network...",
+    subtitle: "Broadcasting to Solana...",
     progress: 50,
     icon: "spinner",
   },
@@ -354,8 +355,9 @@ export default function DepositFlex({
         }
       }}
     >
+      {/* Modal shell uses Haven card theme */}
       <div
-        className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+        className="w-full max-w-sm haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* ───────── INPUT VIEW ───────── */}
@@ -365,16 +367,19 @@ export default function DepositFlex({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <PiggyBank className="h-4 w-4 text-emerald-400" />
-                  <div className="text-sm font-semibold text-white/90">
+                  <PiggyBank className="h-4 w-4 text-primary" />
+                  <div className="text-sm font-semibold text-foreground/90">
                     {title}
                   </div>
                 </div>
-                <div className="mt-1 text-xs text-white/45">{subtitle}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {subtitle}
+                </div>
               </div>
-              <div className="text-right text-xs text-white/45">
+
+              <div className="text-right text-xs text-muted-foreground">
                 Available
-                <div className="mt-0.5 text-white/85 font-semibold">
+                <div className="mt-0.5 font-semibold text-foreground/90">
                   {ctxLoading
                     ? "…"
                     : formatMoney(ctxUsdcDisplay, displayCurrency)}
@@ -384,11 +389,13 @@ export default function DepositFlex({
 
             {/* Amount Input */}
             <div className="mt-4">
-              <label className="text-xs text-white/50">Amount</label>
-              <div className="mt-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-                <span className="text-xs text-white/50 px-2">
+              <label className="text-xs text-muted-foreground">Amount</label>
+
+              <div className="mt-1 flex items-center gap-2 rounded-2xl border border-border bg-background/50 p-2">
+                <span className="text-xs text-muted-foreground px-2">
                   {displayCurrency}
                 </span>
+
                 <input
                   value={amountRaw}
                   onChange={(e) =>
@@ -397,13 +404,14 @@ export default function DepositFlex({
                   inputMode="decimal"
                   placeholder="0.00"
                   disabled={isBusy}
-                  className="w-full bg-transparent text-sm text-white/90 outline-none disabled:opacity-60"
+                  className="w-full bg-transparent text-sm text-foreground/90 outline-none placeholder:text-muted-foreground/60 disabled:opacity-60"
                 />
+
                 <button
                   type="button"
                   disabled={isBusy || ctxLoading}
                   onClick={() => setAmountRaw(money2(ctxUsdcDisplay))}
-                  className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 hover:text-white/90 disabled:opacity-60"
+                  className="haven-pill hover:bg-accent disabled:opacity-60"
                 >
                   Max
                 </button>
@@ -411,12 +419,13 @@ export default function DepositFlex({
 
               {/* Validation Messages */}
               {!ownerReady && (
-                <div className="mt-2 text-xs text-rose-200/80">
+                <div className="mt-2 text-xs text-destructive">
                   Wallet not connected.
                 </div>
               )}
+
               {!ctxLoading && amountNum > ctxUsdcDisplay && amountNum > 0 && (
-                <div className="mt-2 text-xs text-rose-200/80">
+                <div className="mt-2 text-xs text-destructive">
                   Amount exceeds available balance.
                 </div>
               )}
@@ -424,18 +433,21 @@ export default function DepositFlex({
 
             {/* Summary */}
             {amountNum > 0 && (
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+              <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-[11px] text-white/45">You deposit</div>
-                  <div className="text-sm font-semibold text-white/85">
+                  <div className="text-[11px] text-muted-foreground">
+                    You deposit
+                  </div>
+                  <div className="text-sm font-semibold text-foreground/90">
                     {formatMoney(amountNum, displayCurrency)}
                   </div>
                 </div>
+
                 <div className="mt-2 flex items-center justify-between">
-                  <div className="text-[11px] text-white/45">
+                  <div className="text-[11px] text-muted-foreground">
                     Earning interest
                   </div>
-                  <div className="text-sm font-semibold text-emerald-300">
+                  <div className="text-sm font-semibold text-primary">
                     Immediately
                   </div>
                 </div>
@@ -449,8 +461,8 @@ export default function DepositFlex({
               className={[
                 "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
                 canSubmit && !isBusy
-                  ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25 active:scale-[0.98]"
-                  : "bg-white/5 border-white/10 text-white/35 cursor-not-allowed",
+                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
+                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
               ].join(" ")}
             >
               {isBusy ? (
@@ -471,7 +483,7 @@ export default function DepositFlex({
               type="button"
               onClick={() => onOpenChange(false)}
               disabled={isBusy}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/60 hover:text-white/80 hover:bg-white/10 transition disabled:opacity-50"
+              className="mt-3 w-full rounded-2xl border border-border bg-background/50 px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-accent transition disabled:opacity-50"
             >
               Cancel
             </button>
@@ -485,8 +497,9 @@ export default function DepositFlex({
             {modal.kind !== "processing" && (
               <div className="flex justify-end mb-2">
                 <button
+                  type="button"
                   onClick={closeModal}
-                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                  className="haven-pill hover:bg-accent"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -498,14 +511,16 @@ export default function DepositFlex({
               {modal.kind === "processing" && stageConfig ? (
                 <>
                   <StageIcon icon={stageConfig.icon} />
+
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-white/90">
+                    <div className="text-base font-semibold text-foreground/90">
                       {stageConfig.title}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {stageConfig.subtitle}
                     </div>
                   </div>
+
                   <div className="mt-5 w-full max-w-[200px]">
                     <ProgressBar progress={stageConfig.progress} />
                   </div>
@@ -514,10 +529,10 @@ export default function DepositFlex({
                 <>
                   <StageIcon icon="success" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-emerald-100">
+                    <div className="text-base font-semibold text-primary">
                       {hasAccount ? "Deposit complete!" : "Account opened!"}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Your funds are now earning interest
                     </div>
                   </div>
@@ -526,10 +541,10 @@ export default function DepositFlex({
                 <>
                   <StageIcon icon="error" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-rose-100">
+                    <div className="text-base font-semibold text-destructive">
                       {hasAccount ? "Deposit failed" : "Failed to open account"}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Something went wrong
                     </div>
                   </div>
@@ -539,8 +554,8 @@ export default function DepositFlex({
 
             {/* Error message */}
             {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                <div className="text-xs text-rose-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-destructive/25 bg-destructive/10 p-3">
+                <div className="text-xs text-destructive text-center">
                   {modal.errorMessage}
                 </div>
               </div>
@@ -548,8 +563,8 @@ export default function DepositFlex({
 
             {/* Record warning (funds moved but record failed) */}
             {modal.kind === "success" && modal.recordError && (
-              <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3">
-                <div className="text-xs text-amber-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3">
+                <div className="text-xs text-amber-200/90 text-center">
                   Deposit succeeded but we couldn&apos;t link your account. Your
                   funds are safe.
                 </div>
@@ -563,7 +578,7 @@ export default function DepositFlex({
                   href={explorerUrl(modal.signature)}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                  className="flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition group"
                 >
                   <span>View transaction</span>
                   <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
@@ -574,12 +589,13 @@ export default function DepositFlex({
             {/* Action button */}
             {modal.kind !== "processing" && (
               <button
+                type="button"
                 onClick={closeModal}
                 className={[
                   "mt-5 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
                   modal.kind === "success"
-                    ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25"
-                    : "bg-white/10 border-white/10 text-white/80 hover:bg-white/15",
+                    ? "haven-btn-primary text-[#0b3204]"
+                    : "border-border bg-background/60 text-foreground/90 hover:bg-accent",
                 ].join(" ")}
               >
                 {modal.kind === "success" ? "Done" : "Close"}
@@ -588,7 +604,7 @@ export default function DepositFlex({
 
             {/* Processing footer */}
             {modal.kind === "processing" && (
-              <div className="mt-6 text-center text-xs text-white/30">
+              <div className="mt-6 text-center text-xs text-muted-foreground">
                 Please keep window open
               </div>
             )}

@@ -1,4 +1,3 @@
-// components/exchange/FeaturedMovers.tsx
 "use client";
 
 import React, { useMemo } from "react";
@@ -31,7 +30,7 @@ const getTokenSlug = (token: Token) => {
   return (token.symbol || token.mint).toLowerCase();
 };
 
-// ✅ match CoinPage formatting: "$" only, no "CA$"
+// "$" only, no "CA$"
 const formatMoneyNoCode = (v?: number | null) => {
   const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
   return n.toLocaleString("en-US", {
@@ -66,24 +65,28 @@ const MoverCard: React.FC<{
   const slug = getTokenSlug(token);
   const priceDisplay = price?.price ? price.price * fxRate : null;
   const change = price?.priceChange24hPct ?? null;
-  const isPositive = type === "gainer";
+
+  const isGainer = type === "gainer";
 
   return (
     <Link
       href={`/invest/${slug}`}
       className={[
-        "group relative flex min-w-[172px] flex-col overflow-hidden rounded-3xl",
-        "border border-white/10 bg-black/40 backdrop-blur-2xl",
-        "shadow-[0_18px_55px_rgba(0,0,0,0.55)]",
-        "transition-all active:scale-[0.985] hover:bg-black/55",
+        "group relative flex min-w-[178px] flex-col overflow-hidden",
+        "rounded-3xl border border-border",
+        "bg-card/80 backdrop-blur-xl",
+        "shadow-fintech-md",
+        "transition active:scale-[0.985]",
+        "hover:bg-card",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       ].join(" ")}
     >
-      {/* subtle top fade like CoinPage chart */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/35 to-transparent " />
+      {/* subtle top wash (token-based, light/dark safe) */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-primary/10 to-transparent" />
 
-      <div className="relative p-4 ">
+      <div className="relative p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 ">
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-border bg-background/60">
             {token.logoURI ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -92,17 +95,17 @@ const MoverCard: React.FC<{
                 className="h-full w-full object-cover"
               />
             ) : (
-              <span className="text-[11px] font-semibold tracking-wide text-white/55">
+              <span className="text-[11px] font-semibold tracking-wide text-muted-foreground">
                 {(token.symbol || "?").slice(0, 2).toUpperCase()}
               </span>
             )}
           </div>
 
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-white/90">
+            <div className="truncate text-sm font-semibold text-foreground">
               {token.symbol || "—"}
             </div>
-            <div className="truncate text-[11px] text-white/45">
+            <div className="truncate text-[11px] text-muted-foreground">
               {token.name || ""}
             </div>
           </div>
@@ -110,22 +113,22 @@ const MoverCard: React.FC<{
 
         <div className="mt-3 flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold text-slate-50">
+            <div className="text-[13px] font-semibold text-foreground">
               {priceDisplay === null ? "—" : formatMoneyNoCode(priceDisplay)}
             </div>
-            <div className="mt-1.5  mb-text-[11px] text-white/35">Price</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">Price</div>
           </div>
 
           <span
             className={[
-              "shrink-0 inline-flex items-center gap-1 rounded-full ",
-              "border px-2 py-0.5 text-[11px] font-semibold ",
-              isPositive
-                ? "border-emerald-300/25 bg-emerald-500/15 text-emerald-200"
-                : "border-rose-300/25 bg-rose-500/15 text-rose-200",
+              "shrink-0 inline-flex items-center gap-1 rounded-full",
+              "border px-2 py-0.5 text-[11px] font-semibold tabular-nums",
+              isGainer
+                ? "border-primary/25 bg-primary/10 text-foreground"
+                : "border-destructive/25 bg-destructive/10 text-foreground",
             ].join(" ")}
           >
-            {isPositive ? (
+            {isGainer ? (
               <TrendingUp className="h-3 w-3" />
             ) : (
               <TrendingDown className="h-3 w-3" />
@@ -171,8 +174,8 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
       <div className="space-y-5">
         {/* Header skeleton */}
         <div className="flex items-center justify-between">
-          <div className="h-3 w-28 animate-pulse rounded bg-white/10" />
-          <div className="h-3 w-10 animate-pulse rounded bg-white/10" />
+          <div className="h-3 w-28 animate-pulse rounded bg-border/60" />
+          <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
         </div>
 
         {/* Cards skeleton */}
@@ -180,7 +183,7 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
           {[1, 2, 3].map((i) => (
             <div
               key={i}
-              className="h-[108px] w-[172px] shrink-0 animate-pulse rounded-3xl border border-white/10 bg-black/40"
+              className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
             />
           ))}
         </div>
@@ -200,11 +203,11 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
     right?: string;
   }) => (
     <div className="mb-2 flex items-center justify-between">
-      <div className="glass-pill">
+      <span className="haven-pill">
         {icon}
         <span className="ml-1">{title}</span>
-      </div>
-      <span className="text-[11px] text-white/35">{right}</span>
+      </span>
+      <span className="text-[11px] text-muted-foreground">{right}</span>
     </div>
   );
 
@@ -214,12 +217,12 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
       {gainers.length > 0 && (
         <div>
           <SectionHeader
-            icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-300" />}
+            icon={<TrendingUp className="h-3.5 w-3.5" />}
             title="Top gainers"
             right="24h"
           />
 
-          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 ">
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
             {gainers.map(({ token, price }) => (
               <MoverCard
                 key={token.mint}
@@ -237,12 +240,12 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
       {losers.length > 0 && (
         <div>
           <SectionHeader
-            icon={<TrendingDown className="h-3.5 w-3.5 text-rose-300" />}
+            icon={<TrendingDown className="h-3.5 w-3.5" />}
             title="Top losers"
             right="24h"
           />
 
-          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 ">
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
             {losers.map(({ token, price }) => (
               <MoverCard
                 key={token.mint}

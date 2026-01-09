@@ -841,14 +841,14 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={[
-          // base styling
-          "p-0 overflow-hidden border border-zinc-800 bg-zinc-950 py-2",
+          // base (theme)
+          "p-0 overflow-hidden border border-border bg-background py-2",
 
-          // ✅ DESKTOP: Radix centers it
+          // desktop
           "sm:w-[min(92vw,420px)] sm:max-w-[420px] sm:max-h-[90dvh] sm:rounded-[28px]",
           "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
 
-          // ✅ MOBILE ONLY: fullscreen
+          // mobile fullscreen
           "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
           "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
           "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
@@ -865,7 +865,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
             }}
           >
             <div
-              className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+              className="w-full max-w-sm rounded-3xl border border-border bg-background p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Close button */}
@@ -873,7 +873,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                 <div className="flex justify-end mb-2">
                   <button
                     onClick={closeModal}
-                    className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                    className="rounded-xl border border-border bg-background/60 p-2 text-muted-foreground hover:text-foreground transition"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -886,10 +886,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   <>
                     <StageIcon icon={stageConfig.icon} />
                     <div className="mt-4">
-                      <div className="text-base font-semibold text-white/90">
+                      <div className="text-base font-semibold text-foreground">
                         {stageConfig.title}
                       </div>
-                      <div className="mt-1 text-sm text-white/50">
+                      <div className="mt-1 text-sm text-muted-foreground">
                         {stageConfig.subtitle}
                       </div>
                     </div>
@@ -898,7 +898,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     </div>
 
                     {modal.fromSymbol && modal.toSymbol && (
-                      <div className="mt-4 text-[11px] text-white/35">
+                      <div className="mt-4 text-[11px] text-muted-foreground">
                         {modal.fromSymbol} → {modal.toSymbol}
                       </div>
                     )}
@@ -907,10 +907,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   <>
                     <StageIcon icon="success" />
                     <div className="mt-4">
-                      <div className="text-base font-semibold text-emerald-100">
+                      <div className="text-base font-semibold text-primary">
                         Swap complete!
                       </div>
-                      <div className="mt-1 text-sm text-white/50">
+                      <div className="mt-1 text-sm text-muted-foreground">
                         Your trade was successful
                       </div>
                     </div>
@@ -919,10 +919,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   <>
                     <StageIcon icon="error" />
                     <div className="mt-4">
-                      <div className="text-base font-semibold text-rose-100">
+                      <div className="text-base font-semibold text-destructive">
                         Order failed
                       </div>
-                      <div className="mt-1 text-sm text-white/50">
+                      <div className="mt-1 text-sm text-muted-foreground">
                         Something went wrong
                       </div>
                     </div>
@@ -932,8 +932,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
               {/* Error message */}
               {modal.kind === "error" && modal.errorMessage && (
-                <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                  <div className="text-xs text-rose-200/80 text-center">
+                <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3">
+                  <div className="text-xs text-destructive text-center">
                     {modal.errorMessage}
                   </div>
                 </div>
@@ -946,10 +946,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     href={explorerUrl(modal.signature)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                    className="flex items-center justify-between rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition group"
                   >
                     <span>View transaction</span>
-                    <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
+                    <ExternalLink className="h-4 w-4 opacity-60 group-hover:opacity-100" />
                   </a>
                 </div>
               )}
@@ -958,11 +958,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
               {modal.kind !== "processing" && (
                 <div className="mt-5 flex gap-2">
                   <button
-                    onClick={() => {
-                      // close modal only
-                      closeModal();
-                    }}
-                    className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-white/10 border-white/10 text-white/80 hover:bg-white/15"
+                    onClick={closeModal}
+                    className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-background/60 border-border text-foreground/90 hover:bg-accent"
                   >
                     Close
                   </button>
@@ -972,7 +969,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       onClick={() => {
                         void closeAfterSuccess();
                       }}
-                      className="flex-1 rounded-2xl bg-emerald-500/20 border border-emerald-300/30 px-4 py-3 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 transition"
+                      className="flex-1 rounded-2xl border border-primary/30 bg-primary/10 px-4 py-3 text-center text-sm font-semibold text-primary hover:bg-primary/15 transition"
                     >
                       Done
                     </button>
@@ -982,7 +979,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
               {/* Processing footer */}
               {modal.kind === "processing" && (
-                <div className="mt-6 text-center text-xs text-white/30">
+                <div className="mt-6 text-center text-xs text-muted-foreground">
                   Please don&apos;t close this window
                 </div>
               )}
@@ -995,33 +992,33 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 pt-[calc(env(safe-area-inset-top)+10px)] sm:px-4 sm:pb-4 sm:pt-3">
             {!hasWalletTokens ? (
               <DialogHeader className="pb-3">
-                <DialogTitle className="text-sm font-semibold text-zinc-50">
+                <DialogTitle className="text-sm font-semibold text-foreground">
                   Sell from your portfolio
                 </DialogTitle>
-                <DialogDescription className="text-xs text-zinc-400">
+                <DialogDescription className="text-xs text-muted-foreground">
                   You don’t have any tokens to sell yet.
                 </DialogDescription>
               </DialogHeader>
             ) : (
               <>
                 <DialogHeader className="pb-3">
-                  <DialogTitle className="text-sm font-semibold text-zinc-50">
+                  <DialogTitle className="text-sm font-semibold text-foreground">
                     Sell
                   </DialogTitle>
-                  <DialogDescription className="text-[11px] text-zinc-400">
+                  <DialogDescription className="text-[11px] text-muted-foreground">
                     Sell your assets for cash or swap to another asset.
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="flex flex-col gap-3 text-xs text-zinc-100">
+                <div className="flex flex-col gap-3 text-xs text-foreground">
                   {/* SELL panel */}
-                  <div className="rounded-2xl bg-zinc-900/90 px-3.5 py-3.5">
+                  <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
                     <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="text-zinc-500">Sell</span>
+                      <span className="text-muted-foreground">Sell</span>
                       {fromWallet && (
                         <div className="flex items-center gap-2">
                           {isMax && (
-                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                            <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
                               Max
                             </span>
                           )}
@@ -1029,7 +1026,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                             type="button"
                             disabled={swapBusy}
                             onClick={handleMax}
-                            className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-60"
+                            className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
                           >
                             Max
                           </button>
@@ -1049,9 +1046,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                             setAmount(sanitizeAmount(e.target.value));
                           }}
                           placeholder="0.00"
-                          className="w-full bg-transparent text-left text-2xl font-semibold text-zinc-50 outline-none placeholder:text-zinc-600 disabled:opacity-60"
+                          className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
                         />
-                        <p className="mt-1 text-[11px] text-zinc-500">
+                        <p className="mt-1 text-[11px] text-muted-foreground">
                           {estFromUsd > 0
                             ? estFromUsd.toLocaleString("en-US", {
                                 style: "currency",
@@ -1067,7 +1064,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                           type="button"
                           disabled={swapBusy}
                           onClick={() => openPicker("from")}
-                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2 disabled:opacity-60"
+                          className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
                         >
                           <div className="flex items-center gap-2">
                             <TokenAvatar token={fromToken} />
@@ -1075,18 +1072,18 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                               <span className="text-[11px] font-semibold">
                                 {fromToken?.symbol}
                               </span>
-                              <span className="text-[10px] text-zinc-500">
+                              <span className="text-[10px] text-muted-foreground">
                                 {fromToken?.name}
                               </span>
                             </div>
                           </div>
-                          <ChevronDown className="h-3 w-3 text-zinc-500" />
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
                         </button>
                       </div>
                     </div>
 
                     {fromWallet && (
-                      <p className="mt-2 text-[10px] text-zinc-500">
+                      <p className="mt-2 text-[10px] text-muted-foreground">
                         Available:{" "}
                         {fromWallet.amount.toLocaleString("en-US", {
                           maximumFractionDigits: 4,
@@ -1096,18 +1093,18 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     )}
 
                     {feePreview && (
-                      <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-[10px] text-zinc-400">
+                      <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
                         <div className="flex items-center justify-between">
                           <span>
                             Haven fee ({(feePreview.feeBps / 100).toFixed(2)}%)
                           </span>
-                          <span className="text-zinc-200">
+                          <span className="text-foreground">
                             ~{feePreview.feeUi} {fromToken?.symbol}
                           </span>
                         </div>
                         <div className="mt-1 flex items-center justify-between">
                           <span>Amount swapped (net)</span>
-                          <span className="text-zinc-200">
+                          <span className="text-foreground">
                             ~{feePreview.netUi} {fromToken?.symbol}
                           </span>
                         </div>
@@ -1121,7 +1118,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       type="button"
                       disabled={swapBusy}
                       onClick={handleSwapSides}
-                      className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-emerald-400 hover:text-emerald-200 disabled:opacity-60"
+                      className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/60 text-foreground hover:bg-accent disabled:opacity-60"
                       title="Swap sides (only works if the Receive token is one you own)"
                     >
                       <ArrowDown className="h-4 w-4" />
@@ -1129,11 +1126,11 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   </div>
 
                   {/* RECEIVE panel */}
-                  <div className="rounded-2xl bg-zinc-900/90 px-3.5 py-3.5">
+                  <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
                     <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="text-zinc-500">Receive</span>
+                      <span className="text-muted-foreground">Receive</span>
                       {cashToken && toToken?.kind === "cash" && (
-                        <span className="text-[10px] text-zinc-500">
+                        <span className="text-[10px] text-muted-foreground">
                           {cashDisplayName} (cash)
                         </span>
                       )}
@@ -1145,7 +1142,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                           type="button"
                           disabled={swapBusy}
                           onClick={() => openPicker("to")}
-                          className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2 disabled:opacity-60"
+                          className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
                         >
                           <div className="flex items-center gap-2">
                             <TokenAvatar token={toToken} />
@@ -1153,24 +1150,24 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                               <span className="text-[11px] font-semibold">
                                 {toToken?.symbol}
                               </span>
-                              <span className="text-[10px] text-zinc-500">
+                              <span className="text-[10px] text-muted-foreground">
                                 {toToken?.name}
                               </span>
                             </div>
                           </div>
-                          <ChevronDown className="h-3 w-3 text-zinc-500" />
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
                         </button>
                       </div>
 
                       <div className="flex-1 text-right">
-                        <p className="text-xl font-semibold text-zinc-50">
+                        <p className="text-xl font-semibold text-foreground">
                           {quoteLoading
                             ? "…"
                             : quote
                               ? `~ ${quote.outUi}`
                               : "—"}
                         </p>
-                        <p className="mt-1 text-[10px] text-zinc-500">
+                        <p className="mt-1 text-[10px] text-muted-foreground">
                           {quoteLoading
                             ? "Fetching live quote…"
                             : quote
@@ -1181,19 +1178,21 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     </div>
 
                     {(quote?.routeText || quote?.priceImpactPctText) && (
-                      <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-[10px] text-zinc-400">
+                      <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
                         {quote?.routeText && (
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-zinc-500">Route</span>
-                            <span className="truncate text-zinc-200">
+                            <span className="text-muted-foreground">Route</span>
+                            <span className="truncate text-foreground">
                               {quote.routeText}
                             </span>
                           </div>
                         )}
                         {quote?.priceImpactPctText && (
                           <div className="mt-1 flex items-center justify-between">
-                            <span className="text-zinc-500">Price impact</span>
-                            <span className="text-zinc-200">
+                            <span className="text-muted-foreground">
+                              Price impact
+                            </span>
+                            <span className="text-foreground">
                               {quote.priceImpactPctText}
                             </span>
                           </div>
@@ -1202,14 +1201,14 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     )}
 
                     {quoteErr && (
-                      <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                      <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
                         {quoteErr}
                       </div>
                     )}
                   </div>
 
                   {/* rate row */}
-                  <div className="mt-1 rounded-full bg-zinc-900/80 px-3 py-2 text-[10px] text-zinc-500">
+                  <div className="mt-1 rounded-full border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
                     1 {fromToken?.symbol} ≈{" "}
                     {quote && feePreview
                       ? (() => {
@@ -1233,26 +1232,25 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   </div>
 
                   {cashToken && (
-                    <p className="mt-1 text-[10px] text-zinc-500">
+                    <p className="mt-1 text-[10px] text-muted-foreground">
                       {cashDisplayName} is your Haven cash balance.
                     </p>
                   )}
 
                   {errorToShow && modal?.kind !== "error" && (
-                    <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                    <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
                       {errorToShow}
                     </div>
                   )}
 
-                  {/* If hook has a signature (debug / rare), show small link */}
                   {hookSig && (
-                    <div className="mt-1 text-[10px] text-zinc-500">
+                    <div className="mt-1 text-[10px] text-muted-foreground">
                       Last tx:{" "}
                       <a
                         href={explorerUrl(hookSig)}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-emerald-300 hover:text-emerald-200 underline underline-offset-2"
+                        className="text-primary hover:opacity-90 underline underline-offset-2"
                       >
                         view
                       </a>
@@ -1264,19 +1262,16 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           </div>
 
           {/* Pinned footer */}
-          <DialogFooter className="shrink-0 border-t border-zinc-800 bg-zinc-950/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
+          <DialogFooter className="shrink-0 border-t border-border bg-background/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
             {!hasWalletTokens ? (
               <DialogClose asChild>
-                <Button
-                  variant="outline"
-                  className="w-full border-zinc-700 text-zinc-100"
-                >
+                <Button variant="outline" className="w-full">
                   Close
                 </Button>
               </DialogClose>
             ) : (
               <Button
-                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400 disabled:opacity-60"
+                className="w-full rounded-full"
                 disabled={!canSubmit}
                 onClick={handleSubmit}
               >
@@ -1286,7 +1281,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     Processing...
                   </span>
                 ) : (
-                  "Swap"
+                  <span className="text-black">Swap</span>
                 )}
               </Button>
             )}
@@ -1295,18 +1290,18 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
         {/* Picker modal (above dialog) */}
         {pickerSide && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
-            <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 px-3.5 py-3.5 shadow-2xl">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
+            <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-3.5 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-zinc-50">
+                <h2 className="text-sm font-semibold text-foreground">
                   {pickerSide === "from"
                     ? "Choose token to sell"
                     : "Choose token to receive"}
                 </h2>
                 <button
                   type="button"
-                  onClick={() => closePicker()}
-                  className="text-[11px] text-zinc-400 hover:text-zinc-200"
+                  onClick={closePicker}
+                  className="text-[11px] text-muted-foreground hover:text-foreground"
                 >
                   Close
                 </button>
@@ -1317,7 +1312,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   value={pickerSearch}
                   onChange={(e) => setPickerSearch(e.target.value)}
                   placeholder="Search by name or symbol"
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40"
+                  className="w-full rounded-xl border border-border bg-background/60 px-3 py-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
                 />
               </div>
 
@@ -1327,32 +1322,33 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     key={t.mint + t.kind}
                     type="button"
                     onClick={() => handlePickToken(t)}
-                    className={`flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-zinc-900 ${
+                    className={[
+                      "flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-accent",
                       (pickerSide === "from" && t.mint === fromMint) ||
                       (pickerSide === "to" && t.mint === toMint)
-                        ? "bg-zinc-900/90"
-                        : ""
-                    }`}
+                        ? "bg-accent"
+                        : "",
+                    ].join(" ")}
                   >
                     <div className="flex items-center gap-2">
                       <TokenAvatar token={t} />
                       <div className="flex flex-col">
-                        <span className="font-medium">
+                        <span className="font-medium text-foreground">
                           {t.symbol}
                           {t.kind === "cash" && (
-                            <span className="ml-1 rounded-full bg-emerald-500/10 px-1.5 py-[1px] text-[9px] text-emerald-300">
+                            <span className="ml-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-[1px] text-[9px] text-primary">
                               cash
                             </span>
                           )}
                         </span>
-                        <span className="text-[10px] text-zinc-500">
+                        <span className="text-[10px] text-muted-foreground">
                           {t.name}
                         </span>
                       </div>
                     </div>
 
                     {pickerSide === "from" && (
-                      <span className="text-[10px] text-zinc-500">
+                      <span className="text-[10px] text-muted-foreground">
                         {tokens
                           .find((wt) => wt.mint === t.mint)
                           ?.amount?.toLocaleString("en-US", {
@@ -1364,7 +1360,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                 ))}
 
                 {currentPickerTokens.length === 0 && (
-                  <p className="pt-4 text-center text-[11px] text-zinc-500">
+                  <p className="pt-4 text-center text-[11px] text-muted-foreground">
                     No tokens found.
                   </p>
                 )}
@@ -1375,6 +1371,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       </DialogContent>
     </Dialog>
   );
+
 };
 
 /* -------------------- avatar -------------------- */

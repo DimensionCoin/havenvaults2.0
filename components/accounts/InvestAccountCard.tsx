@@ -61,7 +61,6 @@ const InvestAccountCard: React.FC = () => {
       ? nonUsdcTokens.length - visibleTokens.length
       : 0;
 
-  // optional: show a nicer line under the big number
   const positionsLabel = useMemo(() => {
     const spotCount = nonUsdcTokens.length;
     const boosterCount = boosterPositionsCount;
@@ -87,33 +86,34 @@ const InvestAccountCard: React.FC = () => {
       className="block h-full w-full"
       aria-label="Open Invest page"
     >
-      <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-white/10 px-4 py-4 sm:px-6 sm:py-6 transition hover:border-emerald-400/40 hover:bg-white/15">
-        {/* Header + value */}
+      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6 transition hover:shadow-fintech-lg">
+        {/* Header + value (same layout) */}
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
-            Invest Account
-          </p>
+          <p className="haven-kicker">Invest Account</p>
 
           <div className="mt-4">
-            <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
+            <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
               {loading ? "…" : formatUsd(investTotalUsd)}
             </p>
-            <p className="mt-1 text-[11px] text-zinc-500">{positionsLabel}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {positionsLabel}
+            </p>
           </div>
         </div>
 
-        {/* Footer: logos + meta */}
+        {/* Footer: logos + meta (same layout) */}
         <div className="mt-5 flex items-center justify-between gap-3">
           <div className="flex flex-col">
-            <span className="text-[11px] text-zinc-500">
+            <span className="text-[11px] text-muted-foreground">
               {hasAssets
                 ? "Top holdings"
                 : usdcUsd > 0
                   ? "You’re holding USDC — move some into investments."
                   : "No invest assets yet."}
             </span>
+
             {!hasAssets && (
-              <span className="text-[10px] text-zinc-600">
+              <span className="text-[10px] text-muted-foreground">
                 You&apos;ll see your assets here after you invest.
               </span>
             )}
@@ -126,7 +126,7 @@ const InvestAccountCard: React.FC = () => {
                   {visibleTokens.map((t, idx) => (
                     <div
                       key={t.mint ?? `${t.symbol}-${idx}`}
-                      className="w-7 h-7 rounded-full border border-zinc-800 bg-black/40 overflow-hidden flex items-center justify-center"
+                      className="h-7 w-7 overflow-hidden rounded-full border bg-card shadow-fintech-sm flex items-center justify-center"
                     >
                       {t.logoURI ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -135,29 +135,29 @@ const InvestAccountCard: React.FC = () => {
                           alt={t.symbol || t.name || "Token"}
                           width={28}
                           height={28}
-                          className="object-contain"
+                          className="h-full w-full object-contain"
                         />
                       ) : (
-                        <span className="text-[9px] text-zinc-300">
+                        <span className="text-[9px] text-muted-foreground">
                           {t.symbol || "?"}
                         </span>
                       )}
                     </div>
                   ))}
                 </div>
+
                 {extraCount > 0 && (
-                  <span className="ml-1 text-[10px] text-zinc-400">
+                  <span className="ml-1 text-[10px] text-muted-foreground">
                     +{extraCount}
                   </span>
                 )}
               </>
             ) : boosterPositionsCount > 0 ? (
-              // ✅ If user has only boosted positions, show a “B” badge instead of token logos
-              <div className="w-7 h-7 rounded-full border border-zinc-800 bg-black/40 flex items-center justify-center text-[9px] text-zinc-300">
+              <div className="h-7 w-7 rounded-full border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
                 B
               </div>
             ) : (
-              <div className="w-7 h-7 rounded-full border border-zinc-800 bg-black/40 flex items-center justify-center text-[9px] text-zinc-300">
+              <div className="h-7 w-7 rounded-full border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
                 —
               </div>
             )}

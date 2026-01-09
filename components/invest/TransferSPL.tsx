@@ -513,7 +513,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
       <DialogContent
         className={[
           // ✅ Production layout: flex column + real height constraint (scroll works on all screens)
-          "p-0 overflow-hidden border border-zinc-800 bg-zinc-950",
+          "p-0 overflow-hidden border border-border bg-background",
           "flex flex-col",
 
           // Desktop sizing
@@ -527,7 +527,6 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
           "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
         ].join(" ")}
       >
-        
         {/* ✅ min-h-0 is REQUIRED so the scroll area can actually scroll */}
         <div className="flex min-h-0 flex-1 flex-col">
           {/* Scrollable body */}
@@ -535,42 +534,42 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
             <DialogHeader className="pb-3">
               <div className="flex items-start justify-between gap-2 pr-10">
                 <div>
-                  <DialogTitle className="text-sm font-semibold text-zinc-50">
+                  <DialogTitle className="text-sm font-semibold text-foreground">
                     Transfer tokens
                   </DialogTitle>
-                  <DialogDescription className="text-[11px] text-zinc-400">
+                  <DialogDescription className="text-[11px] text-muted-foreground">
                     Send SPL tokens from your Haven wallet to a contact or
                     wallet.
                   </DialogDescription>
                 </div>
 
-                <div className="shrink-0 rounded-full border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[10px] text-zinc-400">
+                <div className="shrink-0 rounded-full border border-border bg-background/60 px-2 py-1 text-[10px] text-muted-foreground">
                   Step {step} of 2
                 </div>
               </div>
             </DialogHeader>
 
             {assets.length === 0 ? (
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 px-3 py-3 text-[11px] text-zinc-300">
+              <div className="rounded-2xl border border-border bg-background/60 px-3 py-3 text-[11px] text-muted-foreground">
                 No non-USDC tokens detected in your wallet yet.
               </div>
             ) : (
-              <div className="flex flex-col gap-3 text-xs text-zinc-100">
+              <div className="flex flex-col gap-3 text-xs text-foreground">
                 {/* STEP 1 */}
                 {step === 1 && (
-                  <div className="rounded-2xl bg-zinc-900/90 px-3.5 py-3.5">
+                  <div className="rounded-2xl bg-background/60 px-3.5 py-3.5">
                     {/* Recipient */}
                     <div className="mb-2 text-[11px]">
-                      <p className="text-zinc-200 font-medium">
+                      <p className="text-foreground font-medium">
                         Who are you sending to?
                       </p>
-                      <p className="text-zinc-500">
+                      <p className="text-muted-foreground">
                         Enter a Haven email or Solana wallet address.
                       </p>
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-[11px] text-zinc-400">
+                      <label className="text-[11px] text-muted-foreground">
                         Recipient
                       </label>
                       <input
@@ -578,16 +577,16 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                         onChange={(e) => setRecipientInput(e.target.value)}
                         placeholder="friend@example.com or 8x2Z…"
                         className={[
-                          "w-full rounded-xl border bg-zinc-950/40 px-3 py-2 text-[12px] text-zinc-100 outline-none placeholder:text-zinc-600",
+                          "w-full rounded-xl border bg-background/60 px-3 py-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground",
                           resolveState === "error" ||
                           resolveState === "not_found"
-                            ? "border-red-500/40 focus:border-red-500 focus:ring-1 focus:ring-red-500/30"
-                            : "border-zinc-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30",
+                            ? "border-destructive/30 focus:border-destructive focus:ring-1 focus:ring-destructive/30"
+                            : "border-border focus:border-primary focus:ring-1 focus:ring-primary/30",
                         ].join(" ")}
                       />
 
                       <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
-                        <span className="text-zinc-500">
+                        <span className="text-muted-foreground">
                           {resolveState === "checking" &&
                             "Looking up recipient…"}
                           {resolveState === "resolved" &&
@@ -610,32 +609,34 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                           type="button"
                           onClick={handleAddContact}
                           disabled={addingContact || !isEmail(recipientInput)}
-                          className="shrink-0 rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="shrink-0 rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {addingContact ? "Saving…" : "Save"}
                         </button>
                       </div>
 
                       {addError && (
-                        <p className="text-[10px] text-red-300">{addError}</p>
+                        <p className="text-[10px] text-destructive">
+                          {addError}
+                        </p>
                       )}
                     </div>
 
                     {/* Contacts */}
                     <div className="mt-3">
                       <div className="flex items-center justify-between">
-                        <p className="text-[11px] text-zinc-500">
+                        <p className="text-[11px] text-muted-foreground">
                           Your contacts
                         </p>
                         {contactsLoading && (
-                          <span className="text-[10px] text-zinc-500">
+                          <span className="text-[10px] text-muted-foreground">
                             Loading…
                           </span>
                         )}
                       </div>
 
                       {contactsError && (
-                        <p className="mt-1 text-[10px] text-red-300">
+                        <p className="mt-1 text-[10px] text-destructive">
                           {contactsError}
                         </p>
                       )}
@@ -648,7 +649,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                                 key={c.id ?? c.email ?? c.walletAddress ?? idx}
                                 type="button"
                                 onClick={() => handlePickContact(c)}
-                                className="rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900"
+                                className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground hover:bg-accent"
                               >
                                 {c.name ||
                                   c.email ||
@@ -666,7 +667,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                             <button
                               type="button"
                               onClick={() => setShowAllContacts((v) => !v)}
-                              className="mt-2 text-[10px] text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
+                              className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
                             >
                               {showAllContacts
                                 ? "Show fewer"
@@ -675,7 +676,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                           )}
                         </>
                       ) : !contactsLoading ? (
-                        <p className="mt-2 text-[10px] text-zinc-500">
+                        <p className="mt-2 text-[10px] text-muted-foreground">
                           You don&apos;t have any contacts yet.
                         </p>
                       ) : null}
@@ -683,14 +684,14 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
                     {/* Asset */}
                     <div className="mt-4">
-                      <p className="mb-2 text-[11px] text-zinc-500">
+                      <p className="mb-2 text-[11px] text-muted-foreground">
                         Asset you&apos;ll send
                       </p>
 
                       <button
                         type="button"
                         onClick={openPicker}
-                        className="flex w-full items-center justify-between rounded-2xl bg-zinc-800 px-2.5 py-2"
+                        className="flex w-full items-center justify-between rounded-2xl bg-background/60 px-2.5 py-2"
                       >
                         <div className="flex items-center gap-2">
                           <AssetAvatar
@@ -702,14 +703,14 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                             <span className="text-[11px] font-semibold">
                               {selectedAsset?.symbol}
                             </span>
-                            <span className="text-[10px] text-zinc-500">
+                            <span className="text-[10px] text-muted-foreground">
                               {selectedAsset?.name}
                             </span>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-zinc-500">
+                          <span className="text-[10px] text-muted-foreground">
                             {selectedAsset
                               ? `Avail: ${formatTokenAmount(
                                   selectedAsset.amountUi,
@@ -717,7 +718,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                                 )}`
                               : "—"}
                           </span>
-                          <ChevronDown className="h-3 w-3 text-zinc-500" />
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
                         </div>
                       </button>
                     </div>
@@ -726,15 +727,15 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
 
                 {/* STEP 2 */}
                 {step === 2 && selectedAsset && (
-                  <div className="rounded-2xl bg-zinc-900/90 overflow-hidden">
+                  <div className="rounded-2xl bg-background/60 overflow-hidden">
                     {/* Summary header */}
-                    <div className="px-3.5 py-3 border-b border-zinc-800">
+                    <div className="px-3.5 py-3 border-b border-border">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-[10px] text-zinc-500">
+                          <p className="text-[10px] text-muted-foreground">
                             Sending to
                           </p>
-                          <p className="text-[11px] font-semibold text-zinc-100">
+                          <p className="text-[11px] font-semibold text-foreground">
                             {resolvedRecipient?.name ||
                               resolvedRecipient?.email ||
                               (resolvedRecipient?.walletAddress
@@ -746,7 +747,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                                   )}`
                                 : "Recipient")}
                           </p>
-                          <p className="text-[10px] text-zinc-500">
+                          <p className="text-[10px] text-muted-foreground">
                             {resolvedRecipient?.email
                               ? "Haven recipient"
                               : "External Solana wallet"}
@@ -756,7 +757,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                         <button
                           type="button"
                           onClick={() => setStep(1)}
-                          className="rounded-full border border-zinc-800 bg-zinc-950/40 px-2.5 py-1 text-[10px] text-zinc-200 hover:bg-zinc-900"
+                          className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground hover:bg-accent"
                         >
                           Change
                         </button>
@@ -770,18 +771,18 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                             name={selectedAsset.name}
                           />
                           <div className="flex flex-col">
-                            <span className="text-[11px] font-semibold text-zinc-100">
+                            <span className="text-[11px] font-semibold text-foreground">
                               {selectedAsset.symbol}
                             </span>
-                            <span className="text-[10px] text-zinc-500">
+                            <span className="text-[10px] text-muted-foreground">
                               {selectedAsset.name}
                             </span>
                           </div>
                         </div>
 
-                        <div className="text-right text-[10px] text-zinc-500">
+                        <div className="text-right text-[10px] text-muted-foreground">
                           Available:{" "}
-                          <span className="text-zinc-200">
+                          <span className="text-foreground">
                             {formatTokenAmount(
                               selectedAsset.amountUi,
                               selectedAsset.symbol
@@ -794,7 +795,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                     {/* Amount area */}
                     <div className="px-3.5 py-3.5">
                       <div className="mb-2 flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">Amount</span>
+                        <span className="text-muted-foreground">Amount</span>
                         <button
                           type="button"
                           onClick={() => {
@@ -812,7 +813,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                                 : 0;
                             setAmountInput(safe > 0 ? String(safe) : "");
                           }}
-                          className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-40"
+                          className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15 disabled:opacity-40"
                           disabled={!selectedAsset.amountUi}
                         >
                           Max
@@ -830,16 +831,16 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                           setAmountInput(next);
                         }}
                         placeholder="0.00"
-                        className="w-full bg-transparent text-left text-2xl font-semibold text-zinc-50 outline-none placeholder:text-zinc-600"
+                        className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground"
                       />
 
-                      <p className="mt-2 text-[10px] text-zinc-500">
+                      <p className="mt-2 text-[10px] text-muted-foreground">
                         You pay (incl.{" "}
                         {feePctDisplay
                           ? `${feePctDisplay.toFixed(2)}% fee`
                           : "fee"}
                         ):{" "}
-                        <span className="text-zinc-200">
+                        <span className="text-foreground">
                           {formatTokenAmount(
                             amountUi > 0 ? totalDebited : 0,
                             symbol
@@ -847,28 +848,28 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                         </span>
                       </p>
 
-                      <p className="mt-1 text-[10px] text-zinc-500">
+                      <p className="mt-1 text-[10px] text-muted-foreground">
                         They receive:{" "}
-                        <span className="text-zinc-200">
+                        <span className="text-foreground">
                           {formatTokenAmount(amountUi || 0, symbol)}
                         </span>
                       </p>
 
                       {amountUi > 0 && !hasEnoughBalance && (
-                        <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                        <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
                           Not enough {symbol} to cover amount + fee.
                         </div>
                       )}
 
                       {(sendError ||
                         (resolveState === "error" && resolveError)) && (
-                        <div className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                        <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
                           {sendError || resolveError}
                         </div>
                       )}
 
                       {successMsg && (
-                        <div className="mt-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">
+                        <div className="mt-2 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2 text-[11px] text-primary">
                           {successMsg}
                         </div>
                       )}
@@ -897,8 +898,8 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                               className={[
                                 "rounded-2xl border py-3 text-base font-semibold transition",
                                 k === "DEL"
-                                  ? "border-zinc-700 bg-zinc-950/30 text-zinc-200 hover:bg-zinc-900"
-                                  : "border-zinc-800 bg-zinc-950/20 text-zinc-50 hover:bg-zinc-900",
+                                  ? "border-border bg-background/60 text-foreground hover:bg-accent"
+                                  : "border-border bg-background/60 text-foreground hover:bg-accent",
                               ].join(" ")}
                             >
                               {k === "DEL" ? "⌫" : k}
@@ -909,7 +910,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                         <button
                           type="button"
                           onClick={() => pressKey("CLR")}
-                          className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/20 py-2 text-[11px] text-zinc-300 hover:bg-zinc-900"
+                          className="mt-2 w-full rounded-xl border border-border bg-background/60 py-2 text-[11px] text-muted-foreground hover:bg-accent"
                         >
                           Clear
                         </button>
@@ -922,10 +923,10 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
           </div>
 
           {/* Pinned footer */}
-          <DialogFooter className="shrink-0 border-t border-zinc-800 bg-zinc-950/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
+          <DialogFooter className="shrink-0 border-t border-border bg-background/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
             {step === 1 ? (
               <Button
-                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400"
+                className="w-full rounded-full bg-primary text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
                 disabled={!canContinueToAmount}
                 onClick={handleContinueToAmount}
               >
@@ -933,7 +934,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
               </Button>
             ) : (
               <Button
-                className="w-full rounded-full bg-emerald-500 text-[13px] font-semibold text-black hover:bg-emerald-400"
+                className="w-full rounded-full bg-primary text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
                 disabled={sendDisabled}
                 onClick={handleSend}
               >
@@ -946,15 +947,15 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
         {/* Asset picker modal */}
         {pickerSide && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
-            <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 px-3.5 py-3.5 shadow-2xl">
+            <div className="w-full max-w-sm rounded-2xl border border-border bg-background px-3.5 py-3.5 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-zinc-50">
+                <h2 className="text-sm font-semibold text-foreground">
                   Choose asset to send
                 </h2>
                 <button
                   type="button"
                   onClick={closePicker}
-                  className="text-[11px] text-zinc-400 hover:text-zinc-200"
+                  className="text-[11px] text-muted-foreground hover:text-foreground"
                 >
                   Close
                 </button>
@@ -965,7 +966,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                   value={pickerSearch}
                   onChange={(e) => setPickerSearch(e.target.value)}
                   placeholder="Search by name or symbol"
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40"
+                  className="w-full rounded-xl border border-border bg-background/60 px-3 py-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
                 />
               </div>
 
@@ -976,8 +977,8 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                     type="button"
                     onClick={() => pickAsset(a)}
                     className={[
-                      "flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-zinc-900",
-                      a.id === selectedAssetId ? "bg-zinc-900/90" : "",
+                      "flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-accent",
+                      a.id === selectedAssetId ? "bg-accent" : "",
                     ].join(" ")}
                   >
                     <div className="flex items-center gap-2">
@@ -987,16 +988,16 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                         name={a.name}
                       />
                       <div className="flex flex-col">
-                        <span className="font-medium text-zinc-100">
+                        <span className="font-medium text-foreground">
                           {a.symbol}
                         </span>
-                        <span className="text-[10px] text-zinc-500">
+                        <span className="text-[10px] text-muted-foreground">
                           {a.name}
                         </span>
                       </div>
                     </div>
 
-                    <span className="text-[10px] text-zinc-500">
+                    <span className="text-[10px] text-muted-foreground">
                       {a.amountUi.toLocaleString("en-US", {
                         maximumFractionDigits: 6,
                       })}
@@ -1005,7 +1006,7 @@ const TransferSPL: React.FC<TransferSPLProps> = ({
                 ))}
 
                 {currentPickerAssets.length === 0 && (
-                  <p className="pt-4 text-center text-[11px] text-zinc-500">
+                  <p className="pt-4 text-center text-[11px] text-muted-foreground">
                     No assets found.
                   </p>
                 )}
@@ -1027,7 +1028,7 @@ const AssetAvatar: React.FC<{
 }> = ({ logo, symbol, name }) => {
   if (logo) {
     return (
-      <div className="relative h-7 w-7 overflow-hidden rounded-full border border-zinc-700 bg-zinc-900">
+      <div className="relative h-7 w-7 overflow-hidden rounded-full border border-border bg-background/60">
         <Image
           src={logo}
           alt={name}
@@ -1039,7 +1040,7 @@ const AssetAvatar: React.FC<{
     );
   }
   return (
-    <div className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] font-semibold text-zinc-100">
+    <div className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background/60 text-[10px] font-semibold text-foreground">
       {symbol.slice(0, 3).toUpperCase()}
     </div>
   );

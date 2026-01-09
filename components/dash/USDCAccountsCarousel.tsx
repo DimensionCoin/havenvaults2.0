@@ -20,10 +20,6 @@ import DepositFlex from "@/components/accounts/flex/Deposit";
 
 type SlideKey = "deposit" | "flex" | "plus";
 
-/**
- * Decimal128 strings come back as "0", "12.34", etc.
- * Convert safely for UI display.
- */
 function d128ToNumber(v: unknown): number {
   if (typeof v !== "string") return 0;
   const n = Number(v);
@@ -37,21 +33,12 @@ type FxPayload = {
 };
 
 const USDCAccountsCarousel: React.FC = () => {
-  // ✅ provider exposes derived savings helpers + flags
-  const {
-    user,
-    loading: userLoading,
-    savingsFlex,
-    savingsPlus,
-  } = useUser();
-
-  // `cashBalanceDisplay` is already in the user's display currency (per your BalanceProvider)
+  const { user, loading: userLoading, savingsFlex, savingsPlus } = useUser();
   const { loading: balanceLoading, usdcUsd: cashBalanceDisplay } = useBalance();
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  // FX (base -> display). We use it to convert the savings aggregates for display.
-  // No separate hook — kept local to this component.
+  // FX (base -> display)
   const [fxRate, setFxRate] = useState<number>(1);
   const [fxReady, setFxReady] = useState<boolean>(false);
 
@@ -59,10 +46,8 @@ const USDCAccountsCarousel: React.FC = () => {
     let alive = true;
 
     const run = async () => {
-      // If user isn't loaded yet, skip.
       if (!user) return;
 
-      // If display currency is USD, rate is 1.
       if (displayCurrency === "USD") {
         if (!alive) return;
         setFxRate(1);
@@ -83,14 +68,12 @@ const USDCAccountsCarousel: React.FC = () => {
         const raw = (await res.json().catch(() => ({}))) as FxPayload;
         const rate = Number(raw?.rate);
 
-        // server returns base->target rate
         if (!Number.isFinite(rate) || rate <= 0) throw new Error("Bad FX rate");
 
         if (!alive) return;
         setFxRate(rate);
         setFxReady(true);
       } catch {
-        // Fail soft: still render with rate=1
         if (!alive) return;
         setFxRate(1);
         setFxReady(true);
@@ -244,9 +227,9 @@ const USDCAccountsCarousel: React.FC = () => {
   };
 
   const slides: { key: SlideKey; label: string; index: number }[] = [
-    { key: "deposit", label: "Deposit Account", index: 0 },
-    { key: "flex", label: "Flex Account", index: 1 },
-    { key: "plus", label: "Plus Account", index: 2 },
+    { key: "deposit", label: "Deposit", index: 0 },
+    { key: "flex", label: "Flex", index: 1 },
+    { key: "plus", label: "Plus", index: 2 },
   ];
 
   const goPrev = () => {
@@ -261,16 +244,11 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const mainWallet = user?.walletAddress || "";
 
-  /**
-   * ✅ Adapt new savings shape to cards:
-   * Cards expect { walletAddress, totalDeposited } where totalDeposited is in DISPLAY currency.
-   * We treat “opened” as: marginfiAccountPk present.
-   */
   const flexAccount = useMemo(() => {
     if (!savingsFlex?.walletAddress) return undefined;
     if (!savingsFlex.marginfiAccountPk) return undefined;
 
-    const base = d128ToNumber(savingsFlex.principalDeposited); // base units (USD)
+    const base = d128ToNumber(savingsFlex.principalDeposited);
     const display = base * fxRate;
 
     return {
@@ -292,57 +270,36 @@ const USDCAccountsCarousel: React.FC = () => {
     };
   }, [savingsPlus, fxRate]);
 
-  // If user is fully resolved and absent, hide component
   if (!user && !userLoading) return null;
-
-  // Actions
-  const handleDepositClick = (type: SlideKey) => {
-    if (type === "flex") {
-      setFlexDepositOpen(true);
-      return;
-    }
-    // TODO: wire plus + main deposit flows
-  };
-
-  const handleWithdrawClick = (type: SlideKey) => {
-    if (type === "flex") {
-      setFlexDepositOpen(true);
-      return;
-    }
-    // TODO: wire withdraw flows for other account types
-  };
-
-  const handleOpenAccountClick = (type: SlideKey) => {
-    // In this flow, open + deposit is the same path.
-    if (type === "flex") {
-      setFlexDepositOpen(true);
-      return;
-    }
-    // TODO: wire plus open/deposit
-  };
-
-  const handleTransferClick = (type: SlideKey) => {
-    if (type === "flex") {
-      setFlexDepositOpen(true);
-      return;
-    }
-    // TODO: wire transfer flow for other account types
-  };
 
   const flexOpened = !!savingsFlex?.marginfiAccountPk;
 
+  // Actions (unchanged)
+  const handleDepositClick = (type: SlideKey) => {
+    if (type === "flex") setFlexDepositOpen(true);
+  };
+  const handleWithdrawClick = (type: SlideKey) => {
+    if (type === "flex") setFlexDepositOpen(true);
+  };
+  const handleOpenAccountClick = (type: SlideKey) => {
+    if (type === "flex") setFlexDepositOpen(true);
+  };
+  const handleTransferClick = (type: SlideKey) => {
+    if (type === "flex") setFlexDepositOpen(true);
+  };
+
   return (
     <>
-      {/* Flex deposit modal (open+deposit if needed) */}
       <DepositFlex
         open={flexDepositOpen}
         onOpenChange={setFlexDepositOpen}
         hasAccount={flexOpened}
       />
 
-      {/* MOBILE / TABLET: carousel (up to lg) */}
+      {/* MOBILE / TABLET */}
       <section className="w-full space-y-2 lg:hidden">
         <div className="flex items-center justify-between gap-3">
+          {/* Tabs (token-based, matches Haven theme) */}
           <div className="flex gap-1.5">
             {slides.map((s) => {
               const isActive = s.index === activeIndex;
@@ -351,11 +308,13 @@ const USDCAccountsCarousel: React.FC = () => {
                   key={s.key}
                   type="button"
                   onClick={() => scrollToIndex(s.index)}
-                  className={`rounded-full px-3 py-1 text-[10px] font-medium transition ${
+                  className={[
+                    "rounded-full px-3 py-1 text-[11px] font-medium transition border",
+                    "bg-secondary text-muted-foreground border-border hover:bg-accent hover:text-foreground",
                     isActive
-                      ? "bg-primary text-black shadow-[0_0_16px_rgba(190,242,100,0.6)]"
-                      : "bg-zinc-900 text-zinc-400"
-                  }`}
+                      ? "bg-primary text-primary-foreground border-primary/30 shadow-[0_10px_26px_rgba(41,198,104,0.18)] dark:shadow-[0_12px_30px_rgba(63,243,135,0.14)]"
+                      : "",
+                  ].join(" ")}
                 >
                   {s.label}
                 </button>
@@ -363,20 +322,23 @@ const USDCAccountsCarousel: React.FC = () => {
             })}
           </div>
 
+          {/* Prev/Next buttons (token-based) */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={goPrev}
-              className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900"
+              className="haven-icon-btn"
+              aria-label="Previous"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
+              <ArrowLeft className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={goNext}
-              className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900"
+              className="haven-icon-btn"
+              aria-label="Next"
             >
-              <ArrowRight className="h-3.5 w-3.5" />
+              <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -389,25 +351,16 @@ const USDCAccountsCarousel: React.FC = () => {
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
             onScroll={handleScroll}
-            className={`
-              relative flex gap-2 overflow-x-auto
-              snap-x snap-mandatory
-              select-none
-              [-ms-overflow-style:'none'] [scrollbar-width:'none']
-              ${dragging ? "cursor-grabbing" : "cursor-grab"}
-              touch-pan-x
-              [touch-action:pan-x]
-              [will-change:scroll-position]
-            `}
+            className={[
+              "relative flex gap-2 overflow-x-auto snap-x snap-mandatory select-none",
+              "scrollbar-hide",
+              dragging ? "cursor-grabbing" : "cursor-grab",
+              "touch-pan-x [touch-action:pan-x] [will-change:scroll-position]",
+            ].join(" ")}
             style={{ scrollSnapType: "x mandatory" }}
           >
-            <style>{`div::-webkit-scrollbar{ display: none; }`}</style>
-
-            {/* Deposit slide */}
-            <div
-              data-carousel-card
-              className="snap-center shrink-0 rounded-2xl"
-            >
+            {/* Deposit */}
+            <div data-carousel-card className="snap-center shrink-0">
               <DepositAccountCard
                 loading={loading}
                 walletAddress={mainWallet}
@@ -418,11 +371,8 @@ const USDCAccountsCarousel: React.FC = () => {
               />
             </div>
 
-            {/* Flex savings slide */}
-            <div
-              data-carousel-card
-              className="snap-center shrink-0 rounded-2xl"
-            >
+            {/* Flex */}
+            <div data-carousel-card className="snap-center shrink-0">
               <FlexSavingsAccountCard
                 account={flexAccount}
                 loading={loading}
@@ -433,11 +383,8 @@ const USDCAccountsCarousel: React.FC = () => {
               />
             </div>
 
-            {/* Plus savings slide */}
-            <div
-              data-carousel-card
-              className="snap-center shrink-0 rounded-2xl"
-            >
+            {/* Plus */}
+            <div data-carousel-card className="snap-center shrink-0">
               <PlusSavingsAccountCard
                 account={plusAccount}
                 loading={loading}
@@ -451,7 +398,7 @@ const USDCAccountsCarousel: React.FC = () => {
         </div>
       </section>
 
-      {/* DESKTOP: stack all three horizontally */}
+      {/* DESKTOP */}
       <section className="hidden w-full gap-3 lg:flex">
         <DepositAccountCard
           loading={loading}

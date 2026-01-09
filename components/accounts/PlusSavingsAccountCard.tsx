@@ -1,19 +1,19 @@
+// components/accounts/PlusSavingsAccountCard.tsx
 "use client";
 
 import React, { useMemo } from "react";
 
 type SavingsAccountShape = {
   walletAddress: string;
-  totalDeposited: number; // already in DISPLAY currency
+  totalDeposited: number; // already in DISPLAY currency (unused for now)
 };
 
 type PlusSavingsAccountCardProps = {
   account?: SavingsAccountShape;
   loading: boolean;
+  displayCurrency: string;
 
-  // ✅ new
-  displayCurrency: string; // e.g. "CAD", "EUR"
-
+  // kept for compatibility
   onDeposit: () => void;
   onWithdraw: () => void;
   onOpenAccount: () => void;
@@ -27,8 +27,6 @@ const shortAddress = (addr?: string | null) => {
 
 function makeMoneyFormatter(currency: string) {
   const c = (currency || "USD").toUpperCase();
-
-  // Avoid throw if someone has an invalid currency code in DB.
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
@@ -50,84 +48,93 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
   loading,
   displayCurrency,
-  onDeposit,
-  onWithdraw,
   onOpenAccount,
 }) => {
-  const hasAccount = !!account;
-
   const formatMoney = useMemo(
     () => makeMoneyFormatter(displayCurrency),
     [displayCurrency]
   );
 
-  const title = "Plus Savings Account";
-  const openTitle = "Plus Account Coming Soon!";
-  // ✅ no “USDC” in UI copy
-  const description = "Lock funds for higher yield and faster growth.";
+  // Mock for now
+  const apyFinal = 7.0;
+  const mockBalance = 0;
 
-  if (!hasAccount) {
-    return (
-      <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900 via-zinc-950 to-zinc-950 px-4 py-4 sm:px-6 sm:py-6">
+  // show something stable in the subtitle (same shape as Flex)
+  const accountPkToShow = account?.walletAddress
+    ? shortAddress(account.walletAddress)
+    : "—";
+
+  return (
+    <div className="relative h-full w-full">
+      {/* BASE CARD (matches Flex open state layout) */}
+      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-400">
-            {title}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="haven-kicker">Plus Account</p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
+                Account #{accountPkToShow}
+              </p>
+            </div>
 
-          <p className="mt-3 text-lg font-semibold text-zinc-50 sm:text-xl">
-            {openTitle}
-          </p>
-          <p className="mt-1 text-xs text-zinc-400">{description}</p>
+            {/* APY pill (same shape) */}
+            <span className="haven-pill">APY {apyFinal.toFixed(2)}%</span>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-3xl text-foreground/80 font-semibold tracking-tight sm:text-4xl">
+              {loading ? "…" : formatMoney.format(mockBalance)}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Lock funds for higher yield and faster growth
+            </p>
+          </div>
         </div>
 
-        <div className="mt-4">
+        {/* Actions row (same spacing/height as Flex) */}
+        <div className="mt-5 flex gap-2">
           <button
             type="button"
-            onClick={onOpenAccount}
-            className="w-full rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
+            className="haven-btn-primary flex-1 text-[#0b3204]"
+            disabled
+            aria-disabled="true"
           >
-            Coming Soon!
+            Deposit
+          </button>
+          <button
+            type="button"
+            className="haven-btn-primary flex-1 text-[#0b3204]"
+            disabled
+            aria-disabled="true"
+          >
+            Withdraw
           </button>
         </div>
       </div>
-    );
-  }
 
-  const deposited = account?.totalDeposited ?? 0;
+      {/* OVERLAY (absolute → does NOT change size) */}
+      <div className="absolute inset-0 z-10 rounded-3xl border border-border bg-background/75 backdrop-blur-[4px]">
+        <div className="flex h-full w-full flex-col items-center justify-center px-5 text-center">
+          <span className="haven-pill">APY {apyFinal.toFixed(2)}%</span>
 
-  return (
-    <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900 via-zinc-950 to-zinc-950 px-4 py-4 sm:px-6 sm:py-6">
-      <div>
-        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-400">
-          {title}
-        </p>
-        <p className="mt-1 text-xs text-zinc-400">
-          Dedicated savings wallet • {shortAddress(account.walletAddress)}
-        </p>
+          <div className="mt-3 text-xl font-semibold tracking-tight text-foreground">
+            Coming soon
+          </div>
 
-        <div className="mt-4">
-          <p className="text-xs font-medium text-zinc-400">Total Deposited</p>
-          <p className="mt-1 text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
-            {loading ? "…" : formatMoney.format(deposited)}
-          </p>
+          <div className="mt-1 text-[12px] text-muted-foreground max-w-[260px]">
+            Plus is launching soon. Higher yield, more growth.
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenAccount}
+            className="mt-4 haven-btn-primary max-w-[220px] text-[#0b3204]"
+          >
+            Coming soon!
+          </button>
+
+          
         </div>
-      </div>
-
-      <div className="mt-5 flex gap-2">
-        <button
-          type="button"
-          onClick={onDeposit}
-          className="flex-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
-        >
-          Deposit
-        </button>
-        <button
-          type="button"
-          onClick={onWithdraw}
-          className="flex-1 rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-900"
-        >
-          Withdraw
-        </button>
       </div>
     </div>
   );

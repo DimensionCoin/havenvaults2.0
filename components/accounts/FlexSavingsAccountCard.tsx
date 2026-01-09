@@ -12,7 +12,7 @@ type DrawerMode = "deposit" | "withdraw" | null;
 
 type SavingsAccountShape = {
   walletAddress: string;
-  totalDeposited: number; // NOTE: lifetime deposits/principal-ish — NOT live balance
+  totalDeposited: number;
 };
 
 type FlexSavingsAccountCardProps = {
@@ -24,13 +24,13 @@ type FlexSavingsAccountCardProps = {
   onWithdraw: () => void;
   onOpenAccount: () => void;
 
-  apyPctOverride?: number; // e.g. 4.25
+  apyPctOverride?: number;
 };
 
 type ApyResponse = {
   ok?: boolean;
   apyPct?: number;
-  apy?: number; // decimal, e.g. 0.0425
+  apy?: number;
   error?: string;
 };
 
@@ -45,60 +45,39 @@ const shortAddress = (addr?: string | null) => {
 const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
   account,
   loading: loadingProp,
-  displayCurrency: displayCurrencyProp,
   onOpenAccount,
   apyPctOverride,
 }) => {
-  const { user, loading: userLoading, savingsFlex } = useUser();
-  const {
-    loading: balanceLoading,
-    displayCurrency: balanceCurrency,
-    savingsFlexUsd, // (this is your LIVE balance value coming from BalanceProvider)
-  } = useBalance();
+  const { loading: userLoading, savingsFlex } = useUser();
+  const { loading: balanceLoading, savingsFlexUsd } = useBalance();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
 
-  // ---------- APY state ----------
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
   const [apyLoading, setApyLoading] = useState(false);
 
   const effectiveLoading = loadingProp ?? (userLoading || balanceLoading);
 
-  
-
-  // ✅ Only treat as "open account" when we have a real marginfiAccountPk
   const linkedMarginfiPk =
     typeof savingsFlex?.marginfiAccountPk === "string" &&
     savingsFlex.marginfiAccountPk.trim()
       ? savingsFlex.marginfiAccountPk.trim()
       : null;
 
-  // ✅ IMPORTANT: don't use `account` to determine "has account"
-  // because `account` may exist even when the marginfi link isn't real.
   const hasAccount = Boolean(linkedMarginfiPk);
-
-  // address to show on the "open" style card
   const accountPkToShow = linkedMarginfiPk || "";
 
-  // ✅ FIX: Always prefer BalanceProvider's live balance for display.
-  // Only fall back to account.totalDeposited if provider value is missing.
   const effectiveBalance = useMemo(() => {
     if (Number.isFinite(savingsFlexUsd)) return savingsFlexUsd as number;
-
-    // fallback only (this is NOT a live balance, it's lifetime deposits/principal)
-    if (account && Number.isFinite(account.totalDeposited)) {
+    if (account && Number.isFinite(account.totalDeposited))
       return account.totalDeposited;
-    }
-
     return 0;
   }, [account, savingsFlexUsd]);
 
-  // Always show "$" (no CAD$, US$, etc) but still keep separators/decimals
   const formatDisplay = (n?: number | null) => {
     const value =
       n === undefined || n === null || Number.isNaN(n) ? 0 : Number(n);
-
     return `$${value.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -115,9 +94,10 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     if (!open) setDrawerMode(null);
   };
 
-  // ---------- Fetch APY (only when account exists, and only if no override) ----------
+  // APY fetch (same logic, just kept)
   useEffect(() => {
     if (!hasAccount) return;
+
     if (typeof apyPctOverride === "number" && Number.isFinite(apyPctOverride)) {
       setApyPctLive(null);
       setApyLoading(false);
@@ -130,7 +110,6 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
       try {
         setApyLoading(true);
 
-        // 5-min session cache
         const cacheKey = "flex_apy_cache_v1";
         const cachedRaw = sessionStorage.getItem(cacheKey);
         if (cachedRaw) {
@@ -174,7 +153,6 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     };
 
     run();
-
     return () => {
       cancelled = true;
     };
@@ -185,27 +163,38 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
       ? apyPctOverride
       : apyPctLive;
 
+  // ----------------------------
+  // CLOSED STATE (Open account)
+  // ----------------------------
   if (!hasAccount) {
     return (
-      <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900 via-zinc-950 to-zinc-950 px-4 py-4 sm:px-6 sm:py-6">
+      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-400">
-            Flex Account
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="haven-kicker">Flex Account</p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
+                Earn yield with flexible access
+              </p>
+            </div>
 
-          <p className="mt-3 text-lg font-semibold text-zinc-50 sm:text-xl">
-            Open Flex Account
-          </p>
-          <p className="mt-1 text-xs text-zinc-400">
-            Earn yield with flexible access.
+            <span className="haven-pill">
+              <span className="h-2 w-2 rounded-full bg-primary" />
+              New
+            </span>
+          </div>
+
+          <p className="mt-4 text-lg font-semibold">Open Flex Account</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Start earning automatically on idle USDC.
           </p>
         </div>
 
-        <div className="mt-4">
+        <div className="mt-5">
           <button
             type="button"
             onClick={onOpenAccount}
-            className="w-full rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
+            className="haven-btn-primary text-[#0b3204]"
           >
             Open account
           </button>
@@ -214,34 +203,40 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     );
   }
 
+  // ----------------------------
+  // OPEN STATE (same structure as deposit)
+  // ----------------------------
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
-      <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-white/10 px-4 py-4 sm:px-6 sm:py-5">
+      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
         <div>
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
-              Flex Account
-            </p>
-
-            <div className="rounded-full border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1 text-[11px] font-medium text-emerald-100">
-              {apyLoading
-                ? "APY …"
-                : apyFinal === null
-                  ? "APY —"
-                  : `APY ${apyFinal.toFixed(2)}%`}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
-              {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
-            </p>
-
-            <div className="mt-1 flex items-center justify-between">
-              <p className="text-[11px] text-zinc-500">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="haven-kicker">Flex Account</p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
                 Account #{shortAddress(accountPkToShow)}
               </p>
             </div>
+
+            {/* APY pill (same shape as your "Active" pill) */}
+            <span className="haven-pill">
+              {apyLoading ? (
+                "APY …"
+              ) : apyFinal === null ? (
+                "APY —"
+              ) : (
+                <>APY {apyFinal.toFixed(2)}%</>
+              )}
+            </span>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
+              {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Yield accrues daily, withdraw anytime
+            </p>
           </div>
         </div>
 
@@ -250,7 +245,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
             <button
               type="button"
               onClick={() => openDrawer("deposit")}
-              className="flex-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
+              className="haven-btn-primary flex-1 text-[#0b3204]"
             >
               Deposit
             </button>
@@ -260,7 +255,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
             <button
               type="button"
               onClick={() => openDrawer("withdraw")}
-              className="flex-1 rounded-xl border border-zinc-700 bg-black/40 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-900"
+              className="haven-btn-primary flex-1 text-[#0b3204]"
             >
               Withdraw
             </button>
@@ -275,7 +270,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
             setDrawerOpen(open);
             if (!open) setDrawerMode(null);
           }}
-          hasAccount={true}
+          hasAccount
         />
       )}
 

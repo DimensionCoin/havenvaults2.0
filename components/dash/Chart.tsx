@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useId } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 import {
@@ -14,11 +14,7 @@ import {
 
 type RangeKey = "1d" | "1w" | "1m" | "1y";
 
-const RANGE_OPTIONS: {
-  key: RangeKey;
-  label: string;
-  visibleDays: number;
-}[] = [
+const RANGE_OPTIONS: { key: RangeKey; label: string; visibleDays: number }[] = [
   { key: "1d", label: "1D", visibleDays: 1 },
   { key: "1w", label: "1W", visibleDays: 7 },
   { key: "1m", label: "1M", visibleDays: 30 },
@@ -30,12 +26,6 @@ type SnapshotApiResponse = {
   snapshots: {
     asOf: string; // ISO date
     totalBalanceUSDC: number; // USD/USDC
-    breakdown?: {
-      savingsFlex?: number | null;
-      savingsPlus?: number | null;
-      invest?: number | null;
-      amplify?: number | null;
-    };
   }[];
   count: number;
 };
@@ -67,6 +57,7 @@ const HistoryChart: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const walletAddress = user?.walletAddress;
+  const gradientId = useId();
 
   useEffect(() => {
     if (!walletAddress) return;
@@ -87,13 +78,6 @@ const HistoryChart: React.FC = () => {
         });
 
         if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          console.error(
-            "[HistoryChart] chart-data failed:",
-            res.status,
-            res.statusText,
-            text
-          );
           setError("Failed to load history.");
           return;
         }
@@ -101,9 +85,7 @@ const HistoryChart: React.FC = () => {
         const data = (await res.json()) as SnapshotApiResponse;
         setSnapshots(data.snapshots ?? []);
       } catch (err: unknown) {
-        // ✅ no `any` — safe narrowing
         if (err instanceof Error && err.name === "AbortError") return;
-        console.error("[HistoryChart] error fetching chart data:", err);
         setError("Failed to load history.");
       } finally {
         setLoading(false);
@@ -184,29 +166,6 @@ const HistoryChart: React.FC = () => {
     fxRate,
   ]);
 
-  const RangeSelector = () => (
-    <div className="flex gap-1.5">
-      {RANGE_OPTIONS.map((opt) => {
-        const isActive = opt.key === range;
-        return (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => setRange(opt.key)}
-            className={[
-              "rounded-full px-2.5 py-1 text-[10px] font-semibold transition border",
-              isActive
-                ? "bg-emerald-500/20 text-emerald-100 border-emerald-300/25 shadow-[0_0_0_1px_rgba(63,243,135,0.55)]"
-                : "bg-black/35 text-white/55 border-white/10 hover:text-white/80 hover:border-white/15",
-            ].join(" ")}
-          >
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-
   const formatDateLabel = (key: string) => {
     const [y, m, d] = key.split("-").map((x) => parseInt(x, 10));
     const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
@@ -218,6 +177,29 @@ const HistoryChart: React.FC = () => {
     }
     return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
+
+  const RangeSelector = () => (
+    <div className="flex gap-1.5">
+      {RANGE_OPTIONS.map((opt) => {
+        const isActive = opt.key === range;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => setRange(opt.key)}
+            className={[
+              "rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors border",
+              isActive
+                ? "bg-primary text-primary-foreground border-primary/30 shadow-fintech-sm"
+                : "bg-secondary text-muted-foreground border-border hover:bg-accent hover:text-foreground",
+            ].join(" ")}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const CustomTooltip = ({
     active,
@@ -238,32 +220,31 @@ const HistoryChart: React.FC = () => {
     const prev = idx > 0 ? visibleData[idx - 1].value : v;
     const diff = v - prev;
 
-    const sign = diff >= 0 ? "+" : "-";
-
     return (
-      <div className="rounded-2xl border border-white/10 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm">
-        <div className="text-sm font-semibold text-white/90">
+      <div className="rounded-2xl border border-border bg-popover/95 px-3 py-2 shadow-fintech-md backdrop-blur-sm">
+        <div className="text-sm font-semibold text-foreground">
           {formatMoney(v, displayCurrency)}
         </div>
-        <div className="mt-0.5 text-[11px] text-white/45">
+        <div className="mt-0.5 text-[11px] text-muted-foreground">
           {formatDateLabel(dateKey)}
         </div>
         <div
           className={[
             "mt-1 text-[11px] font-semibold",
-            diff >= 0 ? "text-emerald-300" : "text-rose-300",
+            diff >= 0 ? "text-primary" : "text-destructive",
           ].join(" ")}
         >
-          {sign}
+          {diff >= 0 ? "+" : "-"}
           {formatMoney(Math.abs(diff), displayCurrency)}
         </div>
       </div>
     );
   };
 
+  // States (token-based)
   if (loading) {
     return (
-      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-white/45">
+      <div className="w-full rounded-2xl border border-border bg-secondary px-3 py-3 text-[11px] text-muted-foreground">
         Loading history…
       </div>
     );
@@ -271,8 +252,8 @@ const HistoryChart: React.FC = () => {
 
   if (error) {
     return (
-      <div className="w-full rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-rose-300">
-        {error || "Something went wrong."}
+      <div className="w-full rounded-2xl border border-border bg-secondary px-3 py-3 text-[11px] text-destructive">
+        {error}
       </div>
     );
   }
@@ -281,12 +262,10 @@ const HistoryChart: React.FC = () => {
     return (
       <div className="w-full">
         <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
-            History
-          </div>
+          <div className="haven-kicker">History</div>
           <RangeSelector />
         </div>
-        <div className="rounded-2xl bg-black/25 px-3 py-3 text-[11px] text-white/45">
+        <div className="rounded-2xl border border-border bg-secondary px-3 py-3 text-[11px] text-muted-foreground">
           No history yet.
         </div>
       </div>
@@ -300,13 +279,12 @@ const HistoryChart: React.FC = () => {
   return (
     <div className="w-full">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
-          History
-        </div>
+        <div className="haven-kicker">History</div>
         <RangeSelector />
       </div>
 
-      <div className="h-[124px] w-full overflow-hidden sm:h-[176px]">
+      {/* Chart frame (matches Haven theme) */}
+      <div className="haven-chart h-[124px] w-full overflow-hidden sm:h-[176px]">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart
             data={visibleData}
@@ -317,29 +295,23 @@ const HistoryChart: React.FC = () => {
 
             <Tooltip
               cursor={{
-                stroke: "rgba(255,255,255,0.16)",
+                stroke: "var(--border)",
                 strokeDasharray: "3 3",
               }}
               content={<CustomTooltip />}
             />
 
             <defs>
-              <linearGradient
-                id="portfolioGradient"
-                x1="0"
-                y1="0"
-                x2="0"
-                y2="1"
-              >
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop
                   offset="0%"
-                  stopColor="var(--chart-1, rgb(16 185 129))"
-                  stopOpacity="0.28"
+                  stopColor="var(--chart-1)"
+                  stopOpacity={0.22}
                 />
                 <stop
-                  offset="90%"
-                  stopColor="var(--chart-1, rgb(16 185 129))"
-                  stopOpacity="0.0"
+                  offset="85%"
+                  stopColor="var(--chart-1)"
+                  stopOpacity={0.0}
                 />
               </linearGradient>
             </defs>
@@ -347,15 +319,15 @@ const HistoryChart: React.FC = () => {
             <Area
               type="monotone"
               dataKey="value"
-              stroke="var(--chart-1, rgb(16 185 129))"
+              stroke="var(--chart-1)"
               strokeWidth={2.2}
-              fill="url(#portfolioGradient)"
+              fill={`url(#${gradientId})`}
               dot={false}
               activeDot={{
                 r: 4,
-                stroke: "var(--chart-1, rgb(16 185 129))",
+                stroke: "var(--chart-1)",
                 strokeWidth: 2,
-                fill: "#000000",
+                fill: "var(--card)",
               }}
               isAnimationActive
             />
@@ -363,7 +335,7 @@ const HistoryChart: React.FC = () => {
         </ResponsiveContainer>
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
         <span>Low: {formatMoney(low, displayCurrency)}</span>
         <span>High: {formatMoney(high, displayCurrency)}</span>
       </div>

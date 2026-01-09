@@ -1,4 +1,3 @@
-// components/exchange/CategoryTabs.tsx
 "use client";
 
 import React, { useRef, useEffect, useMemo } from "react";
@@ -52,7 +51,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   Utility: <Wrench className="h-4 w-4" />,
 };
 
-// Display labels (can customize if needed)
+// Display labels
 const CATEGORY_LABELS: Record<string, string> = {
   all: "All",
   favorites: "Favorites",
@@ -78,18 +77,15 @@ const CategoryTabs: React.FC<CategoryTabsProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  // Dynamically get categories that have tokens in the current cluster
   const availableCategories = useMemo(() => {
     const categorySet = new Set<TokenCategory>();
 
     TOKENS.forEach((token) => {
-      // Only include tokens that have a mint for this cluster
       if (getMintFor(token, CLUSTER)) {
         token.categories.forEach((cat) => categorySet.add(cat));
       }
     });
 
-    // Define the order we want categories to appear
     const categoryOrder: TokenCategory[] = [
       "Top MC",
       "Stocks",
@@ -105,21 +101,14 @@ const CategoryTabs: React.FC<CategoryTabsProps> = ({
       "Utility",
     ];
 
-    // Filter to only categories that exist and sort by our preferred order
     return categoryOrder.filter((cat) => categorySet.has(cat));
   }, []);
 
-  // Build tabs array: All + Categories + Favorites
   const tabs = useMemo(() => {
     const result: { id: MarketTab; label: string; icon: React.ReactNode }[] = [
-      {
-        id: "all",
-        label: CATEGORY_LABELS["all"],
-        icon: CATEGORY_ICONS["all"],
-      },
+      { id: "all", label: CATEGORY_LABELS.all, icon: CATEGORY_ICONS.all },
     ];
 
-    // Add category tabs
     availableCategories.forEach((cat) => {
       result.push({
         id: cat,
@@ -128,36 +117,37 @@ const CategoryTabs: React.FC<CategoryTabsProps> = ({
       });
     });
 
-    // Add favorites at the end
     result.push({
       id: "favorites",
-      label: CATEGORY_LABELS["favorites"],
-      icon: CATEGORY_ICONS["favorites"],
+      label: CATEGORY_LABELS.favorites,
+      icon: CATEGORY_ICONS.favorites,
     });
 
     return result;
   }, [availableCategories]);
 
-  // Scroll active tab into view on mount/change
   useEffect(() => {
-    if (activeRef.current && scrollRef.current) {
-      const container = scrollRef.current;
-      const button = activeRef.current;
-      const containerRect = container.getBoundingClientRect();
-      const buttonRect = button.getBoundingClientRect();
+    if (!activeRef.current || !scrollRef.current) return;
 
-      if (buttonRect.left < containerRect.left) {
-        container.scrollLeft -= containerRect.left - buttonRect.left + 16;
-      } else if (buttonRect.right > containerRect.right) {
-        container.scrollLeft += buttonRect.right - containerRect.right + 16;
-      }
+    const container = scrollRef.current;
+    const button = activeRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+
+    if (buttonRect.left < containerRect.left) {
+      container.scrollLeft -= containerRect.left - buttonRect.left + 16;
+    } else if (buttonRect.right > containerRect.right) {
+      container.scrollLeft += buttonRect.right - containerRect.right + 16;
     }
   }, [activeTab]);
 
   return (
     <div
       ref={scrollRef}
-      className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1"
+      className={[
+        "no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1",
+        "pt-1",
+      ].join(" ")}
     >
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
@@ -169,21 +159,46 @@ const CategoryTabs: React.FC<CategoryTabsProps> = ({
             ref={isActive ? activeRef : undefined}
             type="button"
             onClick={() => onTabChange(tab.id)}
-            className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
+            className={[
+              "flex shrink-0 items-center gap-2",
+              "rounded-full border",
+              "px-3.5 py-2",
+              "text-[12px] font-semibold tracking-tight",
+              "transition",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+
+              // Base chip surface
+              "bg-card/70 backdrop-blur-xl",
+
+              // Active vs inactive
               isActive
-                ? "bg-zinc-100 text-zinc-900"
-                : "bg-zinc-900/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            }`}
+                ? "border-primary/25 bg-primary/10 text-foreground shadow-fintech-sm"
+                : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
+            ].join(" ")}
+            aria-pressed={isActive}
           >
-            {tab.icon}
-            <span>{tab.label}</span>
+            <span
+              className={[
+                "flex h-7 w-7 items-center justify-center rounded-full border",
+                isActive
+                  ? "border-primary/20 bg-background/60"
+                  : "border-border bg-background/40",
+              ].join(" ")}
+            >
+              {tab.icon}
+            </span>
+
+            <span className="whitespace-nowrap">{tab.label}</span>
+
             {showCount && (
               <span
-                className={`rounded-full px-1.5 py-0.5 text-xs ${
+                className={[
+                  "ml-0.5 rounded-full border px-2 py-0.5",
+                  "text-[10px] font-semibold tabular-nums",
                   isActive
-                    ? "bg-zinc-900 text-zinc-100"
-                    : "bg-zinc-700 text-zinc-300"
-                }`}
+                    ? "border-primary/25 bg-primary/10 text-foreground"
+                    : "border-border bg-secondary text-muted-foreground",
+                ].join(" ")}
               >
                 {favoritesCount}
               </span>

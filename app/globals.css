@@ -1,224 +1,353 @@
+/* globals.css — Haven production theme (Tailwind v4 + next-themes)
+   Design target: clean neo-bank UI (reference image)
+   - Light: white/soft-gray surfaces, GREEN-forward typography, subtle shadows
+   - Dark: near-black surfaces, crisp white text, mint accents
+*/
+
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* -----------------------------
+   Tailwind token mapping (v4)
+------------------------------ */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
 }
 
-/* Base radius + light mode (rarely used) */
+/* -----------------------------
+   Haven theme tokens
+------------------------------ */
+
+/* LIGHT MODE (default)
+   Note: you asked for GREEN text in light mode, so foreground is deep green.
+*/
 :root {
-  --radius: 0.9rem;
+  --radius: 18px;
 
-  --background: #0b1114;
-  --foreground: #020617;
+  /* Surfaces */
+  --background: #edfef2;                 /* soft, bank-like */
+  --foreground: #048611;                 /* deep green text (emerald-900) */
 
-  --card: #ffffff;
-  --card-foreground: #020617;
+  --card: #ebf3ec;
+  --card-foreground: #048611;
+
   --popover: #ffffff;
-  --popover-foreground: #020617;
+  --popover-foreground: #048611;
 
-  /* Mint from the Haven logo */
+  /* Brand mint (Haven) */
   --primary: #29c668;
-  --primary-foreground: #000000;
+  --primary-foreground: #04140a;
 
-  --secondary: #f3f4f6;
-  --secondary-foreground: #020617;
+  /* Neutrals */
+  --secondary: #f1f5f9;                  /* soft gray panel */
+  --secondary-foreground: #012c05;
 
-  --muted: #f3f4f6;
-  --muted-foreground: #050606;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;           /* keep muted readable / calm */
 
-  --accent: #e5f7ee;
-  --accent-foreground: #020617;
+  /* Subtle mint wash */
+  --accent: #eaf7f0;
+  --accent-foreground: #064e3b;
 
-  --destructive: #f97373;
+  /* States */
+  --destructive: #ef4444;
 
-  --border: #e5e7eb;
-  --input: #e5e7eb;
-  --ring: rgb(30, 178, 89);
+  /* Lines + focus */
+  --border: rgba(2, 6, 23, 0.10);
+  --input: rgba(2, 6, 23, 0.12);
+  --ring: rgba(41, 198, 104, 0.35);
 
-  /* Charts – all green / neutral, no blue/purple */
-  --chart-1: #2ac166;
-  --chart-2: #2ac166;
-  --chart-3: #2ac166;
-  --chart-4: #2ac166;
-  --chart-5: #2ac166;
+  /* Charts (greens only) */
+  --chart-1: #29c668;
+  --chart-2: #24b85f;
+  --chart-3: #1fa954;
+  --chart-4: #37d978;
+  --chart-5: #7bf0ac;
 
-  --sidebar: #f9fafb;
-  --sidebar-foreground: #020617;
+  /* Sidebar */
+  --sidebar: #ffffff;
+  --sidebar-foreground: #064e3b;
   --sidebar-primary: var(--primary);
-  --sidebar-primary-foreground: #020617;
-  --sidebar-accent: #e5f7ee;
-  --sidebar-accent-foreground: #020617;
-  --sidebar-border: #e5e7eb;
+  --sidebar-primary-foreground: #04140a;
+  --sidebar-accent: #eaf7f0;
+  --sidebar-accent-foreground: #064e3b;
+  --sidebar-border: rgba(2, 6, 23, 0.10);
   --sidebar-ring: var(--ring);
+
+  /* Fintech shadows (light) */
+  --shadow-fintech-sm: 0 1px 2px rgba(2, 6, 23, 0.06);
+  --shadow-fintech-md: 0 10px 28px rgba(2, 6, 23, 0.10);
+  --shadow-fintech-lg: 0 22px 70px rgba(2, 6, 23, 0.14);
+
+  /* Very subtle mint halo (light) */
+  --glow-mint: 0 18px 45px rgba(41, 198, 104, 0.14);
 }
 
-/* 🌚 Haven lives in dark mode – black + mint only */
+/* DARK MODE (via <html class="dark">)
+   Crisp premium dark with mint accents.
+*/
 .dark {
-  --background: #02010a;              /* near-black */
-  --foreground: #f9fafb;
+  --background: #060f08;
+  --foreground: #cefcdd;
 
-  --card: rgba(3, 7, 18, 0.9);        /* black glass */
-  --card-foreground: #f9fafb;
-  --popover: rgba(3, 7, 18, 0.96);
-  --popover-foreground: #f9fafb;
+  --card: #091a12;
+  --card-foreground: #04140a;
 
-  /* Mint core */
-  --primary: #3ff387;                 /* main mint */
-  --primary-foreground: #031702;
-  --secondary: rgb(0, 0, 0);
-  --secondary-foreground: #e5e7eb;
+  --popover: #091a12;
+  --popover-foreground: #04140a;
 
-  --muted: rgb(11, 30, 4);
-  --muted-foreground: #9ca3af;
+  --primary: #3ff387;
+  --primary-foreground: #cefadf;
 
-  /* Soft mint accent wash */
-  --accent: rgb(84, 187, 122);
-  --accent-foreground: #e5f7ee;
+  --secondary: #bfc2bf17;
+  --secondary-foreground: #04140a;
+
+  --muted: #ffffff0f;
+  --muted-foreground: rgba(226, 232, 240, 0.72);
+
+  --accent: rgba(63, 243, 135, 0.08);
+  --accent-foreground: #ecfdf5;
 
   --destructive: #f97373;
 
-  --border: rgba(148, 163, 184, 0.28);
-  --input: rgba(3, 7, 18, 0.9);
-  --ring: rgba(111, 178, 138, 0.85);
+  --border: rgba(148, 163, 184, 0.18);
+  --input: rgba(148, 163, 184, 0.18);
+  --ring: rgba(63, 243, 135, 0.38);
 
-  /* Charts – different greens, no blue/purple/orange */
   --chart-1: #3ff387;
-  --chart-2: #3ff387;
-  --chart-3: #3ff387;
-  --chart-4: #3ff387;
-  --chart-5: #3ff387;
+  --chart-2: #7bf0ac;
+  --chart-3: #29c668;
+  --chart-4: #20a956;
+  --chart-5: #baf7d5;
 
-  --sidebar: rgba(3, 7, 18, 0.96);
-  --sidebar-foreground: #f9fafb;
+  --sidebar: rgba(12, 18, 22, 0.96);
+  --sidebar-foreground: #f8fafc;
   --sidebar-primary: var(--primary);
-  --sidebar-primary-foreground: #020617;
-  --sidebar-accent: rgba(15, 23, 42, 0.96);
-  --sidebar-accent-foreground: #e5f7ee;
-  --sidebar-border: rgba(148, 163, 184, 0.28);
+  --sidebar-primary-foreground: #04140a;
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent-foreground: #ecfdf5;
+  --sidebar-border: rgba(148, 163, 184, 0.18);
   --sidebar-ring: var(--ring);
+
+  /* Fintech shadows (dark) */
+  --shadow-fintech-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-fintech-md: 0 12px 34px rgba(0, 0, 0, 0.48);
+  --shadow-fintech-lg: 0 26px 90px rgba(0, 0, 0, 0.62);
+
+  --glow-mint: 0 18px 55px rgba(63, 243, 135, 0.12);
 }
 
+/* -----------------------------
+   Custom utilities (Tailwind v4)
+   These become real utilities so @apply works.
+------------------------------ */
+@utility shadow-fintech-sm { box-shadow: var(--shadow-fintech-sm); }
+@utility shadow-fintech-md { box-shadow: var(--shadow-fintech-md); }
+@utility shadow-fintech-lg { box-shadow: var(--shadow-fintech-lg); }
+@utility glow-mint { box-shadow: var(--glow-mint); }
+
+/* -----------------------------
+   Base (global) styles
+------------------------------ */
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
 
+  html {
+    @apply bg-background text-foreground;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
-    /* subtle mint glow, no blue */
+  }
+
+  /* iOS: prevent input zoom */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Optional: subtle premium background for dark (matches reference vibe) */
+  .dark body {
     background-image:
-      radial-gradient(circle at top, rgb(0, 34, 12), transparent 55%),
-      radial-gradient(circle at bottom, rgba(0, 58, 21), #02010a 65%);
+      radial-gradient(circle at top, rgba(63,243,135,0.10), transparent 55%),
+      radial-gradient(circle at bottom, rgba(63,243,135,0.06), transparent 60%);
     background-attachment: fixed;
   }
+
+  /* Make common text elements inherit theme by default */
+  p, span, label, small, li, dd, dt, a {
+    color: inherit;
+  }
 }
 
-/* 🧊 Glass + motion primitives */
+/* -----------------------------
+   Haven UI primitives (use these everywhere)
+   Reference-style: clean cards, soft borders, small shadows.
+------------------------------ */
 @layer components {
-  .glass-panel {
-    @apply rounded-3xl border border-white/8 bg-white/5
-           shadow-[0_24px_80px_rgba(0,0,0,0.85)]
-           backdrop-blur-2xl;
+  /* App shell */
+  .haven-app {
+    @apply min-h-[100dvh] bg-background text-foreground;
   }
 
-  .glass-panel-soft {
-    @apply rounded-3xl border border-white/6 bg-white/4
-           shadow-[0_18px_60px_rgba(0,0,0,0.75)]
-           backdrop-blur-2xl;
+  /* Standard card (neo-bank) */
+  .haven-card {
+    @apply rounded-3xl border bg-card text-card-foreground shadow-fintech-md;
   }
 
-  .glass-input {
-    @apply w-full rounded-2xl border border-white/12 bg-black/40
-           px-3.5 py-2.5 text-sm text-slate-50
-           placeholder:text-slate-400/70
-           focus-visible:outline-none
-           focus-visible:ring-2 focus-visible:ring-primary/80
-           focus-visible:border-primary/80;
+  /* Softer card / inset panel */
+  .haven-card-soft {
+    @apply rounded-3xl border bg-secondary text-secondary-foreground shadow-fintech-sm;
   }
 
-  .glass-pill {
-    @apply inline-flex items-center gap-2 rounded-full border border-white/10
-           bg-white/5 px-3 py-1.5 text-[10px] font-semibold uppercase
-           tracking-[0.25em] text-slate-200/80;
+  /* Glassy premium panel (still calm) */
+  .haven-glass {
+    @apply rounded-3xl border bg-card/80 backdrop-blur-xl shadow-fintech-md;
   }
 
-  .haven-primary-btn {
+  /* Section header label (the small uppercase from the reference) */
+  .haven-kicker {
+    @apply text-[11px] font-semibold uppercase tracking-[0.20em] text-muted-foreground;
+  }
+
+  /* Main header text */
+  .haven-title {
+    @apply text-[22px] md:text-4xl font-semibold tracking-tight;
+  }
+
+  /* Primary button */
+  .haven-btn-primary {
     @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
-           bg-gradient-to-tr from-[#04aa44] to-[#4ddb81]
-           px-4 py-2.5 text-sm font-semibold text-primary-foreground
-           shadow-[0_18px_40px_rgba(111,178,138,0.65)]
-           transition-all hover:scale-[1.01] hover:shadow-[0_22px_55px_rgba(111,178,138,0.9)]
-           disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-none;
+      bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground
+      shadow-[0_12px_28px_rgba(41,198,104,0.18)]
+      transition-colors hover:bg-primary/90 disabled:opacity-60;
+  }
+  .dark .haven-btn-primary {
+    box-shadow: 0 14px 32px rgba(63, 243, 135, 0.14);
   }
 
-  .haven-secondary-btn {
+  /* Secondary button */
+  .haven-btn-secondary {
     @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
-           border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-medium
-           text-slate-100/85 transition hover:bg-white/10;
+      border bg-transparent px-4 py-3 text-sm font-medium
+      text-foreground transition-colors hover:bg-secondary;
+  }
+
+  /* Icon button (notifications, settings, etc.) */
+  .haven-icon-btn {
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-full
+      border bg-secondary text-foreground/80
+      shadow-fintech-sm transition-colors hover:bg-accent hover:text-foreground;
+  }
+
+  /* Input (clean bank style) */
+  .haven-input {
+    @apply w-full rounded-2xl border bg-background px-3.5 py-3 text-sm
+      placeholder:text-muted-foreground
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
+      focus-visible:border-primary/40;
+  }
+  .dark .haven-input {
+    @apply bg-card;
+  }
+
+  /* Small pill tag */
+  .haven-pill {
+    @apply inline-flex items-center gap-2 rounded-full border bg-secondary
+      px-3 py-1.5 text-[11px] font-medium text-muted-foreground;
+  }
+
+  /* Positive / negative pills (24h change) — readable in light + dark */
+  .haven-pill-positive {
+    @apply border-primary/20 bg-primary/10 text-foreground;
+  }
+  .haven-pill-negative {
+    @apply border-destructive/20 bg-destructive/10 text-foreground;
+  }
+
+  /* Row item (transactions list) */
+  .haven-row {
+    @apply flex items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-3 shadow-fintech-sm;
+  }
+
+  /* Bottom nav (optional) */
+  .haven-bottom-nav {
+    @apply sticky bottom-3 mx-auto w-full max-w-[430px]
+      rounded-[24px] border bg-card/80 px-3 py-2 backdrop-blur-xl shadow-fintech-lg;
+  }
+
+  /* Charts container */
+  .haven-chart {
+    @apply rounded-2xl border bg-secondary p-2 shadow-fintech-sm;
   }
 }
 
-/* Hide scrollbar but keep scroll */
-.trending-scroll {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;     /* Firefox */
-}
-
-.trending-scroll::-webkit-scrollbar {
-  display: none;             /* Chrome, Safari, Opera */
-}
-
-/* Hide scrollbar but keep scrolling */
-.no-scrollbar::-webkit-scrollbar {
-  display: none; /* Chrome/Safari/Edge */
-}
-.no-scrollbar {
-  -ms-overflow-style: none; /* IE/old Edge */
-  scrollbar-width: none; /* Firefox */
-}
-
-
-/* Disable native pull-to-refresh */
+/* -----------------------------
+   App-like scrolling behavior
+------------------------------ */
 html, body {
   overscroll-behavior-y: contain;
 }
 
+/* Hide scrollbar (your preferred utility) */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Alt names you used elsewhere */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.trending-scroll::-webkit-scrollbar { display: none; }
+.trending-scroll { -ms-overflow-style: none; scrollbar-width: none; }

@@ -9,26 +9,27 @@ type SearchBarProps = {
   onChange: (value: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
+  className?: string;
 };
 
 const SearchBar: React.FC<SearchBarProps> = ({
   value,
   onChange,
-  placeholder = "Search markets...",
+  placeholder = "Search markets…",
   autoFocus = false,
+  className = "",
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (autoFocus && inputRef.current) {
-      inputRef.current.focus();
-    }
+    if (autoFocus && inputRef.current) inputRef.current.focus();
   }, [autoFocus]);
 
   return (
-    <div className="relative">
-      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
-        <Search className="h-5 w-5 text-zinc-500" />
+    <div className={["relative", className].join(" ")}>
+      {/* Search icon */}
+      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+        <Search className="h-4.5 w-4.5 text-muted-foreground" />
       </div>
 
       <input
@@ -37,19 +38,37 @@ const SearchBar: React.FC<SearchBarProps> = ({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl bg-zinc-900/40 py-3.5 pl-12 pr-12 text-base text-zinc-100 outline-none ring-1 ring-zinc-800 transition-all placeholder:text-zinc-500 focus:bg-zinc-900 focus:ring-2 focus:ring-emerald-500/50"
+        // ✅ uses Haven input + slight “exchange” tweaks
+        className={[
+          "haven-input",
+          "py-3 pl-10 pr-11", // room for icons
+          "text-[16px]", // iOS: prevent zoom
+          "bg-card/70 backdrop-blur-xl", // premium surface like the rest of Haven
+        ].join(" ")}
       />
 
-      {value && (
+      {/* Clear button */}
+      {value?.length > 0 && (
         <button
           type="button"
           onClick={() => onChange("")}
-          className="absolute inset-y-0 right-0 flex items-center pr-4"
+          className={[
+            "absolute inset-y-0 right-0 flex items-center pr-2.5",
+            "focus-visible:outline-none",
+          ].join(" ")}
           aria-label="Clear search"
         >
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 transition-colors hover:bg-zinc-600">
-            <X className="h-3.5 w-3.5 text-zinc-300" />
-          </div>
+          <span
+            className={[
+              "inline-flex h-8 w-8 items-center justify-center rounded-full",
+              "border border-border bg-secondary/70 backdrop-blur-xl",
+              "shadow-fintech-sm transition-colors",
+              "hover:bg-accent active:scale-[0.98]",
+              "text-foreground/80 hover:text-foreground",
+            ].join(" ")}
+          >
+            <X className="h-4 w-4" />
+          </span>
         </button>
       )}
     </div>

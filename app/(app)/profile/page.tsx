@@ -6,12 +6,12 @@ import Link from "next/link";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 import { LogoutButton } from "@/components/shared/LogoutButton";
+import ThemeToggle from "@/components/shared/ThemeToggle"; // ✅ add your existing ThemeToggle
 import {
   ArrowLeft,
   Calendar,
   Wallet,
   Globe2,
-  Award,
   Users,
   Copy,
   Check,
@@ -19,6 +19,7 @@ import {
   Settings,
   Link2,
   MailPlus,
+  MoonStar,
 } from "lucide-react";
 
 type ContactStatus = "invited" | "active" | "external";
@@ -167,9 +168,6 @@ const ProfilePage: React.FC = () => {
     const base =
       process.env.NEXT_PUBLIC_APP_URL ||
       (typeof window !== "undefined" ? window.location.origin : "");
-    // If you already have a canonical route for generic referrals, set it here:
-    // e.g. /sign-in?ref=<userId> OR /sign-in?ref=<refCode>
-    // We'll use walletAddress as stable fallback (you can swap to user.refCode later).
     const ref = user?.walletAddress || user?.email || "";
     const url = `${base}/sign-in?ref=${encodeURIComponent(ref)}`;
     return url;
@@ -359,7 +357,6 @@ const ProfilePage: React.FC = () => {
         .catch(() => ({}))) as PersonalInviteCreateResponse;
 
       if (!res.ok) {
-        // API returns 409 with message for already_on_haven
         const msg =
           "message" in data && typeof data.message === "string"
             ? data.message
@@ -368,9 +365,7 @@ const ProfilePage: React.FC = () => {
         return;
       }
 
-      // success: refresh list
       setInviteEmail("");
-      // reload invites
       const reload = await fetch("/api/user/invites", {
         method: "GET",
         credentials: "include",
@@ -380,7 +375,6 @@ const ProfilePage: React.FC = () => {
       };
       setInvites(Array.isArray(re.invites) ? re.invites : []);
 
-      // auto-copy link if present
       if ("link" in data && typeof data.link === "string" && data.link) {
         try {
           await navigator.clipboard.writeText(data.link);
@@ -415,575 +409,570 @@ const ProfilePage: React.FC = () => {
   if (!user) return null;
 
   return (
-    <main className="min-h-screen w-full overflow-x-hidden text-white">
-      <div className="w-full px-3 pb-8 pt-4 sm:px-4">
-        <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
-          <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
-            {/* Top bar */}
-            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
-              <div className="flex min-w-0 items-center gap-2">
-                <Link
-                  href="/dashboard"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 active:scale-[0.98]"
-                  aria-label="Back"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                </Link>
+    <main className="haven-app">
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-10 pt-4 sm:max-w-[520px] sm:px-4 md:max-w-[720px] xl:max-w-5xl">
+        {/* Shell */}
+        <div className="haven-card overflow-hidden">
+          {/* Top bar */}
+          <div className="flex items-center justify-between gap-2 border-b bg-card/60 px-3 py-3 backdrop-blur-xl sm:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link
+                href="/dashboard"
+                className={[
+                  "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                  "border bg-card/80 backdrop-blur-xl shadow-fintech-sm",
+                  "transition-colors hover:bg-secondary active:scale-[0.98]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                ].join(" ")}
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-4 w-4 text-foreground/70" />
+              </Link>
 
-                <div className="min-w-0">
-                  <h1 className="truncate text-base font-semibold sm:text-lg">
-                    Profile
-                  </h1>
-                  <p className="truncate text-[11px] text-zinc-400">
-                    Account and your Haven identity.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                <Link
-                  href="/settings"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-[11px] text-zinc-100 active:scale-[0.98]"
-                >
-                  <Settings className="h-4 w-4 text-zinc-300" />
-                  <span className="hidden sm:inline">Settings</span>
-                </Link>
-
-                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5">
-                  <LogoutButton />
-                </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
+                  Profile
+                </h1>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  Account and your Haven identity.
+                </p>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="p-3 sm:p-4">
-              {/* PWA install banner */}
-              {isMobile && !isStandalone && (
-                <div className="mb-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 sm:px-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-emerald-50">
-                        Install Haven for the best experience
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/settings"
+                className={[
+                  "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[11px]",
+                  "border bg-card/80 backdrop-blur-xl shadow-fintech-sm",
+                  "transition-colors hover:bg-secondary active:scale-[0.98]",
+                ].join(" ")}
+              >
+                <Settings className="h-4 w-4 text-foreground/70" />
+                <span className="hidden sm:inline text-foreground">
+                  Settings
+                </span>
+              </Link>
+
+              <div className="flex h-9 w-9 items-center justify-center rounded-full border bg-card/80 backdrop-blur-xl shadow-fintech-sm text-foreground">
+                <LogoutButton />
+              </div>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="p-3 sm:p-4">
+            {/* PWA install banner */}
+            {isMobile && !isStandalone && (
+              <div className="mb-3 haven-card-soft px-3 py-3 sm:px-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      Install Haven for the best experience
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Faster, full screen, and it feels like a real app.
+                    </p>
+
+                    {!canPromptInstall && (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        On iPhone/iPad: tap{" "}
+                        <span className="font-semibold text-foreground">
+                          Share
+                        </span>{" "}
+                        →{" "}
+                        <span className="font-semibold text-foreground">
+                          Add to Home Screen
+                        </span>
+                        .
                       </p>
-                      <p className="mt-1 text-[11px] text-emerald-100/80">
-                        Faster, full screen, and it feels like a real app.
+                    )}
+                  </div>
+
+                  {canPromptInstall ? (
+                    <button
+                      type="button"
+                      onClick={handleInstallPwa}
+                      className="haven-btn-primary w-auto px-4 py-2 text-xs"
+                    >
+                      Install
+                    </button>
+                  ) : (
+                    <div className="shrink-0 haven-pill">
+                      Add to Home Screen
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
+              {/* LEFT */}
+              <section className="min-w-0 space-y-3">
+                {/* Identity */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleAvatarClick}
+                      disabled={uploadingAvatar}
+                      className={[
+                        "relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full",
+                        "border bg-card/80 backdrop-blur-xl shadow-fintech-sm",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      ].join(" ")}
+                      aria-label="Change profile photo"
+                    >
+                      {avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={avatarUrl}
+                          alt={displayName}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <UserRound className="h-6 w-6 text-foreground/70" />
+                      )}
+
+                      <div className="pointer-events-none absolute bottom-0 right-0 mb-0.5 mr-0.5 rounded-full border border-border bg-card/80 px-1.5 py-[2px] text-[9px] text-muted-foreground">
+                        Tap
+                      </div>
+
+                      {uploadingAvatar && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/70 text-[10px] text-foreground">
+                          Uploading…
+                        </div>
+                      )}
+                    </button>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h2 className="min-w-0 truncate text-base font-semibold text-foreground">
+                          {displayName}
+                        </h2>
+                        {user.country && (
+                          <span className="haven-pill shrink-0">
+                            {user.country}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {user.email}
                       </p>
 
-                      {!canPromptInstall && (
-                        <p className="mt-2 text-[11px] text-emerald-100/80">
-                          On iPhone/iPad: tap{" "}
-                          <span className="font-semibold">Share</span> →{" "}
-                          <span className="font-semibold">
-                            Add to Home Screen
-                          </span>
-                          .
+                      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+                        <Calendar className="h-3 w-3" />
+                        <span>Member since</span>
+                        <span className="font-medium text-foreground">
+                          {formatDate(membershipSince || undefined)}
+                        </span>
+                        <span className="text-muted-foreground/70">•</span>
+                        <span className="font-medium text-foreground">
+                          {memberDuration}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {avatarError && (
+                    <p className="mt-2 text-[11px] text-destructive">
+                      {avatarError}
+                    </p>
+                  )}
+
+                  {/* ✅ Replace PLAN with THEME */}
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex min-w-0 items-center justify-between rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                      <div className="min-w-0">
+                        <p className="haven-kicker">Currency</p>
+                        <p className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                          {displayCurrency || user.displayCurrency || "USD"}
                         </p>
-                      )}
+                      </div>
+                      <Globe2 className="h-4 w-4 text-muted-foreground" />
                     </div>
 
-                    {canPromptInstall ? (
-                      <button
-                        type="button"
-                        onClick={handleInstallPwa}
-                        className="shrink-0 rounded-full bg-emerald-400 px-4 py-2 text-[12px] font-semibold text-black active:scale-[0.98]"
-                      >
-                        Install
-                      </button>
-                    ) : (
-                      <div className="shrink-0 rounded-full border border-emerald-400/30 bg-black/20 px-3 py-2 text-[11px] text-emerald-100/90">
-                        Add to Home Screen
+                    <div className="flex min-w-0 items-center justify-between rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                      <div className="min-w-0">
+                        <p className="haven-kicker">Theme</p>
+                        <p className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                          Appearance
+                        </p>
                       </div>
-                    )}
+
+                      <div className="flex items-center gap-2">
+                        <MoonStar className="h-4 w-4 text-muted-foreground" />
+                        <div className="shrink-0">
+                          <ThemeToggle />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
 
-              <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
-                {/* LEFT */}
-                <section className="min-w-0 space-y-3">
-                  {/* Identity */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={handleAvatarClick}
-                        disabled={uploadingAvatar}
-                        className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-                        aria-label="Change profile photo"
-                      >
-                        {avatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={avatarUrl}
-                            alt={displayName}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <UserRound className="h-6 w-6 text-zinc-200" />
-                        )}
-
-                        <div className="pointer-events-none absolute bottom-0 right-0 mb-0.5 mr-0.5 rounded-full border border-emerald-500/40 bg-black/60 px-1.5 py-[2px] text-[9px] text-emerald-300">
-                          Tap
-                        </div>
-
-                        {uploadingAvatar && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[10px]">
-                            Uploading…
-                          </div>
-                        )}
-                      </button>
-
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleFileChange}
-                      />
-
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <h2 className="min-w-0 truncate text-base font-semibold">
-                            {displayName}
-                          </h2>
-                          {user.country && (
-                            <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
-                              {user.country}
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="truncate text-[11px] text-zinc-400">
-                          {user.email}
+                {/* Wallet */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+                        <Wallet className="h-3.5 w-3.5 text-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="haven-kicker">Haven wallet</p>
+                        <p className="mt-1 truncate text-xs font-medium text-foreground">
+                          {shortAddress(user.walletAddress)}
                         </p>
-
-                        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-400">
-                          <Calendar className="h-3 w-3" />
-                          <span className="text-zinc-300">Member since</span>
-                          <span className="text-zinc-100">
-                            {formatDate(membershipSince || undefined)}
-                          </span>
-                          <span className="text-zinc-600">•</span>
-                          <span className="text-zinc-300">
-                            {memberDuration}
-                          </span>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          Primary wallet address.
                         </p>
                       </div>
                     </div>
 
-                    {avatarError && (
-                      <p className="mt-2 text-[11px] text-red-300">
-                        {avatarError}
+                    <button
+                      type="button"
+                      onClick={handleCopyWallet}
+                      className="haven-btn-secondary w-auto rounded-full px-3 py-1.5 text-[11px]"
+                    >
+                      {copyWalletOk ? (
+                        <>
+                          <Check className="h-3 w-3" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              {/* RIGHT */}
+              <section className="min-w-0 space-y-3">
+                {/* ✅ INVITES: generic link + personal invites */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                        <Link2 className="h-4 w-4 text-primary" />
+                        Invite friends
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        Share your link or create a personal invite.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Generic link */}
+                  <div className="mt-3 rounded-2xl border bg-card/60 p-3 shadow-fintech-sm">
+                    <p className="haven-kicker">Your invite link</p>
+                    <p className="mt-1 truncate text-[11px] text-foreground">
+                      {genericInviteLink}
+                    </p>
+
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyGenericInvite}
+                        className="haven-btn-secondary flex-1 rounded-full px-3 py-2 text-[11px]"
+                      >
+                        {copiedGeneric ? (
+                          <>
+                            <Check className="h-3.5 w-3.5" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" /> Copy link
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (navigator.share) {
+                            navigator
+                              .share({
+                                title: "Haven",
+                                text: "Join me on Haven",
+                                url: genericInviteLink,
+                              })
+                              .catch(() => null);
+                          } else {
+                            handleCopyGenericInvite();
+                          }
+                        }}
+                        className="haven-btn-primary w-auto rounded-full px-3 py-2 text-[11px]"
+                      >
+                        Share
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Personal invite creation */}
+                  <div className="mt-3">
+                    <p className="mb-2 haven-kicker">Personal invite</p>
+
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <MailPlus className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          placeholder="friend@email.com"
+                          className="haven-input h-10 pl-9 text-[13px]"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleCreatePersonalInvite}
+                        disabled={creatingInvite}
+                        className={[
+                          "haven-btn-primary w-auto px-4 py-2 text-xs",
+                          creatingInvite ? "opacity-70" : "",
+                        ].join(" ")}
+                      >
+                        {creatingInvite ? "Creating…" : "Create"}
+                      </button>
+                    </div>
+
+                    {inviteError && (
+                      <p className="mt-2 text-[11px] text-destructive">
+                        {inviteError}
                       </p>
                     )}
-
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                        <div className="min-w-0">
-                          <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                            Currency
-                          </p>
-                          <p className="mt-1 truncate text-[13px] text-zinc-50">
-                            {displayCurrency || user.displayCurrency || "USD"}
-                          </p>
-                        </div>
-                        <Globe2 className="h-4 w-4 text-zinc-400" />
-                      </div>
-
-                      <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                        <div className="min-w-0">
-                          <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                            Plan
-                          </p>
-                          <p className="mt-1 truncate text-[13px] text-zinc-50">
-                            {user.isPro ? "Pro" : "Standard"}
-                          </p>
-                        </div>
-                        <Award className="h-4 w-4 text-zinc-400" />
-                      </div>
-                    </div>
                   </div>
 
-                  {/* Wallet */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
-                          <Wallet className="h-3.5 w-3.5 text-emerald-300" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                            Haven wallet
-                          </p>
-                          <p className="mt-1 truncate text-xs text-zinc-100">
-                            {shortAddress(user.walletAddress)}
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-zinc-500">
-                            Primary wallet address.
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleCopyWallet}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-zinc-100 active:scale-[0.98]"
-                      >
-                        {copyWalletOk ? (
-                          <>
-                            <Check className="h-3 w-3" />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3" />
-                            Copy
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </section>
-
-                {/* RIGHT */}
-                <section className="min-w-0 space-y-3">
-                  {/* ✅ INVITES: generic link + personal invites */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-                          <Link2 className="h-4 w-4 text-emerald-300" />
-                          Invite friends
-                        </h3>
-                        <p className="mt-0.5 text-[11px] text-zinc-400">
-                          Share your link or create a personal invite.
-                        </p>
-                      </div>
+                  {/* Personal invites list */}
+                  <div className="mt-4 border-t pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[11px] font-medium text-foreground/80">
+                        Recent personal invites
+                      </p>
+                      <span className="haven-pill">
+                        {invitesLoading ? "…" : invites.length}
+                      </span>
                     </div>
 
-                    {/* Generic link */}
-                    <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                        Your invite link
-                      </p>
-                      <p className="mt-1 truncate text-[11px] text-zinc-200">
-                        {genericInviteLink}
-                      </p>
-
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleCopyGenericInvite}
-                          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-[11px] text-zinc-100 hover:bg-white/10 active:scale-[0.98]"
-                        >
-                          {copiedGeneric ? (
-                            <>
-                              <Check className="h-3.5 w-3.5" /> Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-3.5 w-3.5" /> Copy link
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // optional: native share on mobile
-                            if (navigator.share) {
-                              navigator
-                                .share({
-                                  title: "Haven",
-                                  text: "Join me on Haven",
-                                  url: genericInviteLink,
-                                })
-                                .catch(() => null);
-                            } else {
-                              handleCopyGenericInvite();
-                            }
-                          }}
-                          className="inline-flex items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100 hover:bg-emerald-500/15 active:scale-[0.98]"
-                        >
-                          Share
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Personal invite creation */}
-                    <div className="mt-3">
-                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                        Personal invite
-                      </p>
-
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <MailPlus className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-                          <input
-                            value={inviteEmail}
-                            onChange={(e) => setInviteEmail(e.target.value)}
-                            placeholder="friend@email.com"
-                            className="h-10 w-full rounded-2xl border border-white/10 bg-black/30 pl-9 pr-3 text-[13px] text-white outline-none placeholder:text-zinc-500 focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20"
+                    {invitesLoading ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 2 }).map((_, i) => (
+                          <div
+                            key={i}
+                            className="h-12 animate-pulse rounded-2xl border bg-card/60"
                           />
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={handleCreatePersonalInvite}
-                          disabled={creatingInvite}
-                          className={[
-                            "h-10 shrink-0 rounded-2xl px-4 text-[12px] font-semibold active:scale-[0.98]",
-                            creatingInvite
-                              ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-400"
-                              : "border border-emerald-500/30 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/20",
-                          ].join(" ")}
-                        >
-                          {creatingInvite ? "Creating…" : "Create"}
-                        </button>
+                        ))}
                       </div>
-
-                      {inviteError && (
-                        <p className="mt-2 text-[11px] text-red-300">
-                          {inviteError}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Personal invites list */}
-                    <div className="mt-4 border-t border-white/10 pt-4">
-                      <div className="mb-2 flex items-center justify-between">
-                        <p className="text-[11px] font-medium text-zinc-300">
-                          Recent personal invites
-                        </p>
-                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
-                          {invitesLoading ? "…" : invites.length}
-                        </span>
-                      </div>
-
-                      {invitesLoading ? (
-                        <div className="space-y-2">
-                          {Array.from({ length: 2 }).map((_, i) => (
-                            <div
-                              key={i}
-                              className="h-12 animate-pulse rounded-2xl border border-white/10 bg-white/5"
-                            />
-                          ))}
-                        </div>
-                      ) : invites.length === 0 ? (
-                        <p className="text-[11px] text-zinc-500">
-                          No personal invites yet.
-                        </p>
-                      ) : (
-                        <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
-                          {invites.map((inv) => {
-                            // we don't get token from GET /invites; we only show status.
-                            // But we *can* still provide a copy button by reusing email -> create again (idempotent),
-                            // or (better) you can extend GET endpoint to include inviteToken.
-                            //
-                            // For now: show status + email. If you want copy-link here,
-                            // update GET /api/user/invites to also return inviteToken.
-                            const statusLabel =
-                              inv.status === "signed_up"
-                                ? "Signed up"
-                                : inv.status === "clicked"
+                    ) : invites.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        No personal invites yet.
+                      </p>
+                    ) : (
+                      <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
+                        {invites.map((inv) => {
+                          const statusLabel =
+                            inv.status === "signed_up"
+                              ? "Signed up"
+                              : inv.status === "clicked"
                                 ? "Opened"
                                 : "Sent";
 
-                            return (
-                              <div
-                                key={`${inv.email ?? "unknown"}-${
-                                  inv.sentAt ?? "na"
-                                }`}
-                                className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-[12px] font-medium text-zinc-100">
-                                    {inv.email ?? "Unknown"}
-                                  </p>
-                                  <p className="text-[10px] text-zinc-400">
-                                    {statusLabel} • {formatDate(inv.sentAt)}
-                                  </p>
-                                </div>
+                          const badgeClass =
+                            inv.status === "signed_up"
+                              ? "haven-pill haven-pill-positive"
+                              : inv.status === "clicked"
+                                ? "haven-pill"
+                                : "haven-pill";
 
-                                <span
-                                  className={[
-                                    "shrink-0 rounded-full border px-2 py-0.5 text-[10px]",
-                                    inv.status === "signed_up"
-                                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-100"
-                                      : inv.status === "clicked"
-                                      ? "border-white/15 bg-white/5 text-zinc-200"
-                                      : "border-white/10 bg-black/20 text-zinc-300",
-                                  ].join(" ")}
-                                >
-                                  {statusLabel}
-                                </span>
+                          return (
+                            <div
+                              key={`${inv.email ?? "unknown"}-${inv.sentAt ?? "na"}`}
+                              className="flex items-center justify-between gap-3 rounded-2xl border bg-card/60 px-3 py-2 shadow-fintech-sm"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-[12px] font-medium text-foreground">
+                                  {inv.email ?? "Unknown"}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {statusLabel} • {formatDate(inv.sentAt)}
+                                </p>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
 
-                      {/* Optional: if you update GET endpoint to return inviteToken, you can show copy buttons like this:
-                          <button onClick={() => handleCopyPersonalLink(inv.inviteToken)}>Copy</button>
-                      */}
-                      <p className="mt-2 text-[10px] text-zinc-500">
-                        Tip: creating a personal invite for the same email will
-                        reuse the existing link (until they sign up).
+                              <span className={badgeClass}>{statusLabel}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <p className="mt-2 text-[10px] text-muted-foreground">
+                      Tip: creating a personal invite for the same email will
+                      reuse the existing link (until they sign up).
+                    </p>
+                  </div>
+                </div>
+
+                {/* Overview */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div>
+                    <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                      <Users className="h-4 w-4 text-primary" />
+                      Network overview
+                    </h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Your referrals and saved contacts.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                      <p className="haven-kicker">Referrals</p>
+                      <p className="mt-1 text-base font-semibold text-foreground tabular-nums">
+                        {referralsCount}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                      <p className="haven-kicker">Contacts</p>
+                      <p className="mt-1 text-base font-semibold text-foreground tabular-nums">
+                        {contactsCount}
                       </p>
                     </div>
                   </div>
+                </div>
 
-                  {/* Overview */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div>
-                      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-                        <Users className="h-4 w-4 text-emerald-300" />
-                        Network overview
-                      </h3>
-                      <p className="mt-0.5 text-[11px] text-zinc-400">
-                        Your referrals and saved contacts.
-                      </p>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                        <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                          Referrals
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-zinc-50">
-                          {referralsCount}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                        <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                          Contacts
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-zinc-50">
-                          {contactsCount}
-                        </p>
-                      </div>
-                    </div>
+                {/* People */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-foreground">
+                      People
+                    </h3>
+                    <p className="text-[11px] text-muted-foreground">
+                      Who joined from your referrals + your saved contacts.
+                    </p>
                   </div>
 
-                  {/* People */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="mb-3">
-                      <h3 className="text-sm font-semibold">People</h3>
-                      <p className="text-[11px] text-zinc-400">
-                        Who joined from your referrals + your saved contacts.
+                  {/* Joined referrals */}
+                  <div>
+                    <p className="mb-2 text-[11px] font-medium text-foreground/80">
+                      Referred
+                    </p>
+                    {referrals.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        No one has joined yet.
                       </p>
-                    </div>
+                    ) : (
+                      <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+                        {referrals.map((r) => {
+                          const label =
+                            r.fullName ||
+                            r.email ||
+                            shortAddress(r.walletAddress) ||
+                            "Referral";
 
-                    {/* Joined referrals */}
-                    <div>
-                      <p className="mb-2 text-[11px] font-medium text-emerald-200">
-                        Referred
-                      </p>
-                      {referrals.length === 0 ? (
-                        <p className="text-[11px] text-zinc-500">
-                          No one has joined yet.
-                        </p>
-                      ) : (
-                        <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
-                          {referrals.map((r) => {
-                            const label =
-                              r.fullName ||
-                              r.email ||
-                              shortAddress(r.walletAddress) ||
-                              "Referral";
-
-                            return (
-                              <div
-                                key={r.id}
-                                className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <span className="block truncate text-xs font-medium text-emerald-50">
-                                    {label}
-                                  </span>
-                                  <span className="block truncate text-[10px] text-emerald-100/80">
-                                    {r.email && r.walletAddress
-                                      ? `${shortAddress(r.walletAddress)} • ${
-                                          r.email
-                                        }`
-                                      : r.email ||
-                                        (r.walletAddress
-                                          ? shortAddress(r.walletAddress)
-                                          : "")}
-                                  </span>
-                                  <span className="mt-0.5 block text-[10px] text-emerald-100/70">
-                                    Joined {formatDate(r.joinedAt)}
-                                  </span>
-                                </div>
-                                <span className="shrink-0 rounded-full border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-50">
-                                  Active
+                          return (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between gap-3 rounded-2xl border bg-card/60 px-3 py-2 shadow-fintech-sm"
+                            >
+                              <div className="min-w-0">
+                                <span className="block truncate text-xs font-medium text-foreground">
+                                  {label}
+                                </span>
+                                <span className="block truncate text-[10px] text-muted-foreground">
+                                  {r.email && r.walletAddress
+                                    ? `${shortAddress(r.walletAddress)} • ${r.email}`
+                                    : r.email ||
+                                      (r.walletAddress
+                                        ? shortAddress(r.walletAddress)
+                                        : "")}
+                                </span>
+                                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                                  Joined {formatDate(r.joinedAt)}
                                 </span>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                              <span className="haven-pill haven-pill-positive">
+                                Active
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Contacts */}
+                  <div className="mt-4 border-t pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[11px] font-medium text-foreground/80">
+                        Saved contacts
+                      </p>
+                      <span className="haven-pill">{contactsCount}</span>
                     </div>
 
-                    {/* Contacts */}
-                    <div className="mt-4 border-t border-white/10 pt-4">
-                      <div className="mb-2 flex items-center justify-between">
-                        <p className="text-[11px] font-medium text-zinc-300">
-                          Saved contacts
-                        </p>
-                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
-                          {contactsCount}
-                        </span>
-                      </div>
+                    {contacts.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        No contacts saved yet.
+                      </p>
+                    ) : (
+                      <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                        {contacts.map((c, idx) => {
+                          const label =
+                            c.name ||
+                            c.email ||
+                            (c.walletAddress
+                              ? shortAddress(c.walletAddress)
+                              : "Contact");
 
-                      {contacts.length === 0 ? (
-                        <p className="text-[11px] text-zinc-500">
-                          No contacts saved yet.
-                        </p>
-                      ) : (
-                        <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-                          {contacts.map((c, idx) => {
-                            const label =
-                              c.name ||
-                              c.email ||
-                              (c.walletAddress
-                                ? shortAddress(c.walletAddress)
-                                : "Contact");
-
-                            return (
-                              <div
-                                key={`${c.email ?? c.walletAddress ?? idx}`}
-                                className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <span className="block truncate text-xs font-medium text-zinc-50">
-                                    {label}
-                                  </span>
-                                  <span className="block truncate text-[10px] text-zinc-400">
-                                    {c.email && c.walletAddress
-                                      ? `${shortAddress(c.walletAddress)} • ${
-                                          c.email
-                                        }`
-                                      : c.email || c.walletAddress || ""}
-                                  </span>
-                                </div>
-                                <span className="shrink-0 text-[10px] text-zinc-400">
-                                  {c.status === "active"
-                                    ? "Haven user"
-                                    : c.status === "invited"
+                          return (
+                            <div
+                              key={`${c.email ?? c.walletAddress ?? idx}`}
+                              className="flex items-center justify-between gap-3 rounded-2xl border bg-card/60 px-3 py-2 shadow-fintech-sm"
+                            >
+                              <div className="min-w-0">
+                                <span className="block truncate text-xs font-medium text-foreground">
+                                  {label}
+                                </span>
+                                <span className="block truncate text-[10px] text-muted-foreground">
+                                  {c.email && c.walletAddress
+                                    ? `${shortAddress(c.walletAddress)} • ${c.email}`
+                                    : c.email || c.walletAddress || ""}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground">
+                                {c.status === "active"
+                                  ? "Haven user"
+                                  : c.status === "invited"
                                     ? "Invited"
                                     : "External"}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </section>
-              </div>
+
+                  {/* (kept) copiedPersonalToken state unused in UI here; not changing functionality */}
+                  {copiedPersonalToken ? (
+                    <span className="sr-only">Copied personal link</span>
+                  ) : null}
+                  {/* You can wire this later if GET /invites returns inviteToken */}
+                  {typeof handleCopyPersonalLink === "function" ? null : null}
+                </div>
+              </section>
             </div>
           </div>
         </div>

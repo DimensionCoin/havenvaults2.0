@@ -362,8 +362,9 @@ export default function WithdrawFlex({
         }
       }}
     >
+      {/* Modal shell (Haven theme) */}
       <div
-        className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+        className="w-full max-w-sm haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* ───────── INPUT VIEW ───────── */}
@@ -373,18 +374,19 @@ export default function WithdrawFlex({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <ArrowDownToLine className="h-4 w-4 text-amber-400" />
-                  <div className="text-sm font-semibold text-white/90">
+                  <ArrowDownToLine className="h-4 w-4 text-primary" />
+                  <div className="text-sm font-semibold text-foreground/90">
                     Withdraw
                   </div>
                 </div>
-                <div className="mt-1 text-xs text-white/45">
+                <div className="mt-1 text-xs text-muted-foreground">
                   Move funds from savings to your wallet.
                 </div>
               </div>
-              <div className="text-right text-xs text-white/45">
+
+              <div className="text-right text-xs text-muted-foreground">
                 Available
-                <div className="mt-0.5 text-white/85 font-semibold">
+                <div className="mt-0.5 font-semibold text-foreground/90">
                   {ctxLoading ? "…" : formatMoney(available, displayCurrency)}
                 </div>
               </div>
@@ -392,28 +394,29 @@ export default function WithdrawFlex({
 
             {/* Amount Input */}
             <div className="mt-4">
-              <label className="text-xs text-white/50">Amount</label>
-              <div className="mt-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-                <span className="text-xs text-white/50 px-2">
+              <label className="text-xs text-muted-foreground">Amount</label>
+
+              <div className="mt-1 flex items-center gap-2 rounded-2xl border border-border bg-background/50 p-2">
+                <span className="text-xs text-muted-foreground px-2">
                   {displayCurrency}
                 </span>
+
                 <input
                   value={amountRaw}
                   onChange={(e) => handleAmountChange(e.target.value)}
                   inputMode="decimal"
                   placeholder="0.00"
                   disabled={isBusy}
-                  className="w-full bg-transparent text-sm text-white/90 outline-none disabled:opacity-60"
+                  className="w-full bg-transparent text-sm text-foreground/90 outline-none placeholder:text-muted-foreground/60 disabled:opacity-60"
                 />
+
                 <button
                   type="button"
                   disabled={isBusy || ctxLoading}
                   onClick={handleMax}
                   className={[
-                    "rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold transition",
-                    withdrawAll
-                      ? "border-amber-400/30 bg-amber-500/20 text-amber-200"
-                      : "border-white/10 bg-white/5 text-white/70 hover:text-white/90",
+                    "haven-pill transition",
+                    withdrawAll ? "ring-1 ring-primary/30 bg-primary/10" : "",
                     isBusy || ctxLoading ? "opacity-60" : "",
                   ].join(" ")}
                 >
@@ -423,12 +426,12 @@ export default function WithdrawFlex({
 
               {/* Validation Messages */}
               {!ownerReady && (
-                <div className="mt-2 text-xs text-rose-200/80">
+                <div className="mt-2 text-xs text-destructive">
                   Wallet not connected.
                 </div>
               )}
               {!ctxLoading && amountNum > available && amountNum > 0 && (
-                <div className="mt-2 text-xs text-rose-200/80">
+                <div className="mt-2 text-xs text-destructive">
                   Amount exceeds available balance.
                 </div>
               )}
@@ -436,16 +439,21 @@ export default function WithdrawFlex({
 
             {/* Summary */}
             {amountNum > 0 && (
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+              <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-[11px] text-white/45">You withdraw</div>
-                  <div className="text-sm font-semibold text-white/85">
+                  <div className="text-[11px] text-muted-foreground">
+                    You withdraw
+                  </div>
+                  <div className="text-sm font-semibold text-foreground/90">
                     {formatMoney(amountNum, displayCurrency)}
                   </div>
                 </div>
+
                 <div className="mt-2 flex items-center justify-between">
-                  <div className="text-[11px] text-white/45">Destination</div>
-                  <div className="text-sm font-semibold text-amber-300">
+                  <div className="text-[11px] text-muted-foreground">
+                    Destination
+                  </div>
+                  <div className="text-sm font-semibold text-primary">
                     Your wallet
                   </div>
                 </div>
@@ -459,8 +467,8 @@ export default function WithdrawFlex({
               className={[
                 "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
                 canSubmit && !isBusy
-                  ? "bg-amber-500/20 border-amber-300/30 text-amber-100 hover:bg-amber-500/25 active:scale-[0.98]"
-                  : "bg-white/5 border-white/10 text-white/35 cursor-not-allowed",
+                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
+                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
               ].join(" ")}
             >
               {isBusy ? (
@@ -481,7 +489,7 @@ export default function WithdrawFlex({
               type="button"
               onClick={() => onOpenChange(false)}
               disabled={isBusy}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/60 hover:text-white/80 hover:bg-white/10 transition disabled:opacity-50"
+              className="mt-3 w-full rounded-2xl border border-border bg-background/50 px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-accent transition disabled:opacity-50"
             >
               Cancel
             </button>
@@ -493,10 +501,11 @@ export default function WithdrawFlex({
           <>
             {/* Close button (not during processing) */}
             {modal.kind !== "processing" && (
-              <div className="flex justify-end mb-2">
+              <div className="mb-2 flex justify-end">
                 <button
+                  type="button"
                   onClick={closeModal}
-                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                  className="haven-pill hover:bg-accent"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -504,15 +513,15 @@ export default function WithdrawFlex({
             )}
 
             {/* Content */}
-            <div className="flex flex-col items-center text-center pt-2">
+            <div className="flex flex-col items-center pt-2 text-center">
               {modal.kind === "processing" && stageConfig ? (
                 <>
                   <StageIcon icon={stageConfig.icon} />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-white/90">
+                    <div className="text-base font-semibold text-foreground/90">
                       {stageConfig.title}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {stageConfig.subtitle}
                     </div>
                   </div>
@@ -524,10 +533,10 @@ export default function WithdrawFlex({
                 <>
                   <StageIcon icon="success" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-emerald-100">
+                    <div className="text-base font-semibold text-primary">
                       Withdrawal complete!
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Funds are now in your wallet
                     </div>
                   </div>
@@ -536,10 +545,10 @@ export default function WithdrawFlex({
                 <>
                   <StageIcon icon="error" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-rose-100">
+                    <div className="text-base font-semibold text-destructive">
                       Withdrawal failed
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Something went wrong
                     </div>
                   </div>
@@ -549,8 +558,8 @@ export default function WithdrawFlex({
 
             {/* Error message */}
             {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                <div className="text-xs text-rose-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-destructive/25 bg-destructive/10 p-3">
+                <div className="text-center text-xs text-destructive">
                   {modal.errorMessage}
                 </div>
               </div>
@@ -558,18 +567,19 @@ export default function WithdrawFlex({
 
             {/* Success details */}
             {modal.kind === "success" && modal.netUi !== undefined && (
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+              <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-white/45">Amount received</span>
-                  <span className="text-white/85 font-semibold">
-                    {formatMoney(modal.netUi, "USD")}
+                  <span className="text-muted-foreground">Amount received</span>
+                  <span className="font-semibold text-foreground/90">
+                    {formatMoney(modal.netUi, displayCurrency)}
                   </span>
                 </div>
+
                 {modal.feeUi !== undefined && modal.feeUi > 0 && (
                   <div className="mt-2 flex items-center justify-between text-xs">
-                    <span className="text-white/45">Fee</span>
-                    <span className="text-white/60">
-                      {formatMoney(modal.feeUi, "USD")}
+                    <span className="text-muted-foreground">Fee</span>
+                    <span className="text-muted-foreground">
+                      {formatMoney(modal.feeUi, displayCurrency)}
                     </span>
                   </div>
                 )}
@@ -583,7 +593,7 @@ export default function WithdrawFlex({
                   href={explorerUrl(modal.signature)}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                  className="group flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition"
                 >
                   <span>View transaction</span>
                   <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
@@ -594,12 +604,13 @@ export default function WithdrawFlex({
             {/* Action button */}
             {modal.kind !== "processing" && (
               <button
+                type="button"
                 onClick={closeModal}
                 className={[
                   "mt-5 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
                   modal.kind === "success"
-                    ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25"
-                    : "bg-white/10 border-white/10 text-white/80 hover:bg-white/15",
+                    ? "haven-btn-primary text-[#0b3204]"
+                    : "border-border bg-background/60 text-foreground/90 hover:bg-accent",
                 ].join(" ")}
               >
                 {modal.kind === "success" ? "Done" : "Close"}
@@ -608,7 +619,7 @@ export default function WithdrawFlex({
 
             {/* Processing footer */}
             {modal.kind === "processing" && (
-              <div className="mt-6 text-center text-xs text-white/30">
+              <div className="mt-6 text-center text-xs text-muted-foreground">
                 Please keep window open
               </div>
             )}
@@ -618,4 +629,5 @@ export default function WithdrawFlex({
     </div>,
     document.body
   );
+
 }

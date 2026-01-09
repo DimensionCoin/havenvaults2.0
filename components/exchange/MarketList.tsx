@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Search } from "lucide-react";
 import type { Token, PriceEntry } from "./types";
 import MarketCard from "./MarketCard";
 import {
@@ -65,7 +65,7 @@ const MarketList: React.FC<MarketListProps> = ({
   const visibleTokens = tokens.slice(0, visibleCount);
   const hasMore = visibleCount < tokens.length;
   const isExpanded = visibleCount > INITIAL_COUNT;
-  const remaining = tokens.length - visibleCount;
+  const remaining = Math.max(0, tokens.length - visibleCount);
 
   const handleShowMore = () => {
     setVisibleCount((prev) => Math.min(prev + LOAD_MORE_COUNT, tokens.length));
@@ -73,11 +73,10 @@ const MarketList: React.FC<MarketListProps> = ({
 
   const handleCollapse = () => {
     setVisibleCount(INITIAL_COUNT);
-    // Scroll back to top of list smoothly
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Loading skeleton
+  // Loading skeleton (MarketCard already themed after you restyle it)
   if (loading && tokens.length === 0) {
     return (
       <div className="space-y-2">
@@ -90,35 +89,27 @@ const MarketList: React.FC<MarketListProps> = ({
             onToggleWishlist={() => {}}
             displayCurrency={displayCurrency}
             fxRate={fxRate}
-            loading={true}
+            loading
           />
         ))}
       </div>
     );
   }
 
-  // Empty state
+  // Empty state (Haven look)
   if (tokens.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-2xl bg-zinc-900/30 py-12 text-center">
-        <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-800">
-          <svg
-            className="h-7 w-7 text-zinc-500"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+      <div className="haven-card-soft px-4 py-10 text-center">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-border bg-background/60 shadow-fintech-sm">
+          <Search className="h-6 w-6 text-muted-foreground" />
         </div>
-        <p className="text-sm font-medium text-zinc-300">{emptyMessage}</p>
-        <p className="mt-1 text-xs text-zinc-500">
-          Try adjusting your search or filters
+
+        <p className="mt-4 text-sm font-semibold text-foreground">
+          {emptyMessage}
+        </p>
+
+        <p className="mt-1 text-xs text-muted-foreground">
+          Try adjusting your search or filters.
         </p>
       </div>
     );
@@ -150,17 +141,17 @@ const MarketList: React.FC<MarketListProps> = ({
         })}
       </div>
 
-      {/* Show more / Collapse buttons */}
+      {/* Show more / Collapse */}
       {(hasMore || isExpanded) && (
-        <div className="flex items-center justify-center gap-3 pt-2">
+        <div className="flex items-center justify-center gap-2 pt-2">
           {hasMore && (
             <button
               type="button"
               onClick={handleShowMore}
-              className="inline-flex items-center gap-2 rounded-full bg-zinc-800 px-5 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+              className="haven-btn-primary w-auto px-4 py-2 text-xs"
             >
               <ChevronDown className="h-4 w-4" />
-              Show more ({remaining})
+              Show more{remaining > 0 ? ` (${remaining})` : ""}
             </button>
           )}
 
@@ -168,7 +159,7 @@ const MarketList: React.FC<MarketListProps> = ({
             <button
               type="button"
               onClick={handleCollapse}
-              className="inline-flex items-center gap-2 rounded-full bg-zinc-800/50 px-5 py-2.5 text-sm font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+              className="haven-btn-secondary w-auto px-4 py-2 text-xs"
             >
               <ChevronUp className="h-4 w-4" />
               Show less
@@ -178,7 +169,7 @@ const MarketList: React.FC<MarketListProps> = ({
       )}
 
       {/* Count indicator */}
-      <p className="text-center text-xs text-zinc-600">
+      <p className="text-center text-[11px] font-semibold uppercase tracking-[0.20em] text-muted-foreground">
         Showing {visibleTokens.length} of {tokens.length}
       </p>
     </div>

@@ -16,11 +16,13 @@ import {
   ShieldAlert,
   UserRound,
   Wallet,
+  MoonStar,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
 import { usePrivy, type WalletWithMetadata } from "@privy-io/react-auth";
 import { useExportWallet } from "@privy-io/react-auth/solana";
+import ThemeToggle from "@/components/shared/ThemeToggle";
 
 // ---- Keep these aligned with your server types ----
 type RiskLevel = "low" | "medium" | "high";
@@ -194,9 +196,7 @@ const SettingsPage: React.FC = () => {
     setExportError(null);
   };
 
-  // ✅ Close our modal when the Privy export pop-up closes and the user returns
-  // to the app (window focus / visibilitychange). This is more reliable than
-  // relying on exportWallet() promise timing.
+  // Close our modal when the Privy export pop-up closes and the user returns
   useEffect(() => {
     if (!exportModalOpen || !exporting) return;
 
@@ -223,7 +223,7 @@ const SettingsPage: React.FC = () => {
     };
   }, [exportModalOpen, exporting]);
 
-  // ------ hydrate form from user ------
+  // hydrate form from user
   useEffect(() => {
     if (!user) return;
     setFirstName(user.firstName || "");
@@ -257,7 +257,7 @@ const SettingsPage: React.FC = () => {
     riskLevel !== initialState.riskLevel ||
     knowledgeLevel !== initialState.knowledgeLevel;
 
-  // ------ avatar handlers (use /api/user/avatar) ------
+  // avatar handlers
   const handleAvatarClick = () => {
     if (avatarInputRef.current && !uploadingAvatar) {
       avatarInputRef.current.click();
@@ -307,7 +307,7 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // ------ save handler (uses /api/user/update) ------
+  // save handler
   const handleSubmit: React.FormEventHandler = async (e) => {
     e.preventDefault();
     if (!user || !isDirty || saving) return;
@@ -356,7 +356,7 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // ------ copy handlers ------
+  // copy handlers
   const handleCopyWallet = async () => {
     if (!user?.walletAddress) return;
     try {
@@ -379,7 +379,7 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // ------ wallet export handlers ------
+  // wallet export handlers
   const handleOpenExportModal = () => {
     setExportError(null);
     setExportAcknowledged(false);
@@ -393,13 +393,9 @@ const SettingsPage: React.FC = () => {
     setExportError(null);
 
     try {
-      // Do not close our modal here based on promise timing.
-      // The effect above closes when the user returns to the app.
       await exportWallet({ address: privySolWallet.address });
     } catch (err) {
       console.error("Error exporting wallet:", err);
-
-      // Optional: show error, then close anyway (matches "close after popup closes")
       setExportError(
         err instanceof Error ? err.message : "Export was cancelled or failed."
       );
@@ -409,28 +405,27 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // ------ loading / auth states ------
+  /* ---------- LOADING STATE ---------- */
   if (!user && userLoading) {
     return (
-      <main className="min-h-screen w-full overflow-x-hidden text-white">
-        <div className="w-full px-3 pb-8 pt-4 sm:px-4">
-          <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
-            <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
-              <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
-                <div className="flex items-center gap-2">
-                  <div className="h-9 w-9 rounded-full border border-white/10 bg-white/5" />
-                  <div>
-                    <div className="h-4 w-36 rounded bg-white/10" />
-                    <div className="mt-2 h-3 w-56 rounded bg-white/5" />
-                  </div>
+      <main className="haven-app">
+        <div className="mx-auto w-full max-w-[420px] px-3 pb-10 pt-4 sm:max-w-[520px] sm:px-4 md:max-w-[720px] xl:max-w-5xl">
+          <div className="haven-card overflow-hidden">
+            <div className="flex items-center justify-between gap-2 border-b bg-card/60 px-3 py-3 backdrop-blur-xl sm:px-4">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full border bg-card/60" />
+                <div>
+                  <div className="h-4 w-36 rounded bg-muted/30" />
+                  <div className="mt-2 h-3 w-56 rounded bg-muted/20" />
                 </div>
               </div>
-              <div className="p-3 sm:p-4">
-                <div className="space-y-3">
-                  <div className="h-28 rounded-3xl border border-white/10 bg-white/[0.04]" />
-                  <div className="h-48 rounded-3xl border border-white/10 bg-white/[0.04]" />
-                  <div className="h-40 rounded-3xl border border-white/10 bg-white/[0.04]" />
-                </div>
+            </div>
+
+            <div className="p-3 sm:p-4">
+              <div className="space-y-3">
+                <div className="h-28 rounded-3xl border bg-card/50" />
+                <div className="h-48 rounded-3xl border bg-card/50" />
+                <div className="h-40 rounded-3xl border bg-card/50" />
               </div>
             </div>
           </div>
@@ -439,36 +434,37 @@ const SettingsPage: React.FC = () => {
     );
   }
 
+  /* ---------- SIGNED OUT STATE ---------- */
   if (!user && !userLoading) {
     return (
-      <main className="min-h-screen w-full overflow-x-hidden text-white">
-        <div className="w-full px-3 pb-8 pt-4 sm:px-4">
-          <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
-            <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
-              <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
-                <button
-                  type="button"
-                  onClick={() => router.push("/")}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 active:scale-[0.98]"
-                  aria-label="Back"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                </button>
-                <div className="min-w-0">
-                  <h1 className="truncate text-base font-semibold sm:text-lg">
-                    Settings
-                  </h1>
-                  <p className="truncate text-[11px] text-zinc-400">
-                    You need to be signed in.
-                  </p>
-                </div>
-                <div className="h-9 w-9" />
+      <main className="haven-app">
+        <div className="mx-auto w-full max-w-[420px] px-3 pb-10 pt-4 sm:max-w-[520px] sm:px-4 md:max-w-[720px] xl:max-w-5xl">
+          <div className="haven-card overflow-hidden">
+            <div className="flex items-center justify-between gap-2 border-b bg-card/60 px-3 py-3 backdrop-blur-xl sm:px-4">
+              <button
+                type="button"
+                onClick={() => router.push("/")}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border bg-card/80 shadow-fintech-sm transition-colors hover:bg-secondary active:scale-[0.98]"
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-4 w-4 text-foreground/70" />
+              </button>
+
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
+                  Settings
+                </h1>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  You need to be signed in.
+                </p>
               </div>
 
-              <div className="p-3 sm:p-4">
-                <div className="rounded-3xl border border-red-500/30 bg-red-500/10 px-4 py-4 text-sm text-red-50">
-                  You need to be signed in to view settings.
-                </div>
+              <div className="h-9 w-9" />
+            </div>
+
+            <div className="p-3 sm:p-4">
+              <div className="rounded-3xl border border-destructive/30 bg-destructive/10 px-4 py-4 text-sm text-foreground">
+                You need to be signed in to view settings.
               </div>
             </div>
           </div>
@@ -477,6 +473,7 @@ const SettingsPage: React.FC = () => {
     );
   }
 
+  /* ---------- MAIN PAGE ---------- */
   if (!user) return null;
 
   const avatarUrl = user.profileImageUrl || null;
@@ -484,511 +481,517 @@ const SettingsPage: React.FC = () => {
     user.fullName || user.firstName || user.email || "Haven member";
 
   return (
-    <main className="min-h-screen w-full overflow-x-hidden text-white">
-      <div className="w-full px-3 pb-8 pt-4 sm:px-4">
-        <div className="mx-auto w-full max-w-[420px] sm:max-w-[520px] md:max-w-[720px] xl:max-w-5xl">
-          <div className="w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur-xl sm:rounded-[26px]">
-            {/* Top bar */}
-            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:px-4">
-              <div className="flex min-w-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => router.back()}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 active:scale-[0.98]"
-                  aria-label="Back"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                </button>
+    <main className="haven-app">
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-10 pt-4 sm:max-w-[520px] sm:px-4 md:max-w-[720px] xl:max-w-5xl">
+        <div className="haven-card overflow-hidden">
+          {/* Top bar */}
+          <div className="flex items-center justify-between gap-2 border-b bg-card/60 px-3 py-3 backdrop-blur-xl sm:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-card/80 shadow-fintech-sm transition-colors hover:bg-secondary active:scale-[0.98]"
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-4 w-4 text-foreground/70" />
+              </button>
 
-                <div className="min-w-0">
-                  <h1 className="truncate text-base font-semibold sm:text-lg">
-                    Settings
-                  </h1>
-                  <p className="truncate text-[11px] text-zinc-400">
-                    Edit your profile, preferences, and account security.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                <Link
-                  href="/profile"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-[11px] text-zinc-100 active:scale-[0.98]"
-                >
-                  <UserRound className="h-4 w-4 text-zinc-300" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Link>
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
+                  Settings
+                </h1>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  Edit your profile, preferences, and account security.
+                </p>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="p-3 sm:p-4">
-              <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
-                {/* LEFT */}
-                <section className="min-w-0 space-y-3">
-                  {/* Identity card */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={handleAvatarClick}
-                        disabled={uploadingAvatar}
-                        className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-                        aria-label="Change profile photo"
-                      >
-                        {avatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={avatarUrl}
-                            alt={displayName}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <UserRound className="h-6 w-6 text-zinc-200" />
-                        )}
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/profile"
+                className="inline-flex items-center gap-1.5 rounded-full border bg-card/80 px-3 py-2 text-[11px] text-foreground shadow-fintech-sm transition-colors hover:bg-secondary active:scale-[0.98]"
+              >
+                <UserRound className="h-4 w-4 text-foreground/70" />
+                <span className="hidden sm:inline">Profile</span>
+              </Link>
+            </div>
+          </div>
 
-                        <div className="pointer-events-none absolute bottom-0 right-0 mb-0.5 mr-0.5 flex items-center gap-1 rounded-full border border-emerald-500/40 bg-black/60 px-1.5 py-[2px] text-[9px] text-emerald-300">
-                          <Camera className="h-2.5 w-2.5" />
-                          Edit
-                        </div>
+          {/* Content */}
+          <div className="p-3 sm:p-4">
+            <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
+              {/* LEFT */}
+              <section className="min-w-0 space-y-3">
+                {/* Identity card */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleAvatarClick}
+                      disabled={uploadingAvatar}
+                      className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-card/80 shadow-fintech-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label="Change profile photo"
+                    >
+                      {avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={avatarUrl}
+                          alt={displayName}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <UserRound className="h-6 w-6 text-foreground/70" />
+                      )}
 
-                        {uploadingAvatar && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[10px]">
-                            Uploading…
-                          </div>
-                        )}
-                      </button>
-
-                      <input
-                        ref={avatarInputRef}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleAvatarChange}
-                      />
-
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <h2 className="min-w-0 truncate text-base font-semibold">
-                            {displayName}
-                          </h2>
-                          {user.country && (
-                            <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-300">
-                              {user.country}
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="truncate text-[11px] text-zinc-400">
-                          {user.email}
-                        </p>
-
-                        {avatarError && (
-                          <p className="mt-1 flex items-center gap-1 text-[11px] text-red-300">
-                            <AlertCircle className="h-3 w-3" />
-                            {avatarError}
-                          </p>
-                        )}
-
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                            <div className="min-w-0">
-                              <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                                Currency
-                              </p>
-                              <p className="mt-1 truncate text-[13px] text-zinc-50">
-                                {displayCurrency ||
-                                  (user.displayCurrency as DisplayCurrency) ||
-                                  "USD"}
-                              </p>
-                            </div>
-                            <Globe2 className="h-4 w-4 text-zinc-400" />
-                          </div>
-
-                          <div className="flex min-w-0 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2">
-                            <div className="min-w-0">
-                              <p className="text-[9px] uppercase tracking-[0.16em] text-zinc-400">
-                                Plan
-                              </p>
-                              <p className="mt-1 truncate text-[13px] text-zinc-50">
-                                {user.isPro ? "Pro" : "Standard"}
-                              </p>
-                            </div>
-                            <Info className="h-4 w-4 text-zinc-400" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Wallet address */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
-                          <Wallet className="h-3.5 w-3.5 text-emerald-300" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                            Wallet address
-                          </p>
-                          <p className="mt-1 truncate text-xs text-zinc-100">
-                            {shortAddress(user.walletAddress)}
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-zinc-500">
-                            Read-only. Managed by Privy.
-                          </p>
-                        </div>
+                      <div className="pointer-events-none absolute bottom-0 right-0 mb-0.5 mr-0.5 flex items-center gap-1 rounded-full border bg-card/80 px-1.5 py-[2px] text-[9px] text-muted-foreground">
+                        <Camera className="h-2.5 w-2.5" />
+                        Edit
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={handleCopyWallet}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-zinc-100 active:scale-[0.98]"
-                      >
-                        {copiedWallet ? (
-                          <>
-                            <Check className="h-3 w-3" />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3" />
-                            Copy
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
+                      {uploadingAvatar && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/70 text-[10px] text-foreground">
+                          Uploading…
+                        </div>
+                      )}
+                    </button>
 
-                  {/* Referral code */}
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
-                          <span className="text-[10px] font-semibold tracking-[0.2em] text-emerald-200">
-                            RF
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleAvatarChange}
+                    />
+
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h2 className="min-w-0 truncate text-base font-semibold text-foreground">
+                          {displayName}
+                        </h2>
+                        {user.country && (
+                          <span className="haven-pill shrink-0">
+                            {user.country}
                           </span>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                            Referral code
-                          </p>
-                          <p className="mt-1 font-mono text-sm text-zinc-100">
-                            {user.referralCode || "—"}
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-zinc-500">
-                            Share this code with friends.
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleCopyReferral}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-zinc-100 active:scale-[0.98]"
-                      >
-                        {copiedReferral ? (
-                          <>
-                            <Check className="h-3 w-3" />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3" />
-                            Copy
-                          </>
                         )}
-                      </button>
+                      </div>
+
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {user.email}
+                      </p>
+
+                      {avatarError && (
+                        <p className="mt-1 flex items-center gap-1 text-[11px] text-destructive">
+                          <AlertCircle className="h-3 w-3" />
+                          {avatarError}
+                        </p>
+                      )}
+
+                      {/* Currency + Theme */}
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex min-w-0 items-center justify-between rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                          <div className="min-w-0">
+                            <p className="haven-kicker">Currency</p>
+                            <p className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                              {displayCurrency ||
+                                (user.displayCurrency as DisplayCurrency) ||
+                                "USD"}
+                            </p>
+                          </div>
+                          <Globe2 className="h-4 w-4 text-muted-foreground" />
+                        </div>
+
+                        <div className="flex min-w-0 items-center justify-between rounded-2xl border bg-card/60 px-2.5 py-2 shadow-fintech-sm">
+                          <div className="min-w-0">
+                            <p className="haven-kicker">Theme</p>
+                            <p className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                              Appearance
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <MoonStar className="h-4 w-4 text-muted-foreground" />
+                            <div className="shrink-0">
+                              <ThemeToggle />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Wallet address */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+                        <Wallet className="h-3.5 w-3.5 text-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="haven-kicker">Wallet address</p>
+                        <p className="mt-1 truncate text-xs font-medium text-foreground">
+                          {shortAddress(user.walletAddress)}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          Read-only. Managed by Privy.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCopyWallet}
+                      className="haven-btn-secondary w-auto rounded-full px-3 py-1.5 text-[11px]"
+                    >
+                      {copiedWallet ? (
+                        <>
+                          <Check className="h-3 w-3" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Referral code */}
+                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+                        <span className="text-[10px] font-semibold tracking-[0.2em] text-foreground">
+                          RF
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="haven-kicker">Referral code</p>
+                        <p className="mt-1 font-mono text-sm text-foreground">
+                          {user.referralCode || "—"}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          Share this code with friends.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCopyReferral}
+                      className="haven-btn-secondary w-auto rounded-full px-3 py-1.5 text-[11px]"
+                    >
+                      {copiedReferral ? (
+                        <>
+                          <Check className="h-3 w-3" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Wallet security & export */}
+                <div className="rounded-3xl border border-destructive/25 bg-destructive/10 px-3 py-3 shadow-fintech-sm sm:px-4 sm:py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-destructive/40 bg-destructive/15">
+                        <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="haven-kicker text-destructive/90">
+                          Wallet security
+                        </p>
+                        <p className="mt-1 text-xs font-medium text-foreground">
+                          Export private key
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          Advanced: only do this if you understand the risk.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenExportModal}
+                      disabled={!canExportWallet}
+                      className={[
+                        "inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-[11px] font-semibold active:scale-[0.98]",
+                        canExportWallet
+                          ? "border-destructive/50 bg-destructive text-black hover:opacity-90"
+                          : "cursor-not-allowed border-border bg-card/60 text-muted-foreground",
+                      ].join(" ")}
+                    >
+                      <KeyRound className="h-3 w-3" />
+                      Export
+                    </button>
+                  </div>
+
+                  {!canExportWallet && (
+                    <p className="mt-2 text-[10px] text-muted-foreground">
+                      To export, you must be signed in and have an embedded
+                      Solana wallet.
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              {/* RIGHT */}
+              <section className="min-w-0 space-y-3">
+                <form onSubmit={handleSubmit} className="space-y-3">
+                  {/* Profile details */}
+                  <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold text-foreground">
+                        Profile details
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        Update your name, country, and currency display.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-medium text-muted-foreground">
+                          First name
+                        </label>
+                        <input
+                          value={firstName}
+                          onChange={(e) => setFirstName(e.target.value)}
+                          placeholder="First name"
+                          className="haven-input px-3 py-2 text-sm"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-medium text-muted-foreground">
+                          Last name
+                        </label>
+                        <input
+                          value={lastName}
+                          onChange={(e) => setLastName(e.target.value)}
+                          placeholder="Last name"
+                          className="haven-input px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-2 grid gap-2 sm:grid-cols-[1.2fr_1fr]">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-medium text-muted-foreground">
+                          Country
+                        </label>
+                        <input
+                          value={country}
+                          onChange={(e) => setCountry(e.target.value)}
+                          placeholder="Country (e.g., Canada)"
+                          className="haven-input px-3 py-2 text-sm"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                          Display currency
+                          <Globe2 className="h-3 w-3 text-muted-foreground" />
+                        </label>
+                        <select
+                          value={displayCurrency}
+                          onChange={(e) =>
+                            setDisplayCurrency(
+                              e.target.value as DisplayCurrency
+                            )
+                          }
+                          className="haven-input px-3 py-2 text-sm"
+                        >
+                          {DISPLAY_CURRENCIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Wallet security & export */}
-                  <div className="rounded-2xl border border-red-500/25 bg-red-500/5 px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-400/40 bg-red-500/10">
-                          <ShieldAlert className="h-3.5 w-3.5 text-red-300" />
+                  {/* Investing profile */}
+                  <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold text-foreground">
+                        Investing profile
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        Helps personalize default settings and future guidance.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {/* Risk */}
+                      <div>
+                        <p className="mb-2 text-[11px] font-medium text-foreground/80">
+                          Risk level
+                        </p>
+                        <div className="space-y-1.5">
+                          {RISK_OPTIONS.map((opt) => {
+                            const active = riskLevel === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setRiskLevel(opt.value)}
+                                className={[
+                                  "flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition shadow-fintech-sm",
+                                  active
+                                    ? "border-primary/50 bg-primary/10 text-foreground"
+                                    : "border-border bg-card/60 text-foreground/90 hover:bg-secondary",
+                                ].join(" ")}
+                              >
+                                <div
+                                  className={[
+                                    "mt-0.5 h-2 w-2 rounded-full",
+                                    active
+                                      ? "bg-primary"
+                                      : "bg-muted-foreground/40",
+                                  ].join(" ")}
+                                />
+                                <div>
+                                  <p className="font-semibold">{opt.label}</p>
+                                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                    {opt.description}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-[10px] uppercase tracking-[0.18em] text-red-200/80">
-                            Wallet security
-                          </p>
-                          <p className="mt-1 text-xs text-zinc-100">
-                            Export private key
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-zinc-400">
-                            Advanced: only do this if you understand the risk.
-                          </p>
+                      </div>
+
+                      {/* Knowledge */}
+                      <div>
+                        <p className="mb-2 flex items-center gap-1 text-[11px] font-medium text-foreground/80">
+                          Financial knowledge
+                          <Info className="h-3 w-3 text-muted-foreground" />
+                        </p>
+                        <div className="space-y-1.5">
+                          {KNOWLEDGE_OPTIONS.map((opt) => {
+                            const active = knowledgeLevel === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setKnowledgeLevel(opt.value)}
+                                className={[
+                                  "flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition shadow-fintech-sm",
+                                  active
+                                    ? "border-primary/50 bg-primary/10 text-foreground"
+                                    : "border-border bg-card/60 text-foreground/90 hover:bg-secondary",
+                                ].join(" ")}
+                              >
+                                <div
+                                  className={[
+                                    "mt-0.5 h-2 w-2 rounded-full",
+                                    active
+                                      ? "bg-primary"
+                                      : "bg-muted-foreground/40",
+                                  ].join(" ")}
+                                />
+                                <div>
+                                  <p className="font-semibold">{opt.label}</p>
+                                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                    {opt.description}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Sticky save bar */}
+                  <div className="sticky bottom-0 z-10 rounded-2xl border bg-card/80 px-3 py-2 shadow-fintech-sm backdrop-blur">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 text-[11px]">
+                        {saveError ? (
+                          <span className="flex items-center gap-1 text-destructive">
+                            <AlertCircle className="h-3 w-3" />
+                            <span className="truncate">{saveError}</span>
+                          </span>
+                        ) : saveSuccess ? (
+                          <span className="flex items-center gap-1 text-primary">
+                            <Check className="h-3 w-3" />
+                            Settings saved
+                          </span>
+                        ) : isDirty ? (
+                          <span className="text-foreground/80">
+                            Unsaved changes
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            All changes saved
+                          </span>
+                        )}
+
+                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                          Email and wallet are managed by Privy and can’t be
+                          edited here.
                         </div>
                       </div>
 
                       <button
-                        type="button"
-                        onClick={handleOpenExportModal}
-                        disabled={!canExportWallet}
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] active:scale-[0.98] ${
-                          canExportWallet
-                            ? "border-red-400/40 bg-red-500/10 text-red-100"
-                            : "cursor-not-allowed border-white/10 bg-white/5 text-zinc-500"
-                        }`}
+                        type="submit"
+                        disabled={!isDirty || saving}
+                        className={[
+                          "haven-btn-primary w-auto rounded-full px-4 py-2 text-xs",
+                          !isDirty || saving
+                            ? "opacity-60 pointer-events-none"
+                            : "",
+                        ].join(" ")}
                       >
-                        <KeyRound className="h-3 w-3" />
-                        Export
+                        {saving ? "Saving…" : "Save changes"}
                       </button>
                     </div>
-
-                    {!canExportWallet && (
-                      <p className="mt-2 text-[10px] text-zinc-400">
-                        To export, you must be signed in and have an embedded
-                        Solana wallet.
-                      </p>
-                    )}
                   </div>
-                </section>
-
-                {/* RIGHT */}
-                <section className="min-w-0 space-y-3">
-                  <form onSubmit={handleSubmit} className="space-y-3">
-                    {/* Profile details */}
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                      <div className="mb-3">
-                        <h3 className="text-sm font-semibold">
-                          Profile details
-                        </h3>
-                        <p className="mt-0.5 text-[11px] text-zinc-400">
-                          Update your name, country, and currency display.
-                        </p>
-                      </div>
-
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-medium text-zinc-400">
-                            First name
-                          </label>
-                          <input
-                            value={firstName}
-                            onChange={(e) => setFirstName(e.target.value)}
-                            placeholder="First name"
-                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-medium text-zinc-400">
-                            Last name
-                          </label>
-                          <input
-                            value={lastName}
-                            onChange={(e) => setLastName(e.target.value)}
-                            placeholder="Last name"
-                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-2 grid gap-2 sm:grid-cols-[1.2fr_1fr]">
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-medium text-zinc-400">
-                            Country
-                          </label>
-                          <input
-                            value={country}
-                            onChange={(e) => setCountry(e.target.value)}
-                            placeholder="Country (e.g., Canada)"
-                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="flex items-center gap-1 text-[11px] font-medium text-zinc-400">
-                            Display currency
-                            <Globe2 className="h-3 w-3 text-zinc-500" />
-                          </label>
-                          <select
-                            value={displayCurrency}
-                            onChange={(e) =>
-                              setDisplayCurrency(
-                                e.target.value as DisplayCurrency
-                              )
-                            }
-                            className="w-full rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20"
-                          >
-                            {DISPLAY_CURRENCIES.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Investing profile */}
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-3 sm:rounded-3xl sm:px-4 sm:py-4">
-                      <div className="mb-3">
-                        <h3 className="text-sm font-semibold">
-                          Investing profile
-                        </h3>
-                        <p className="mt-0.5 text-[11px] text-zinc-400">
-                          Helps personalize default settings and future
-                          guidance.
-                        </p>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {/* Risk */}
-                        <div>
-                          <p className="mb-2 text-[11px] font-medium text-zinc-300">
-                            Risk level
-                          </p>
-                          <div className="space-y-1.5">
-                            {RISK_OPTIONS.map((opt) => {
-                              const active = riskLevel === opt.value;
-                              return (
-                                <button
-                                  key={opt.value}
-                                  type="button"
-                                  onClick={() => setRiskLevel(opt.value)}
-                                  className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
-                                    active
-                                      ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-100"
-                                      : "border-white/10 bg-black/20 text-zinc-200 hover:border-emerald-500/30"
-                                  }`}
-                                >
-                                  <div
-                                    className={`mt-0.5 h-2 w-2 rounded-full ${
-                                      active ? "bg-emerald-400" : "bg-zinc-600"
-                                    }`}
-                                  />
-                                  <div>
-                                    <p className="font-medium">{opt.label}</p>
-                                    <p className="mt-0.5 text-[11px] text-zinc-400">
-                                      {opt.description}
-                                    </p>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {/* Knowledge */}
-                        <div>
-                          <p className="mb-2 flex items-center gap-1 text-[11px] font-medium text-zinc-300">
-                            Financial knowledge
-                            <Info className="h-3 w-3 text-zinc-500" />
-                          </p>
-                          <div className="space-y-1.5">
-                            {KNOWLEDGE_OPTIONS.map((opt) => {
-                              const active = knowledgeLevel === opt.value;
-                              return (
-                                <button
-                                  key={opt.value}
-                                  type="button"
-                                  onClick={() => setKnowledgeLevel(opt.value)}
-                                  className={`flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-xs transition ${
-                                    active
-                                      ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-100"
-                                      : "border-white/10 bg-black/20 text-zinc-200 hover:border-emerald-500/30"
-                                  }`}
-                                >
-                                  <div
-                                    className={`mt-0.5 h-2 w-2 rounded-full ${
-                                      active ? "bg-emerald-400" : "bg-zinc-600"
-                                    }`}
-                                  />
-                                  <div>
-                                    <p className="font-medium">{opt.label}</p>
-                                    <p className="mt-0.5 text-[11px] text-zinc-400">
-                                      {opt.description}
-                                    </p>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Sticky save bar */}
-                    <div className="sticky bottom-0 z-10 rounded-2xl border border-white/10 bg-black/70 px-3 py-2 backdrop-blur">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 text-[11px]">
-                          {saveError ? (
-                            <span className="flex items-center gap-1 text-red-300">
-                              <AlertCircle className="h-3 w-3" />
-                              <span className="truncate">{saveError}</span>
-                            </span>
-                          ) : saveSuccess ? (
-                            <span className="flex items-center gap-1 text-emerald-300">
-                              <Check className="h-3 w-3" />
-                              Settings saved
-                            </span>
-                          ) : isDirty ? (
-                            <span className="text-zinc-300">
-                              Unsaved changes
-                            </span>
-                          ) : (
-                            <span className="text-zinc-400">
-                              All changes saved
-                            </span>
-                          )}
-                          <div className="mt-0.5 text-[10px] text-zinc-500">
-                            Email and wallet are managed by Privy and can’t be
-                            edited here.
-                          </div>
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={!isDirty || saving}
-                          className={`inline-flex shrink-0 items-center justify-center rounded-full px-4 py-1.5 text-xs font-semibold transition ${
-                            !isDirty || saving
-                              ? "cursor-not-allowed border border-white/10 bg-white/5 text-zinc-500"
-                              : "border border-emerald-500 bg-emerald-500 text-black shadow-[0_0_0_1px_rgba(63,243,135,0.85)] hover:bg-emerald-400"
-                          }`}
-                        >
-                          {saving ? "Saving…" : "Save changes"}
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                </section>
-              </div>
+                </form>
+              </section>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 🔐 Export wallet confirmation modal */}
+      {/* Export wallet confirmation modal */}
       {exportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-md rounded-3xl border border-red-500/40 bg-zinc-950 p-4 shadow-xl sm:p-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-4">
+          <div className="w-full max-w-md rounded-3xl border bg-card p-4 shadow-fintech-lg sm:p-5">
             <div className="mb-3 flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-red-500/60 bg-red-500/10">
-                <KeyRound className="h-4 w-4 text-red-300" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-destructive/40 bg-destructive/10">
+                <KeyRound className="h-4 w-4 text-destructive" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-red-300">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-destructive">
                   Export private key
                 </p>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-[11px] text-muted-foreground">
                   Read this carefully before you continue.
                 </p>
               </div>
             </div>
 
-            <div className="space-y-2 text-[11px] text-zinc-200">
+            <div className="space-y-2 text-[11px] text-foreground">
               <p>
                 You’re about to export the <strong>full private key</strong> for
                 your embedded Haven wallet.
               </p>
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-[10px] text-zinc-400">
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-[10px] text-muted-foreground">
                 <li>
                   Anyone with this key can{" "}
-                  <span className="font-semibold text-red-300">
+                  <span className="font-semibold text-destructive">
                     move all funds
                   </span>
                   .
@@ -997,12 +1000,12 @@ const SettingsPage: React.FC = () => {
                 <li>Never paste it into chats or screenshots.</li>
               </ul>
 
-              <label className="mt-3 flex cursor-pointer items-start gap-2 text-[10px] text-zinc-300">
+              <label className="mt-3 flex cursor-pointer items-start gap-2 text-[10px] text-foreground">
                 <input
                   type="checkbox"
                   checked={exportAcknowledged}
                   onChange={(e) => setExportAcknowledged(e.target.checked)}
-                  className="mt-0.5 h-3 w-3 rounded border-zinc-600 bg-zinc-900 text-red-400 focus:ring-red-500"
+                  className="mt-0.5 h-3 w-3 rounded border-border bg-card text-destructive focus:ring-destructive"
                 />
                 <span>
                   I understand: if someone gets my private key, they can access
@@ -1011,14 +1014,14 @@ const SettingsPage: React.FC = () => {
               </label>
 
               {exportError && (
-                <p className="mt-2 flex items-center gap-1 text-[10px] text-red-300">
+                <p className="mt-2 flex items-center gap-1 text-[10px] text-destructive">
                   <AlertCircle className="h-3 w-3" />
                   {exportError}
                 </p>
               )}
 
               {exporting && (
-                <div className="mt-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] text-zinc-300">
+                <div className="mt-2 rounded-2xl border bg-card/60 px-3 py-2 text-[10px] text-muted-foreground">
                   Waiting for Privy… close the Privy window to return here.
                 </div>
               )}
@@ -1028,26 +1031,28 @@ const SettingsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setExportModalOpen(false)}
-                className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-zinc-200 hover:bg-white/10"
+                className="haven-btn-secondary w-auto rounded-full px-3 py-2 text-[11px]"
                 disabled={exporting}
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={handleConfirmExport}
                 disabled={!exportAcknowledged || !canExportWallet || exporting}
-                className={`inline-flex items-center justify-center rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
+                className={[
+                  "inline-flex items-center justify-center rounded-full px-3 py-2 text-[11px] font-semibold transition",
                   !exportAcknowledged || !canExportWallet || exporting
-                    ? "cursor-not-allowed border border-red-500/25 bg-red-950/40 text-red-300/50"
-                    : "border border-red-500 bg-red-500 text-black hover:bg-red-400"
-                }`}
+                    ? "cursor-not-allowed border border-destructive/25 bg-destructive/10 text-destructive/60"
+                    : "border border-destructive bg-destructive text-destructive-foreground hover:opacity-90",
+                ].join(" ")}
               >
                 {exporting ? "Opening export…" : "Continue & export"}
               </button>
             </div>
 
-            <p className="mt-2 text-[9px] text-zinc-500">
+            <p className="mt-2 text-[9px] text-muted-foreground">
               A secure Privy window will open where only you can view/copy the
               key. Haven never sees it.
             </p>

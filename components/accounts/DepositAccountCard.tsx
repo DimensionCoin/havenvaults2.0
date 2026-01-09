@@ -1,4 +1,3 @@
-// components/accounts/DepositAccountCard.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -11,19 +10,9 @@ import { useBalance } from "@/providers/BalanceProvider";
 type DrawerMode = "deposit" | "withdraw" | null;
 
 type DepositAccountCardProps = {
-  /**
-   * Optional explicit loading flag (falls back to BalanceProvider.loading)
-   */
   loading?: boolean;
-  walletAddress: string; // sender's Solana address
-
-  /**
-   * Optional override for the balance.
-   * If not provided, we use usdcUsd from BalanceProvider.
-   * NOTE: this value should already be in the user's display currency.
-   */
+  walletAddress: string;
   balanceOverride?: number;
-
   onDeposit?: () => void;
   onTransfer?: () => void;
   onWithdraw?: () => void;
@@ -43,27 +32,18 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
   onTransfer,
   onWithdraw,
 }) => {
-  // Drawer is ONLY for Deposit + Withdraw now
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
-
-  // Transfer is a Dialog modal now
   const [transferOpen, setTransferOpen] = useState(false);
 
-  // 🔹 Pull USDC + loading from BalanceProvider
-  const {
-    usdcUsd, // already in user's display currency
-    loading: balanceLoading,
-  } = useBalance();
+  const { usdcUsd, loading: balanceLoading } = useBalance();
 
   const effectiveLoading = loading ?? balanceLoading;
   const effectiveBalance = balanceOverride ?? usdcUsd;
 
-  // 🔹 Always show as $<amount> with 2 decimals, no currency code prefix
   const formatDisplay = (n?: number | null) => {
     const value =
       n === undefined || n === null || Number.isNaN(n) ? 0 : Number(n);
-
     return `$${value.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -82,52 +62,65 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
 
   return (
     <>
-      {/* Drawer ONLY wraps deposit/withdraw flows */}
       <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
-        {/* Card */}
-        <div className="flex h-full w-full flex-col justify-between rounded-2xl border border-zinc-800 bg-white/10 px-4 py-4 sm:px-6 sm:py-6">
+        {/* Card (Haven theme) */}
+        <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
+          {/* Header */}
           <div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
-              Deposit Account
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="haven-kicker">Deposit Account</p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">
+                  Account #{shortAddress(walletAddress)}
+                </p>
+              </div>
 
+              {/* Small status pill (optional but matches ref image) */}
+              <span className="haven-pill">
+                <span className="h-2 w-2 rounded-full bg-primary" />
+                Active
+              </span>
+            </div>
+
+            {/* Balance */}
             <div className="mt-4">
-              <p className="mt-1 text-3xl font-semibold tracking-tight text-emerald-50 sm:text-4xl">
+              <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
                 {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
               </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Account #{shortAddress(walletAddress)}
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Available to transfer, invest, or withdraw
               </p>
             </div>
           </div>
 
+          {/* Actions */}
           <div className="mt-5 flex gap-2">
-            {/* Deposit → opens Drawer */}
+            {/* Deposit -> Drawer */}
             <DrawerTrigger asChild>
               <button
                 type="button"
                 onClick={() => openDrawer("deposit")}
-                className="flex-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-black shadow-[0_0_18px_rgba(190,242,100,0.6)] transition hover:brightness-105"
+                className="haven-btn-primary flex-1 text-[#0b3204]"
               >
                 Deposit
               </button>
             </DrawerTrigger>
 
-            {/* Transfer → opens Dialog (NOT a DrawerTrigger) */}
+            {/* Transfer -> Dialog */}
             <button
               type="button"
               onClick={() => setTransferOpen(true)}
-              className="flex-1 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-3 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-900/70"
+              className="haven-btn-primary flex-1 text-[#0b3204]"
             >
               Transfer
             </button>
 
-            {/* Withdraw → opens Drawer */}
+            {/* Withdraw -> Drawer (outline, a bit “safer”) */}
             <DrawerTrigger asChild>
               <button
                 type="button"
                 onClick={() => openDrawer("withdraw")}
-                className="flex-1 rounded-xl border border-zinc-700 bg-black/40 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-900"
+                className="haven-btn-primary flex-1 text-[#0b3204]"
               >
                 Withdraw
               </button>
@@ -135,7 +128,7 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
           </div>
         </div>
 
-        {/* Drawer body — mount ONE flow at a time */}
+        {/* Drawer body */}
         {drawerMode === "deposit" && (
           <Deposit
             walletAddress={walletAddress}
@@ -159,12 +152,12 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
         )}
       </Drawer>
 
-      {/* Transfer modal lives OUTSIDE the Drawer */}
+      {/* Transfer modal outside Drawer */}
       <Transfer
         open={transferOpen}
         onOpenChange={(open) => {
           setTransferOpen(open);
-          if (!open) onTransfer?.(); // optional: fire when closed
+          if (!open) onTransfer?.();
         }}
         walletAddress={walletAddress}
         balanceUsd={effectiveBalance}
