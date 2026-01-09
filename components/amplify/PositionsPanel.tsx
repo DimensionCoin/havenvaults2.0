@@ -496,7 +496,7 @@ export default function PositionsPanel({
         <div className="mt-4 space-y-2">
           {!ownerReady ? (
             <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
-              Loading wallet…
+              Loading Account
             </div>
           ) : loading && rows.length === 0 ? (
             <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
@@ -504,7 +504,7 @@ export default function PositionsPanel({
             </div>
           ) : rows.length === 0 ? (
             <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
-              No Amplified positions yet.
+              No Multiplied positions yet.
             </div>
           ) : (
             rows.map((p, idx) => {

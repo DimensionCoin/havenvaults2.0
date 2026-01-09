@@ -1,4 +1,3 @@
-// components/bundles/BundlesPanel.tsx
 "use client";
 
 import React, {
@@ -9,6 +8,8 @@ import React, {
   useRef,
 } from "react";
 import Image from "next/image";
+import Link from "next/link"
+import { createPortal } from "react-dom";
 import {
   Loader2,
   CheckCircle2,
@@ -21,8 +22,10 @@ import {
   Zap,
   Search,
   RefreshCw,
-  AlertTriangle,
   ChevronRight,
+  Wallet,
+  ExternalLink,
+  Layers,
 } from "lucide-react";
 
 import { BUNDLES, type RiskLevel } from "./bundlesConfig";
@@ -39,12 +42,9 @@ import {
 } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
 
-// Polyfill
 if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   TYPES
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* ───────── TYPES ───────── */
 
 type Props = {
   ownerBase58: string;
@@ -80,18 +80,52 @@ type SendResponse = {
   signature: string;
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   CONSTANTS
-   ═══════════════════════════════════════════════════════════════════════════ */
+type ModalKind = "input" | "processing" | "success" | "error";
+
+/* ───────── CONSTANTS ───────── */
 
 const USDC_MINT =
   process.env.NEXT_PUBLIC_USDC_MINT ||
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDC_DECIMALS = 6;
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   HELPERS
-   ═══════════════════════════════════════════════════════════════════════════ */
+// Limit concurrency for SEND so Privy/RPC don’t get hammered
+const SEND_CONCURRENCY = 4;
+
+/* ───────── HELPERS ───────── */
+
+function formatMoney(n: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${currency}`;
+  }
+}
+
+function clampMoneyInput(raw: string) {
+  const cleaned = (raw ?? "").replace(/[^\d.]/g, "");
+  const parts = cleaned.split(".");
+  if (parts.length <= 1) return cleaned;
+  return `${parts[0]}.${parts.slice(1).join("").slice(0, 2)}`;
+}
+
+function safeNum(v: unknown, fallback: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
+function explorerUrl(sig: string) {
+  return `https://solscan.io/tx/${sig}`;
+}
 
 function getRiskIcon(risk: RiskLevel) {
   if (risk === "low") return Shield;
@@ -103,10 +137,10 @@ function getRiskIcon(risk: RiskLevel) {
 function riskPill(risk: RiskLevel) {
   const Icon = getRiskIcon(risk);
   const colors = {
-    low: "border-[#3ff387]/30 bg-[#3ff387]/10 text-[#3ff387]",
-    medium: "border-amber-400/30 bg-amber-400/10 text-amber-400",
-    high: "border-orange-400/30 bg-orange-400/10 text-orange-400",
-    degen: "border-red-400/30 bg-red-400/10 text-red-400",
+    low: "border-emerald-400/30 bg-emerald-500/20 text-emerald-200",
+    medium: "border-amber-400/30 bg-amber-500/20 text-amber-200",
+    high: "border-orange-400/30 bg-orange-500/20 text-orange-200",
+    degen: "border-rose-400/30 bg-rose-500/20 text-rose-200",
   };
   return (
     <div
@@ -116,13 +150,6 @@ function riskPill(risk: RiskLevel) {
       {risk}
     </div>
   );
-}
-
-function cleanNumberInput(raw: string) {
-  const s = raw.replace(/[^\d.]/g, "");
-  const parts = s.split(".");
-  if (parts.length <= 1) return s;
-  return `${parts[0]}.${parts.slice(1).join("")}`;
 }
 
 function pickWallet(
@@ -165,9 +192,9 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   if (!res.ok) {
     const d = data as Record<string, unknown> | null;
     const msg =
-      d?.userMessage ||
-      d?.error ||
-      d?.message ||
+      (d?.userMessage as string) ||
+      (d?.error as string) ||
+      (d?.message as string) ||
       `Request failed: ${res.status}`;
     throw new Error(String(msg));
   }
@@ -175,90 +202,224 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   TOKEN ICONS COMPONENT - Enhanced with larger icons and glow effect
-   ═══════════════════════════════════════════════════════════════════════════ */
+async function asyncPool<T, R>(
+  limit: number,
+  items: T[],
+  fn: (item: T, idx: number) => Promise<R>,
+  abortRef?: React.MutableRefObject<boolean>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  const executing = new Set<Promise<void>>();
 
-function TokenIconsCompact({ symbols }: { symbols: string[] }) {
-  const shown = symbols.slice(0, 5);
-  const extra = Math.max(0, symbols.length - shown.length);
+  for (let i = 0; i < items.length; i++) {
+    if (abortRef?.current) break;
+
+    const p = (async () => {
+      results[i] = await fn(items[i], i);
+    })();
+
+    executing.add(p);
+    p.finally(() => executing.delete(p));
+
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
+}
+
+/* ───────── UI SUBCOMPONENTS (same vibe as DepositFlex) ───────── */
+
+function ProgressBar({ progress }: { progress: number }) {
+  return (
+    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+      <div
+        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+      />
+    </div>
+  );
+}
+
+function StageIcon({
+  icon,
+}: {
+  icon: "spinner" | "wallet" | "success" | "error";
+}) {
+  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
+
+  if (icon === "success") {
+    return (
+      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
+        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      </div>
+    );
+  }
+
+  if (icon === "error") {
+    return (
+      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
+        <XCircle className="h-7 w-7 text-rose-400" />
+      </div>
+    );
+  }
+
+  if (icon === "wallet") {
+    return (
+      <div
+        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
+      >
+        <Wallet className="h-7 w-7 text-amber-400" />
+      </div>
+    );
+  }
 
   return (
-    <div className="flex items-center">
-      <div className="flex -space-x-3">
-        {shown.map((s, i) => {
-          const meta = findTokenBySymbol(s);
-          return (
-            <div
-              key={s}
-              className="relative h-9 w-9 overflow-hidden rounded-full border-2 border-[#02010a] bg-zinc-800 ring-1 ring-white/10 transition-transform hover:scale-110 hover:z-10"
-              style={{ zIndex: shown.length - i }}
-              title={s}
-            >
-              <Image
-                src={meta?.logo || "/placeholder.svg"}
-                alt={s}
-                fill
-                className="object-cover"
-              />
+    <div className={`${base} border-white/10 bg-white/5`}>
+      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    </div>
+  );
+}
+
+function TokenRowCompact({
+  symbol,
+  amountLabel,
+  status,
+  sig,
+  error,
+}: {
+  symbol: string;
+  amountLabel: string;
+  status: SwapStatus;
+  sig?: string;
+  error?: string;
+}) {
+  const meta = findTokenBySymbol(symbol);
+
+  const right =
+    status === "done" ? (
+      <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+    ) : status === "error" ? (
+      <XCircle className="h-5 w-5 text-rose-400" />
+    ) : status === "signing" ? (
+      <Wallet className="h-5 w-5 text-amber-400 animate-pulse" />
+    ) : status === "building" || status === "sending" ? (
+      <Loader2 className="h-5 w-5 text-white/60 animate-spin" />
+    ) : (
+      <div className="h-5 w-5 rounded-full border border-white/15" />
+    );
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="relative h-9 w-9 rounded-full overflow-hidden bg-zinc-800 ring-1 ring-white/10 shrink-0">
+            <Image
+              src={meta?.logo || "/placeholder.svg"}
+              alt={symbol}
+              fill
+              className="object-cover"
+            />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white/90 truncate">
+              {symbol}
             </div>
-          );
-        })}
+            <div className="text-[11px] text-white/45">{amountLabel}</div>
+          </div>
+        </div>
+        {right}
       </div>
-      {extra > 0 && (
-        <div className="ml-1 flex h-9 w-9 items-center justify-center rounded-full border-2 border-[#02010a] bg-zinc-800/80 ring-1 ring-white/10">
-          <span className="text-[11px] font-bold text-white/70">+{extra}</span>
+
+      {(error || sig) && (
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="text-[11px] text-white/45 min-w-0">
+            {error ? (
+              <span className="text-rose-200/80">{error}</span>
+            ) : (
+              <span className="truncate block">
+                Tx: {sig?.slice(0, 8)}…{sig?.slice(-6)}
+              </span>
+            )}
+          </div>
+          {sig && (
+            <Link
+              href={explorerUrl(sig)}
+              target="_blank"
+              rel="noreferrer"
+              className="shrink-0 inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-semibold text-white/70 hover:text-white/90 hover:bg-white/10 transition"
+            >
+              View <ExternalLink className="h-3.5 w-3.5 opacity-60" />
+            </Link>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* ───────── MAIN ───────── */
 
 export default function BundlesPanel({ ownerBase58 }: Props) {
-  // ─────────────────────────────────────────────────────────────────────────
   // Privy & Wallet
-  // ─────────────────────────────────────────────────────────────────────────
   const { authenticated, ready: privyReady } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
   const { signMessage } = useSignMessage();
 
-  // ─────────────────────────────────────────────────────────────────────────
   // Balance
-  // ─────────────────────────────────────────────────────────────────────────
-  const { usdcUsd, displayCurrency, fxRate } = useBalance();
-  const availableBalance = usdcUsd;
+  const balanceCtx = useBalance();
+  const ctxLoading = !!balanceCtx?.loading;
+  const ctxUsdcDisplay = safeNum(balanceCtx?.usdcUsd, 0);
+  const displayCurrency = (balanceCtx?.displayCurrency || "USD").toUpperCase();
+  const fxRate = safeNum(balanceCtx?.fxRate, 1); // display per USD
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // UI State
-  // ─────────────────────────────────────────────────────────────────────────
+  // Modal state
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [modalKind, setModalKind] = useState<ModalKind>("input");
+
+  // Bundle selection
   const [selectedId, setSelectedId] = useState<string>(BUNDLES[0]?.id ?? "");
-  const [amountDisplay, setAmountDisplay] = useState<string>("");
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  const selected = useMemo(
+    () => BUNDLES.find((b) => b.id === selectedId) ?? BUNDLES[0],
+    [selectedId]
+  );
+
+  // UI state
+  const [amountRaw, setAmountRaw] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedRiskFilter, setSelectedRiskFilter] = useState<
     RiskLevel | "all"
   >("all");
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Execution State
-  // ─────────────────────────────────────────────────────────────────────────
+  // Execution state
   const [rows, setRows] = useState<BuyRow[]>([]);
   const [phase, setPhase] = useState<
-    "idle" | "building" | "signing" | "sending" | "done"
+    "idle" | "building" | "signing" | "sending" | "done" | "error"
   >("idle");
   const [globalError, setGlobalError] = useState<string | null>(null);
   const abortRef = useRef(false);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Privy Cache Warming
-  // ─────────────────────────────────────────────────────────────────────────
-  const cacheWarmedRef = useRef(false);
+  const isProcessing = modalKind === "processing";
 
+  // Portal mount guard
+  useEffect(() => setMounted(true), []);
+
+  // Lock scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Warm Privy cache
+  const cacheWarmedRef = useRef(false);
   useEffect(() => {
     if (!authenticated || !privyReady || cacheWarmedRef.current) return;
 
@@ -274,23 +435,20 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
           wallet: embeddedWallet,
         });
         cacheWarmedRef.current = true;
-        console.log("[Privy] Cache warmed ✓");
       } catch {
-        // user might reject
+        // ignore
       }
     };
 
-    const t = setTimeout(warmCache, 800);
+    const t = setTimeout(warmCache, 600);
     return () => clearTimeout(t);
   }, [authenticated, privyReady, wallets, signMessage, ownerBase58]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Computed Values
-  // ─────────────────────────────────────────────────────────────────────────
-  const selected = useMemo(
-    () => BUNDLES.find((b) => b.id === selectedId) ?? BUNDLES[0],
-    [selectedId]
-  );
+  // Derived
+  const amountNum = useMemo(() => {
+    const n = parseFloat(amountRaw);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [amountRaw]);
 
   const filteredBundles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -306,36 +464,64 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     });
   }, [searchQuery, selectedRiskFilter]);
 
-  const perTokenDisplay = useMemo(() => {
-    const amt = Number(amountDisplay);
-    const n = selected?.symbols.length ?? 0;
-    if (!Number.isFinite(amt) || amt <= 0 || n <= 0) return 0;
-    return amt / n;
-  }, [amountDisplay, selected]);
+  const ownerReady = !!ownerBase58 && ownerBase58 !== "pending";
 
-  const canBuy = useMemo(() => {
-    const amt = Number(amountDisplay);
-    if (!ownerBase58) return false;
+  const canSubmit = useMemo(() => {
+    if (!ownerReady || ctxLoading) return false;
     if (!selected) return false;
-    if (!Number.isFinite(amt) || amt <= 0) return false;
-    if (amt > availableBalance) return false;
+    if (amountNum <= 0) return false;
+    if (amountNum > ctxUsdcDisplay) return false;
     if ((selected.symbols?.length ?? 0) < 2) return false;
     return true;
-  }, [amountDisplay, ownerBase58, selected, availableBalance]);
+  }, [ownerReady, ctxLoading, selected, amountNum, ctxUsdcDisplay]);
 
   const progress = useMemo(() => {
-    if (rows.length === 0) return 0;
-    const doneCount = rows.filter((r) => r.status === "done").length;
-    return (doneCount / rows.length) * 100;
-  }, [rows]);
+    if (phase === "building") return 20;
+    if (phase === "signing") return 45;
+    if (phase === "sending") return 70;
+    if (phase === "done") return 100;
+    if (phase === "error") return 0;
+    return 0;
+  }, [phase]);
+
+  const stage = useMemo(() => {
+    if (phase === "building")
+      return {
+        title: "Preparing bundle",
+        subtitle: "Building transactions…",
+        icon: "spinner" as const,
+      };
+    if (phase === "signing")
+      return {
+        title: "Approving swaps",
+        subtitle: "Confirm in your wallet…",
+        icon: "wallet" as const,
+      };
+    if (phase === "sending")
+      return {
+        title: "Submitting",
+        subtitle: "Broadcasting to network…",
+        icon: "spinner" as const,
+      };
+    if (phase === "done")
+      return {
+        title: "Bundle complete!",
+        subtitle: "Your purchases are finalized",
+        icon: "success" as const,
+      };
+    if (phase === "error")
+      return {
+        title: "Bundle failed",
+        subtitle: "Something went wrong",
+        icon: "error" as const,
+      };
+    return { title: "", subtitle: "", icon: "spinner" as const };
+  }, [phase]);
 
   const allDone = rows.length > 0 && rows.every((r) => r.status === "done");
   const hasErrors = rows.some((r) => r.status === "error");
-  const isExecuting = phase !== "idle" && phase !== "done";
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sign Helper
-  // ─────────────────────────────────────────────────────────────────────────
+  // Sign helper
   const signWithWallet = useCallback(
     async (txBytes: Uint8Array): Promise<string> => {
       const wallet = pickWallet(wallets, ownerBase58);
@@ -351,141 +537,127 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     [wallets, ownerBase58, signTransaction]
   );
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PHASE 1: Build all transactions in parallel
-  // ─────────────────────────────────────────────────────────────────────────
-  const buildAllTransactions = useCallback(
-    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
+  // Phase 1: build (parallel)
+  const buildAll = useCallback(
+    async (rowsData: BuyRow[]) => {
       setPhase("building");
+      setRows(
+        rowsData.map((r) => ({ ...r, status: "building" as SwapStatus }))
+      );
 
-      setRows(rowsData.map((r) => ({ ...r, status: "building" })));
+      const built = await Promise.all(
+        rowsData.map(async (row) => {
+          try {
+            const amountUnits = Math.max(
+              1,
+              Math.floor(row.amountUsd * 10 ** USDC_DECIMALS)
+            );
+            const buildResp = await postJSON<BuildResponse>("/api/jup/build", {
+              fromOwnerBase58: ownerBase58,
+              inputMint: USDC_MINT,
+              outputMint: row.outputMint,
+              amountUnits,
+              slippageBps: 100,
+            });
+            return {
+              ...row,
+              txBase64: buildResp.transaction,
+              status: "building" as SwapStatus,
+            };
+          } catch (e) {
+            return {
+              ...row,
+              status: "error" as SwapStatus,
+              error: String((e as Error)?.message),
+            };
+          }
+        })
+      );
 
-      const buildPromises = rowsData.map(async (row) => {
-        try {
-          const amountUnits = Math.floor(row.amountUsd * 10 ** USDC_DECIMALS);
-
-          const buildResp = await postJSON<BuildResponse>("/api/jup/build", {
-            fromOwnerBase58: ownerBase58,
-            inputMint: USDC_MINT,
-            outputMint: row.outputMint,
-            amountUnits,
-            slippageBps: 100,
-          });
-
-          return { ...row, txBase64: buildResp.transaction };
-        } catch (e) {
-          return {
-            ...row,
-            status: "error" as SwapStatus,
-            error: String((e as Error)?.message),
-          };
-        }
-      });
-
-      const results = await Promise.all(buildPromises);
-      setRows(results);
-
-      return results;
+      setRows(built);
+      return built;
     },
     [ownerBase58]
   );
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PHASE 2: Sign all transactions
-  // ─────────────────────────────────────────────────────────────────────────
-  const signAllTransactions = useCallback(
-    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
+  // Phase 2: sign (sequential)
+  const signAll = useCallback(
+    async (rowsData: BuyRow[]) => {
       setPhase("signing");
 
-      const toSign = rowsData.filter((r) => r.txBase64 && r.status !== "error");
-
-      if (toSign.length === 0) {
-        return rowsData;
-      }
-
+      const signedRows = [...rowsData];
       setRows(
-        rowsData.map((r) =>
-          r.txBase64 && r.status !== "error" ? { ...r, status: "signing" } : r
+        signedRows.map((r) =>
+          r.txBase64 && r.status !== "error"
+            ? { ...r, status: "signing" as SwapStatus }
+            : r
         )
       );
 
-      const signedRows = [...rowsData];
-
       for (let i = 0; i < signedRows.length; i++) {
+        if (abortRef.current) break;
+
         const row = signedRows[i];
         if (!row.txBase64 || row.status === "error") continue;
-
-        if (abortRef.current) {
-          signedRows[i] = { ...row, status: "error", error: "Cancelled" };
-          continue;
-        }
 
         try {
           const txBytes = Buffer.from(row.txBase64, "base64");
           const signedB64 = await signWithWallet(txBytes);
+
           signedRows[i] = {
             ...row,
             signedTxBase64: signedB64,
-            status: "signing",
+            status: "signing" as SwapStatus,
           };
-
           setRows([...signedRows]);
         } catch (e) {
           if (isUserRejection(e)) {
             abortRef.current = true;
             signedRows[i] = { ...row, status: "error", error: "Cancelled" };
             for (let j = i + 1; j < signedRows.length; j++) {
-              if (signedRows[j].status !== "error") {
+              if (signedRows[j].status !== "error")
                 signedRows[j] = {
                   ...signedRows[j],
                   status: "error",
                   error: "Cancelled",
                 };
-              }
             }
-            break;
+            setRows([...signedRows]);
+            return signedRows;
           }
           signedRows[i] = {
             ...row,
             status: "error",
             error: String((e as Error)?.message),
           };
+          setRows([...signedRows]);
         }
       }
 
-      setRows(signedRows);
       return signedRows;
     },
     [signWithWallet]
   );
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PHASE 3: Send all signed transactions in parallel
-  // ─────────────────────────────────────────────────────────────────────────
-  const sendAllTransactions = useCallback(
-    async (rowsData: BuyRow[]): Promise<BuyRow[]> => {
-      setPhase("sending");
+  // Phase 3: send (limited concurrency)
+  const sendAll = useCallback(async (rowsData: BuyRow[]) => {
+    setPhase("sending");
 
-      const toSend = rowsData.filter(
-        (r) => r.signedTxBase64 && r.status !== "error"
-      );
+    setRows(
+      rowsData.map((r) =>
+        r.signedTxBase64 && r.status !== "error"
+          ? { ...r, status: "sending" as SwapStatus }
+          : r
+      )
+    );
 
-      if (toSend.length === 0) {
-        return rowsData;
-      }
-
-      setRows(
-        rowsData.map((r) =>
-          r.signedTxBase64 && r.status !== "error"
-            ? { ...r, status: "sending" }
-            : r
-        )
-      );
-
-      const sendPromises = rowsData.map(async (row) => {
-        if (!row.signedTxBase64 || row.status === "error") {
-          return row;
-        }
+    const sent = await asyncPool(
+      SEND_CONCURRENCY,
+      rowsData,
+      async (row) => {
+        if (abortRef.current)
+          return { ...row, status: "error" as SwapStatus, error: "Cancelled" };
+        if (!row.signedTxBase64 || row.status === "error") return row;
 
         try {
           const sendResp = await postJSON<SendResponse>("/api/jup/send", {
@@ -504,29 +676,26 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             error: String((e as Error)?.message),
           };
         }
-      });
+      },
+      abortRef
+    );
 
-      const results = await Promise.all(sendPromises);
-      setRows(results);
+    setRows(sent);
+    return sent;
+  }, []);
 
-      return results;
-    },
-    []
-  );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Main Execution Flow
-  // ─────────────────────────────────────────────────────────────────────────
-  const startBundleBuy = useCallback(async () => {
-    if (!canBuy || !selected || isExecuting) return;
-
-    const amt = Number(amountDisplay);
-    const symbols = selected.symbols;
-    const perUsd = amt / fxRate / symbols.length;
-    const perDisplay = amt / symbols.length;
+  // Start bundle
+  const onBuyBundle = useCallback(async () => {
+    if (!canSubmit || !selected) return;
 
     abortRef.current = false;
     setGlobalError(null);
+    setModalKind("processing");
+    setPhase("idle");
+
+    const symbols = selected.symbols;
+    const perUsd = amountNum / fxRate / symbols.length; // USD = display / fxRate
+    const perDisplay = amountNum / symbols.length;
 
     const initialRows: BuyRow[] = symbols.map((symbol) => ({
       symbol,
@@ -539,159 +708,120 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     setRows(initialRows);
 
     try {
-      console.log("[Bundle] Phase 1: Building transactions...");
-      const builtRows = await buildAllTransactions(initialRows);
+      const built = await buildAll(initialRows);
+      if (abortRef.current) throw new Error("Cancelled");
 
-      if (abortRef.current) return;
+      const builtOk = built.filter((r) => r.txBase64 && r.status !== "error");
+      if (builtOk.length === 0)
+        throw new Error("Failed to prepare swaps. Try a larger amount.");
 
-      const buildErrors = builtRows.filter((r) => r.status === "error");
-      if (buildErrors.length === builtRows.length) {
-        setGlobalError("Failed to build transactions");
-        setPhase("idle");
-        return;
-      }
+      const signed = await signAll(built);
+      if (abortRef.current) throw new Error("Cancelled");
 
-      console.log("[Bundle] Phase 2: Signing transactions...");
-      const signedRows = await signAllTransactions(builtRows);
-
-      if (abortRef.current) return;
-
-      const signErrors = signedRows.filter((r) => r.status === "error");
-      if (signErrors.length === signedRows.length) {
-        setPhase("idle");
-        return;
-      }
-
-      console.log("[Bundle] Phase 3: Sending transactions...");
-      const sentRows = await sendAllTransactions(signedRows);
-
-      const successCount = sentRows.filter((r) => r.status === "done").length;
-      console.log(
-        `[Bundle] Complete: ${successCount}/${sentRows.length} succeeded`
+      const signedOk = signed.filter(
+        (r) => r.signedTxBase64 && r.status !== "error"
       );
+      if (signedOk.length === 0) throw new Error("No swaps were approved.");
+
+      const sent = await sendAll(signed);
+
+      const ok = sent.filter((r) => r.status === "done").length;
+      if (ok === 0) throw new Error("No swaps succeeded. Try again.");
 
       setPhase("done");
+      setModalKind("success");
     } catch (e) {
-      console.error("[Bundle] Error:", e);
-      setGlobalError(String((e as Error)?.message));
-      setPhase("idle");
+      const msg = String((e as Error)?.message || "Bundle failed");
+      setGlobalError(msg);
+      setPhase("error");
+      setModalKind("error");
     }
-  }, [
-    canBuy,
-    selected,
-    amountDisplay,
-    fxRate,
-    isExecuting,
-    buildAllTransactions,
-    signAllTransactions,
-    sendAllTransactions,
-  ]);
+  }, [canSubmit, selected, amountNum, fxRate, buildAll, signAll, sendAll]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Retry Failed
-  // ─────────────────────────────────────────────────────────────────────────
+  // Retry failed
   const retryFailed = useCallback(async () => {
-    if (isExecuting) return;
-
-    const failedRows = rows.filter(
+    if (!selected) return;
+    const failed = rows.filter(
       (r) => r.status === "error" && r.error !== "Cancelled"
     );
-    if (failedRows.length === 0) return;
+    if (failed.length === 0) return;
 
     abortRef.current = false;
+    setModalKind("processing");
+    setPhase("idle");
+    setGlobalError(null);
 
-    const resetRows = rows.map((r) =>
-      r.status === "error" && r.error !== "Cancelled"
-        ? {
-            ...r,
-            status: "idle" as SwapStatus,
-            error: undefined,
-            txBase64: undefined,
-            signedTxBase64: undefined,
-          }
-        : r
-    );
-    setRows(resetRows);
+    const retryRows = failed.map((r) => ({
+      ...r,
+      status: "idle" as SwapStatus,
+      error: undefined,
+      txBase64: undefined,
+      signedTxBase64: undefined,
+      sig: undefined,
+    }));
+
+    // merge back into the full rows list as updates happen
+    const merge = (updated: BuyRow[]) => {
+      const map = new Map(updated.map((u) => [u.symbol, u]));
+      setRows((prev) => prev.map((p) => map.get(p.symbol) ?? p));
+    };
+
+    merge(retryRows);
 
     try {
-      const toRetry = resetRows.filter((r) => r.status === "idle");
-      console.log(`[Bundle] Retrying ${toRetry.length} failed transactions...`);
+      const built = await buildAll(retryRows);
+      const signed = await signAll(built);
+      const sent = await sendAll(signed);
+      merge(sent);
 
-      const builtRows = await buildAllTransactions(resetRows);
-      if (abortRef.current) return;
+      const ok = sent.filter((r) => r.status === "done").length;
+      if (ok === 0) throw new Error("Retry failed. Try again.");
 
-      const signedRows = await signAllTransactions(builtRows);
-      if (abortRef.current) return;
-
-      await sendAllTransactions(signedRows);
       setPhase("done");
+      setModalKind("success");
     } catch (e) {
-      console.error("[Bundle] Retry error:", e);
-      setGlobalError(String((e as Error)?.message));
-      setPhase("idle");
+      const msg = String((e as Error)?.message || "Retry failed");
+      setGlobalError(msg);
+      setPhase("error");
+      setModalKind("error");
     }
-  }, [
-    rows,
-    isExecuting,
-    buildAllTransactions,
-    signAllTransactions,
-    sendAllTransactions,
-  ]);
+  }, [rows, selected, buildAll, signAll, sendAll]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Modal Controls
-  // ─────────────────────────────────────────────────────────────────────────
+  // Open/close modal (DepositFlex behavior)
   const openBundle = useCallback((id: string) => {
     setSelectedId(id);
+    setAmountRaw("");
     setRows([]);
     setPhase("idle");
     setGlobalError(null);
-    setAmountDisplay("");
+    setModalKind("input");
     setOpen(true);
   }, []);
 
-  const closeModal = useCallback(() => {
-    if (isExecuting) {
-      abortRef.current = true;
-    }
+  const close = useCallback(() => {
+    // don’t allow close while processing (same as DepositFlex)
+    if (modalKind === "processing") return;
     setOpen(false);
-  }, [isExecuting]);
+  }, [modalKind]);
 
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && open) closeModal();
-    };
-    window.addEventListener("keydown", handleEsc);
-    return () => window.removeEventListener("keydown", handleEsc);
-  }, [open, closeModal]);
+  // outside click close (only if not processing)
+  const onBackdropClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget && modalKind !== "processing") {
+        setOpen(false);
+      }
+    },
+    [modalKind]
+  );
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Status Label
-  // ─────────────────────────────────────────────────────────────────────────
-  const phaseLabel = useMemo(() => {
-    switch (phase) {
-      case "building":
-        return "Preparing transactions...";
-      case "signing":
-        return "Sign to confirm...";
-      case "sending":
-        return "Sending transactions...";
-      default:
-        return "Processing...";
-    }
-  }, [phase]);
+  /* ───────── MAIN PAGE UI (grid) ───────── */
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDER - Complete UI overhaul for futuristic, user-friendly design
-  // ─────────────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Main Panel */}
       <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent p-6 backdrop-blur-sm">
-        {/* Header */}
         <div className="flex items-center gap-4 mb-6">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#3ff387]/20 to-[#3ff387]/5 ring-1 ring-[#3ff387]/20">
-            <Sparkles className="h-5 w-5 text-[#3ff387]" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 ring-1 ring-emerald-400/20">
+            <Layers className="h-5 w-5 text-emerald-400" />
           </div>
           <div>
             <h3 className="text-lg font-semibold text-white">Token Bundles</h3>
@@ -701,7 +831,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
           </div>
         </div>
 
-        {/* Search */}
         <div className="relative mb-5">
           <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
           <input
@@ -709,11 +838,10 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search bundles or tokens..."
-            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3.5 pl-11 pr-4 text-sm text-white placeholder:text-white/40 outline-none transition-all focus:border-[#3ff387]/30 focus:bg-white/[0.05] focus:ring-1 focus:ring-[#3ff387]/20"
+            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3.5 pl-11 pr-4 text-sm text-white placeholder:text-white/40 outline-none transition-all focus:border-emerald-300/30 focus:bg-white/[0.05] focus:ring-1 focus:ring-emerald-400/20"
           />
         </div>
 
-        {/* Risk Filter */}
         <div className="flex gap-2 mb-6 overflow-x-auto pb-1 scrollbar-hide">
           {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
             <button
@@ -722,7 +850,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
               onClick={() => setSelectedRiskFilter(risk)}
               className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold capitalize transition-all ${
                 selectedRiskFilter === risk
-                  ? "bg-[#3ff387]/20 text-[#3ff387] ring-1 ring-[#3ff387]/30"
+                  ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-300/30"
                   : "bg-white/[0.03] text-white/50 hover:bg-white/[0.06] hover:text-white/70"
               }`}
             >
@@ -731,7 +859,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
           ))}
         </div>
 
-        {/* Bundle Grid - 2 columns on md, 1 on mobile, wider cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredBundles.length === 0 ? (
             <div className="col-span-full py-12 text-center">
@@ -741,331 +868,310 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
               <p className="text-sm text-white/40">No bundles found</p>
             </div>
           ) : (
-            filteredBundles.map((b) => {
-              return (
-                <button
-                  key={b.id}
-                  type="button"
-                  onClick={() => openBundle(b.id)}
-                  className="group relative flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition-all duration-300 hover:border-[#3ff387]/30 hover:bg-white/[0.06] hover:shadow-lg hover:shadow-[#3ff387]/5"
-                >
-                  {/* Top row: Icons + Risk */}
-                  <div className="flex items-start justify-between mb-4">
-                    <TokenIconsCompact symbols={b.symbols} />
-                    {riskPill(b.risk)}
+            filteredBundles.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => openBundle(b.id)}
+                className="group relative flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition-all duration-300 hover:border-emerald-300/30 hover:bg-white/[0.06] hover:shadow-lg hover:shadow-emerald-500/5"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex -space-x-3">
+                    {b.symbols.slice(0, 5).map((s) => {
+                      const meta = findTokenBySymbol(s);
+                      return (
+                        <div
+                          key={s}
+                          className="relative h-9 w-9 overflow-hidden rounded-full border-2 border-[#02010a] bg-zinc-800 ring-1 ring-white/10"
+                          title={s}
+                        >
+                          <Image
+                            src={meta?.logo || "/placeholder.svg"}
+                            alt={s}
+                            fill
+                            className="object-cover"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
+                  {riskPill(b.risk)}
+                </div>
 
-                  {/* Bundle info */}
-                  <div className="flex-1">
-                    <h4 className="text-base font-semibold text-white mb-1 group-hover:text-[#3ff387] transition-colors">
-                      {b.name}
-                    </h4>
-                    <p className="text-xs text-white/50 mb-3 line-clamp-2">
-                      {b.subtitle}
-                    </p>
-                  </div>
+                <div className="flex-1">
+                  <h4 className="text-base font-semibold text-white mb-1 group-hover:text-emerald-300 transition-colors">
+                    {b.name}
+                  </h4>
+                  <p className="text-xs text-white/50 mb-3 line-clamp-2">
+                    {b.subtitle}
+                  </p>
+                </div>
 
-                  {/* Footer */}
-                  <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                    <span className="text-xs text-white/40">
-                      {b.symbols.length} assets
-                    </span>
-                    <div className="flex items-center gap-1 text-xs font-medium text-[#3ff387] opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span>Invest</span>
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </div>
+                <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                  <span className="text-xs text-white/40">
+                    {b.symbols.length} assets
+                  </span>
+                  <div className="flex items-center gap-1 text-xs font-medium text-emerald-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span>Invest</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
                   </div>
-                </button>
-              );
-            })
+                </div>
+              </button>
+            ))
           )}
         </div>
       </div>
 
-      {/* Modal */}
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-          onClick={closeModal}
-        >
-          {/* Backdrop */}
-          <div className="absolute inset-0 bg-[#02010a]/90 backdrop-blur-md" />
-
-          {/* Modal Content */}
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl border border-white/10 bg-gradient-to-b from-zinc-900 to-[#02010a] shadow-2xl shadow-black/50"
-          >
-            {/* Progress Bar */}
-            {rows.length > 0 && (
-              <div className="absolute top-0 left-0 right-0 h-1 bg-white/5 rounded-t-3xl overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[#3ff387] to-[#3ff387]/70 transition-all duration-500 ease-out"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            )}
-
-            {/* Header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-zinc-900/95 backdrop-blur-sm px-6 py-5">
-              <div className="flex items-center gap-4">
-                {selected && (
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#3ff387]/20 to-[#3ff387]/5 ring-1 ring-[#3ff387]/20">
-                    {React.createElement(getRiskIcon(selected.risk), {
-                      className: "h-5 w-5 text-[#3ff387]",
-                    })}
-                  </div>
-                )}
-                <div>
-                  <h2 className="text-lg font-semibold text-white">
-                    {selected?.name ?? "Bundle"}
-                  </h2>
-                  <p className="text-sm text-white/50">
-                    {selected?.symbols.length} assets •{" "}
-                    <span className="capitalize">{selected?.risk}</span> risk
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={closeModal}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-white/60 transition-all hover:bg-white/10 hover:text-white"
+      {/* ───────── MODAL (DepositFlex theme) ───────── */}
+      {open && mounted
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+              onClick={onBackdropClick}
+            >
+              <div
+                className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+                onClick={(e) => e.stopPropagation()}
               >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-6 space-y-5">
-              {/* Amount Input - Only show before execution */}
-              {phase === "idle" && rows.length === 0 && (
-                <>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-                    <label className="text-xs font-medium text-white/50 mb-3 block uppercase tracking-wider">
-                      Investment Amount
-                    </label>
-
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-medium text-white/60">
-                        {displayCurrency}
-                      </span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={amountDisplay}
-                        onChange={(e) =>
-                          setAmountDisplay(cleanNumberInput(e.target.value))
-                        }
-                        placeholder="0.00"
-                        className="flex-1 bg-transparent text-3xl font-bold text-white outline-none placeholder:text-white/20"
-                      />
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-emerald-400" />
+                      <div className="text-sm font-semibold text-white/90 truncate">
+                        {selected?.name ?? "Bundle"}
+                      </div>
                     </div>
-
-                    <div className="mt-4 flex items-center justify-between text-sm">
-                      <span className="text-white/40">Available Balance</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAmountDisplay(availableBalance.toFixed(2))
-                        }
-                        className="font-medium text-[#3ff387] hover:text-[#3ff387]/80 transition-colors"
-                      >
-                        {availableBalance.toFixed(2)} {displayCurrency}
-                      </button>
+                    <div className="mt-1 text-xs text-white/45">
+                      {selected?.symbols.length ?? 0} assets •{" "}
+                      <span className="capitalize">{selected?.risk}</span> risk
                     </div>
                   </div>
 
-                  {/* Distribution Preview */}
-                  {perTokenDisplay > 0 && (
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-xs font-medium text-white/50 uppercase tracking-wider">
-                          Distribution Preview
+                  <button
+                    onClick={close}
+                    disabled={modalKind === "processing"}
+                    className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition disabled:opacity-50"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* INPUT VIEW */}
+                {modalKind === "input" && (
+                  <>
+                    <div className="mt-4">
+                      <label className="text-xs text-white/50">Amount</label>
+                      <div className="mt-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
+                        <span className="text-xs text-white/50 px-2">
+                          {displayCurrency}
                         </span>
-                        <span className="text-xs text-[#3ff387]/80 bg-[#3ff387]/10 px-2 py-1 rounded-full">
-                          Equal weight
-                        </span>
+                        <input
+                          value={amountRaw}
+                          onChange={(e) =>
+                            setAmountRaw(clampMoneyInput(e.target.value))
+                          }
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          className="w-full bg-transparent text-sm text-white/90 outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={ctxLoading}
+                          onClick={() =>
+                            setAmountRaw(ctxUsdcDisplay.toFixed(2))
+                          }
+                          className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 hover:text-white/90 disabled:opacity-60"
+                        >
+                          Max
+                        </button>
                       </div>
 
-                      <div className="space-y-3">
+                      {!ownerReady && (
+                        <div className="mt-2 text-xs text-rose-200/80">
+                          Wallet not connected.
+                        </div>
+                      )}
+                      {!ctxLoading &&
+                        amountNum > ctxUsdcDisplay &&
+                        amountNum > 0 && (
+                          <div className="mt-2 text-xs text-rose-200/80">
+                            Amount exceeds available balance.
+                          </div>
+                        )}
+                    </div>
+
+                    {/* Summary */}
+                    {amountNum > 0 && (
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] text-white/45">
+                            You invest
+                          </div>
+                          <div className="text-sm font-semibold text-white/85">
+                            {formatMoney(amountNum, displayCurrency)}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between">
+                          <div className="text-[11px] text-white/45">
+                            Allocations
+                          </div>
+                          <div className="text-sm font-semibold text-emerald-300">
+                            Equal weight
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Allocation Preview */}
+                    {amountNum > 0 && (
+                      <div className="mt-4 space-y-2 max-h-[240px] overflow-y-auto pr-1">
                         {(selected?.symbols ?? []).map((s) => {
-                          const meta = findTokenBySymbol(s);
+                          const per =
+                            amountNum / (selected?.symbols.length || 1);
                           return (
-                            <div
+                            <TokenRowCompact
                               key={s}
-                              className="flex items-center justify-between py-2 px-3 rounded-xl bg-white/[0.02] border border-white/5"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="relative h-8 w-8 rounded-full overflow-hidden bg-zinc-800 ring-1 ring-white/10">
-                                  <Image
-                                    src={meta?.logo || "/placeholder.svg"}
-                                    alt={s}
-                                    fill
-                                    className="object-cover"
-                                  />
-                                </div>
-                                <span className="text-sm font-medium text-white">
-                                  {s}
-                                </span>
-                              </div>
-                              <span className="text-sm font-medium text-white/70">
-                                {perTokenDisplay.toFixed(2)} {displayCurrency}
-                              </span>
-                            </div>
+                              symbol={s}
+                              amountLabel={`${formatMoney(per, displayCurrency)}`}
+                              status="idle"
+                            />
                           );
                         })}
                       </div>
-                    </div>
-                  )}
-                </>
-              )}
+                    )}
 
-              {/* Execution Status */}
-              {rows.length > 0 && (
-                <div className="space-y-3">
-                  {/* Phase indicator */}
-                  {isExecuting && (
-                    <div className="flex items-center justify-center gap-3 py-4 px-4 rounded-2xl bg-[#3ff387]/5 border border-[#3ff387]/20">
-                      <Loader2 className="h-5 w-5 animate-spin text-[#3ff387]" />
-                      <span className="text-sm font-medium text-[#3ff387]">
-                        {phaseLabel}
-                      </span>
-                    </div>
-                  )}
+                    <button
+                      disabled={!canSubmit}
+                      onClick={onBuyBundle}
+                      className={[
+                        "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
+                        canSubmit
+                          ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25 active:scale-[0.98]"
+                          : "bg-white/5 border-white/10 text-white/35 cursor-not-allowed",
+                      ].join(" ")}
+                    >
+                      Invest
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
 
-                  {rows.map((r) => {
-                    const meta = findTokenBySymbol(r.symbol);
-                    const isDone = r.status === "done";
-                    const isError = r.status === "error";
-                    const isActive = [
-                      "building",
-                      "signing",
-                      "sending",
-                    ].includes(r.status);
-
-                    return (
-                      <div
-                        key={r.symbol}
-                        className={`flex items-center justify-between rounded-2xl border p-4 transition-all ${
-                          isDone
-                            ? "border-[#3ff387]/30 bg-[#3ff387]/5"
-                            : isError
-                              ? "border-red-500/30 bg-red-500/5"
-                              : isActive
-                                ? "border-[#3ff387]/20 bg-[#3ff387]/5"
-                                : "border-white/10 bg-white/[0.02]"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="relative h-10 w-10 rounded-full overflow-hidden bg-zinc-800 ring-1 ring-white/10">
-                            <Image
-                              src={meta?.logo || "/placeholder.svg"}
-                              alt={r.symbol}
-                              fill
-                              className="object-cover"
-                            />
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-white">
-                              {r.symbol}
-                            </p>
-                            <p className="text-xs text-white/50">
-                              {r.amountDisplay.toFixed(2)} {displayCurrency}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {isDone && (
-                            <CheckCircle2 className="h-6 w-6 text-[#3ff387]" />
-                          )}
-                          {isError && (
-                            <XCircle className="h-6 w-6 text-red-400" />
-                          )}
-                          {isActive && (
-                            <Loader2 className="h-6 w-6 text-[#3ff387] animate-spin" />
-                          )}
-                          {r.status === "idle" && (
-                            <div className="h-6 w-6 rounded-full border-2 border-white/20" />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {/* Error Summary */}
-                  {hasErrors && !isExecuting && (
-                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5">
-                      <div className="flex items-start gap-4">
-                        <AlertTriangle className="h-6 w-6 text-amber-400 shrink-0" />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-amber-200">
-                            Some transactions failed
-                          </p>
-                          <button
-                            type="button"
-                            onClick={retryFailed}
-                            className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-amber-400 hover:text-amber-300 transition-colors"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                            Retry failed transactions
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Global Error */}
-                  {globalError && (
-                    <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-5">
-                      <p className="text-sm text-red-300">{globalError}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* CTA Button */}
-              <button
-                type="button"
-                onClick={allDone ? closeModal : startBundleBuy}
-                disabled={(!canBuy && !allDone) || isExecuting}
-                className={`w-full rounded-2xl py-4 text-base font-bold transition-all ${
-                  allDone
-                    ? "bg-[#3ff387] text-[#02010a] hover:bg-[#3ff387]/90 shadow-lg shadow-[#3ff387]/20"
-                    : canBuy && !isExecuting
-                      ? "bg-[#3ff387] text-[#02010a] hover:bg-[#3ff387]/90 shadow-lg shadow-[#3ff387]/20"
-                      : "bg-white/5 text-white/30 cursor-not-allowed"
-                }`}
-              >
-                {isExecuting ? (
-                  <span className="flex items-center justify-center gap-3">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    {phaseLabel}
-                  </span>
-                ) : allDone ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <CheckCircle2 className="h-5 w-5" />
-                    Complete
-                  </span>
-                ) : (
-                  <span className="flex items-center justify-center gap-2">
-                    Purchase Bundle
-                    <ArrowRight className="h-5 w-5" />
-                  </span>
+                    <button
+                      type="button"
+                      onClick={close}
+                      className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/60 hover:text-white/80 hover:bg-white/10 transition"
+                    >
+                      Cancel
+                    </button>
+                  </>
                 )}
-              </button>
 
-              {/* Footer Note */}
-              {phase === "idle" && rows.length === 0 && (
-                <p className="text-center text-xs text-white/40">
-                  All transactions execute in parallel for maximum speed
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+                {/* PROCESSING / SUCCESS / ERROR VIEW */}
+                {modalKind !== "input" && (
+                  <>
+                    <div className="flex flex-col items-center text-center pt-4">
+                      <StageIcon icon={stage.icon} />
+                      <div className="mt-4">
+                        <div className="text-base font-semibold text-white/90">
+                          {stage.title}
+                        </div>
+                        <div className="mt-1 text-sm text-white/50">
+                          {stage.subtitle}
+                        </div>
+                      </div>
+
+                      <div className="mt-5 w-full max-w-[220px]">
+                        <ProgressBar progress={progress} />
+                      </div>
+                    </div>
+
+                    {/* Per-token status list */}
+                    {rows.length > 0 && (
+                      <div className="mt-5 space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                        {rows.map((r) => (
+                          <TokenRowCompact
+                            key={r.symbol}
+                            symbol={r.symbol}
+                            amountLabel={`${formatMoney(r.amountDisplay, displayCurrency)}`}
+                            status={r.status}
+                            sig={r.sig}
+                            error={r.error}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Error message */}
+                    {modalKind === "error" && globalError && (
+                      <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
+                        <div className="text-xs text-rose-200/80 text-center">
+                          {globalError}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Retry failed */}
+                    {modalKind === "error" && hasErrors && (
+                      <button
+                        onClick={retryFailed}
+                        className="mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-white/10 border-white/10 text-white/80 hover:bg-white/15 flex items-center justify-center gap-2"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Retry failed
+                      </button>
+                    )}
+
+                    {/* Success helper */}
+                    {modalKind === "success" && allDone && (
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-xs text-white/50 text-center">
+                          Your bundle is complete.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Done / Close + View Assets */}
+                    {modalKind !== "processing" && (
+                      <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {/* Close / Done */}
+                        <button
+                          onClick={close}
+                          className={[
+                            "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
+                            modalKind === "success"
+                              ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25"
+                              : "bg-white/10 border-white/10 text-white/80 hover:bg-white/15",
+                          ].join(" ")}
+                        >
+                          {modalKind === "success" ? "Done" : "Close"}
+                        </button>
+
+                        {/* View Assets */}
+                        <Link
+                          href="/invest"
+                          className="w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border
+                 bg-white/5 border-white/10 text-white/70
+                 hover:bg-white/10 hover:text-white
+                 flex items-center justify-center gap-2"
+                        >
+                          View assets
+                          <ArrowRight className="h-4 w-4 opacity-70" />
+                        </Link>
+                      </div>
+                    )}
+
+                    {/* Processing footer */}
+                    {modalKind === "processing" && (
+                      <div className="mt-6 text-center text-xs text-white/30">
+                        Please keep window open
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </>
   );
 }

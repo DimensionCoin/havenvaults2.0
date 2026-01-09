@@ -15,6 +15,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
 } from "@solana/spl-token";
+import { Buffer } from "buffer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,20 +34,21 @@ const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
 const FEE_RATE_RAW = process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0.01";
 
-// Pre-parse at module load
 const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
 const TREASURY_OWNER = new PublicKey(TREASURY_OWNER_STR);
 
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
 const JUP_SWAP_IXS = "https://api.jup.ag/swap/v1/swap-instructions";
 
-const MAX_ENCODED_LEN = 1644;
+// ✅ Real Solana v0 raw tx limit (bytes)
+const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 );
 
-// Connection singleton (reuse across requests)
+/* ───────── Singletons ───────── */
+
 let _conn: Connection | null = null;
 function getConnection(): Connection {
   if (!_conn) {
@@ -60,14 +62,12 @@ function getConnection(): Connection {
 
 /* ───────── CACHES ───────── */
 
-// Token program cache (mint -> TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID)
 const tokenProgramCache = new Map<string, PublicKey>();
-
-// Decimals cache (mint -> decimals)
 const decimalsCache = new Map<string, number>();
-
-// ALT cache with TTL (5 min)
-const altCache = new Map<string, { account: AddressLookupTableAccount; expires: number }>();
+const altCache = new Map<
+  string,
+  { account: AddressLookupTableAccount; expires: number }
+>();
 const ALT_CACHE_TTL = 5 * 60 * 1000;
 
 /* ───────── HELPERS ───────── */
@@ -87,7 +87,10 @@ function jsonError(
   return NextResponse.json(payload, { status });
 }
 
-async function getTokenProgramId(conn: Connection, mint: PublicKey): Promise<PublicKey> {
+async function getTokenProgramId(
+  conn: Connection,
+  mint: PublicKey
+): Promise<PublicKey> {
   const key = mint.toBase58();
   const cached = tokenProgramCache.get(key);
   if (cached) return cached;
@@ -103,34 +106,31 @@ async function getTokenProgramId(conn: Connection, mint: PublicKey): Promise<Pub
   return programId;
 }
 
-async function getDecimals(conn: Connection, mint: PublicKey, programId: PublicKey): Promise<number> {
+async function getDecimals(conn: Connection, mint: PublicKey): Promise<number> {
   const key = mint.toBase58();
   const cached = decimalsCache.get(key);
   if (cached !== undefined) return cached;
 
-  // Read mint account directly (faster than getMint)
   const info = await conn.getAccountInfo(mint, "confirmed");
   if (!info?.data || info.data.length < 45) {
     throw new Error(`Invalid mint account: ${key}`);
   }
-
-  // Decimals is at offset 44 for both TOKEN_PROGRAM and TOKEN_2022
   const decimals = info.data[44];
   decimalsCache.set(key, decimals);
   return decimals;
 }
 
-async function getAltCached(conn: Connection, key: string): Promise<AddressLookupTableAccount | null> {
+async function getAltCached(
+  conn: Connection,
+  key: string
+): Promise<AddressLookupTableAccount | null> {
   const now = Date.now();
   const cached = altCache.get(key);
-  if (cached && cached.expires > now) {
-    return cached.account;
-  }
+  if (cached && cached.expires > now) return cached.account;
 
   const { value } = await conn.getAddressLookupTable(new PublicKey(key));
-  if (value) {
+  if (value)
     altCache.set(key, { account: value, expires: now + ALT_CACHE_TTL });
-  }
   return value;
 }
 
@@ -189,6 +189,7 @@ async function jupFetch(url: string, init?: RequestInit) {
   });
 }
 
+// Convert Jupiter ATA creates to sponsored payer
 function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   const sponsored: TransactionInstruction[] = [];
   const nonAta: TransactionInstruction[] = [];
@@ -299,19 +300,14 @@ export async function POST(req: Request) {
 
     const conn = getConnection();
 
-    /* ───────── PARALLEL: Token programs + decimals ───────── */
     stage = "tokenInfo";
-
-    const [inputProgId, outputProgId] = await Promise.all([
+    const [inputProgId, outputProgId, inputDecimals] = await Promise.all([
       getTokenProgramId(conn, inputMint),
       getTokenProgramId(conn, outputMint),
+      getDecimals(conn, inputMint),
     ]);
 
-    const inputDecimals = await getDecimals(conn, inputMint, inputProgId);
-
-    /* ───────── Derive ATAs ───────── */
     stage = "deriveATAs";
-
     const userInputAta = getAssociatedTokenAddressSync(
       inputMint,
       userOwner,
@@ -331,10 +327,10 @@ export async function POST(req: Request) {
       inputProgId
     );
 
-    /* ───────── Amount + Balance check ───────── */
     stage = "amount";
-
-    const balResp = await conn.getTokenAccountBalance(userInputAta, "confirmed").catch(() => null);
+    const balResp = await conn
+      .getTokenAccountBalance(userInputAta, "confirmed")
+      .catch(() => null);
     const available = Number(balResp?.value?.amount || "0");
 
     let amountUnits = 0;
@@ -381,9 +377,7 @@ export async function POST(req: Request) {
       }
     }
 
-    /* ───────── Fee calculation ───────── */
     stage = "fee";
-
     const { feeUnits, feeBps, feeRate } = computeFeeUnits(amountUnits);
     const netUnits = Math.max(amountUnits - feeUnits, 0);
 
@@ -398,15 +392,15 @@ export async function POST(req: Request) {
       });
     }
 
-    /* ───────── PARALLEL: Quote + Blockhash ───────── */
     stage = "quoteAndBlockhash";
-
-    const quoteUrl = `${JUP_QUOTE}?` + new URLSearchParams({
-      inputMint: inputMint.toBase58(),
-      outputMint: outputMint.toBase58(),
-      amount: String(netUnits),
-      slippageBps: String(slippageBps),
-    });
+    const quoteUrl =
+      `${JUP_QUOTE}?` +
+      new URLSearchParams({
+        inputMint: inputMint.toBase58(),
+        outputMint: outputMint.toBase58(),
+        amount: String(netUnits), // ✅ swap uses net after fee
+        slippageBps: String(slippageBps),
+      });
 
     const [quoteRes, blockhashData] = await Promise.all([
       jupFetch(quoteUrl),
@@ -414,7 +408,6 @@ export async function POST(req: Request) {
     ]);
 
     if (!quoteRes.ok) {
-      const text = await quoteRes.text().catch(() => "");
       return jsonError(quoteRes.status, {
         code: "JUP_QUOTE_FAILED",
         error: `Quote failed: ${quoteRes.status}`,
@@ -427,9 +420,7 @@ export async function POST(req: Request) {
 
     const quoteResponse = await quoteRes.json();
 
-    /* ───────── Swap instructions ───────── */
     stage = "swapInstructions";
-
     const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -438,10 +429,11 @@ export async function POST(req: Request) {
         userPublicKey: userOwner.toBase58(),
         wrapAndUnwrapSol: false,
         dynamicComputeUnitLimit: true,
+        // Keep this modest; you don’t want to pay huge priority fees on bundles
         prioritizationFeeLamports: {
           priorityLevelWithMaxLamports: {
-            maxLamports: 1_000_000,
-            priorityLevel: "veryHigh",
+            maxLamports: 400_000,
+            priorityLevel: "high",
           },
         },
       }),
@@ -458,7 +450,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const swapData = await swapIxRes.json() as {
+    const swapData = (await swapIxRes.json()) as {
       setupInstructions?: unknown[];
       swapInstruction?: unknown;
       cleanupInstructions?: unknown[];
@@ -476,106 +468,77 @@ export async function POST(req: Request) {
       });
     }
 
-    /* ───────── Load ALTs (parallel, cached) ───────── */
     stage = "loadALTs";
-
     const altKeys = swapData.addressLookupTableAddresses ?? [];
     const altAccounts = (
       await Promise.all(altKeys.map((k) => getAltCached(conn, k)))
     ).filter((a): a is AddressLookupTableAccount => a !== null);
 
-    /* ───────── Build instructions ───────── */
     stage = "buildInstructions";
 
+    // Jupiter setup (ATA creates etc) rewritten as sponsored, and deduped
     const setupIxs = (swapData.setupInstructions ?? []).map(toIx);
-    const { sponsoredAtaIxs, nonAtaSetupIxs } = rebuildAtaCreatesAsSponsored(setupIxs);
+    const { sponsoredAtaIxs, nonAtaSetupIxs } =
+      rebuildAtaCreatesAsSponsored(setupIxs);
 
-    const mustHaveAtas = [
-      createAssociatedTokenAccountIdempotentInstruction(
-        HAVEN_FEEPAYER,
-        userInputAta,
-        userOwner,
-        inputMint,
-        inputProgId
-      ),
-      createAssociatedTokenAccountIdempotentInstruction(
-        HAVEN_FEEPAYER,
-        userOutputAta,
-        userOwner,
-        outputMint,
-        outputProgId
-      ),
+    // ✅ Treasury ATA for the input mint (this is the only ATA we MUST add)
+    const treasuryAtaCreateIx =
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER,
         treasuryInputAta,
         TREASURY_OWNER,
         inputMint,
         inputProgId
-      ),
-    ];
-
-    const feeIx = feeUnits > 0
-      ? createTransferCheckedInstruction(
-          userInputAta,
-          inputMint,
-          treasuryInputAta,
-          userOwner,
-          feeUnits,
-          inputDecimals,
-          [],
-          inputProgId
-        )
-      : null;
-
-    const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
-
-    const ixsWithFee = [
-      ...mustHaveAtas,
-      ...sponsoredAtaIxs,
-      ...nonAtaSetupIxs,
-      toIx(swapData.swapInstruction),
-      ...(feeIx ? [feeIx] : []),
-      ...cleanupIxs,
-    ];
-
-    const ixsNoFee = [
-      ...mustHaveAtas,
-      ...sponsoredAtaIxs,
-      ...nonAtaSetupIxs,
-      toIx(swapData.swapInstruction),
-      ...cleanupIxs,
-    ];
-
-    /* ───────── Compile transaction ───────── */
-    stage = "compile";
-
-    const { blockhash, lastValidBlockHeight } = blockhashData;
-
-    const compile = (ixs: TransactionInstruction[]) =>
-      new VersionedTransaction(
-        new TransactionMessage({
-          payerKey: HAVEN_FEEPAYER,
-          recentBlockhash: blockhash,
-          instructions: ixs,
-        }).compileToV0Message(altAccounts)
       );
 
-    let tx = compile(ixsWithFee);
-    let encodedLen = tx.serialize().length;
+    // ✅ Fee transfer ALWAYS included when feeUnits > 0
+    const feeIx =
+      feeUnits > 0
+        ? createTransferCheckedInstruction(
+            userInputAta,
+            inputMint,
+            treasuryInputAta,
+            userOwner,
+            feeUnits,
+            inputDecimals,
+            [],
+            inputProgId
+          )
+        : null;
 
-    let postChargeFeeUnits: number | null = null;
-    if (feeIx && encodedLen > MAX_ENCODED_LEN) {
-      tx = compile(ixsNoFee);
-      encodedLen = tx.serialize().length;
-      postChargeFeeUnits = feeUnits;
-    }
+    const swapIx = toIx(swapData.swapInstruction);
+    const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
 
-    if (encodedLen > MAX_ENCODED_LEN) {
+    // IMPORTANT: fee transfer BEFORE swap so swap only needs netUnits available
+    const ixs: TransactionInstruction[] = [
+      ...sponsoredAtaIxs,
+      ...nonAtaSetupIxs,
+      treasuryAtaCreateIx,
+      ...(feeIx ? [feeIx] : []),
+      swapIx,
+      ...cleanupIxs,
+    ];
+
+    stage = "compile";
+    const { blockhash, lastValidBlockHeight } = blockhashData;
+
+    const tx = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: HAVEN_FEEPAYER,
+        recentBlockhash: blockhash,
+        instructions: ixs,
+      }).compileToV0Message(altAccounts)
+    );
+
+    const rawLen = tx.serialize().length;
+    if (rawLen > MAX_TX_RAW_BYTES) {
+      // ✅ Never drop fee; just fail clearly so you don’t miss revenue
       return jsonError(413, {
         code: "TX_TOO_LARGE",
-        error: `Size ${encodedLen} > ${MAX_ENCODED_LEN}`,
-        userMessage: "This route is too complex.",
-        tip: "Try a smaller amount or different pair.",
+        error: `Raw size ${rawLen} > ${MAX_TX_RAW_BYTES}`,
+        userMessage:
+          "This swap route is too large (fees are required). Try a smaller amount or a different pair.",
+        tip: "If this happens often for a mint, pre-create the treasury ATA for it.",
         stage,
         traceId,
       });
@@ -584,25 +547,40 @@ export async function POST(req: Request) {
     const b64 = Buffer.from(tx.serialize()).toString("base64");
     const buildTime = Date.now() - startTime;
 
-    console.log(`[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0,8)}→${outputMintStr.slice(0,8)} amt=${amountUnits}`);
+    console.log(
+      `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(
+        0,
+        8
+      )}→${outputMintStr.slice(0, 8)} gross=${amountUnits} feeUnits=${feeUnits}`
+    );
 
     return NextResponse.json({
       transaction: b64,
       recentBlockhash: blockhash,
       lastValidBlockHeight,
       traceId,
+
+      // fee details for UI / analytics
       feeUnits,
       feeBps,
       feeRate,
       feeMint: inputMint.toBase58(),
       feeDecimals: inputDecimals,
-      postChargeFeeUnits,
+
+      // legacy shape
+      postChargeFeeUnits: null,
       grossInUnits: amountUnits,
       netInUnits: netUnits,
       isMax,
       inputMint: inputMint.toBase58(),
       outputMint: outputMint.toBase58(),
       buildTimeMs: buildTime,
+
+      // useful audit data
+      treasuryOwner: TREASURY_OWNER.toBase58(),
+      treasuryFeeAta: treasuryInputAta.toBase58(),
+      userInputAta: userInputAta.toBase58(),
+      userOutputAta: userOutputAta.toBase58(),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
