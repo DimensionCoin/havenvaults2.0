@@ -35,13 +35,13 @@ const BottomBar: React.FC = () => {
       className={[
         "fixed inset-x-0 bottom-0 z-40 md:hidden",
         // safe area + spacing like native apps
-        "pb-[calc(env(safe-area-inset-bottom)+10px)]",
+        "pb-[calc(env(safe-area-inset-bottom)+2px)]",
       ].join(" ")}
       aria-label="Primary"
     >
-      <div className="mx-auto max-w-md px-3">
+      <div className="mx-auto max-w-md px-2">
         {/* Haven bottom nav primitive */}
-        <div className="haven-bottom-nav">
+        <div className="haven-bottom-nav px-6">
           <div className="flex items-end justify-between gap-1">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
