@@ -173,7 +173,12 @@ const OpenPositionsMini: React.FC = () => {
       </div>
 
       {!hasPositions ? (
-        <Link href="/amplify" className="block" aria-label="Open Amplify page">
+        <Link
+          href="/amplify?tab=multiplier"
+          className="block"
+          aria-label="Open Amplify page"
+        >
+          
           <div className="rounded-2xl border border-dashed border-border bg-background/40 py-6 text-center transition hover:bg-accent">
             <p className="text-sm font-medium text-foreground">
               No open positions

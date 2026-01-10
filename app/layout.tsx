@@ -10,31 +10,36 @@ import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 import ThemeProvider from "@/providers/ThemeProvider";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://havenfinancial.xyz"), // ✅ IMPORTANT
+
   title: "Haven Vaults",
   description: "Best app for financial growth.",
   manifest: "/manifest.json",
   themeColor: "#02010a",
+
   openGraph: {
     title: "Haven Vaults",
     description: "Best app for financial growth.",
     url: "https://havenfinancial.xyz",
-    siteName: "Haven Vaults",
+    siteName: "Haven Financial",
     images: [
       {
-        url: "/twitter.png",
+        url: "https://havenfinancial.xyz/twitter.png", // ✅ absolute
         width: 1200,
         height: 630,
-        alt: "Haven Vaults",
+        alt: "Haven Financial",
       },
     ],
     type: "website",
   },
+
   twitter: {
     card: "summary_large_image",
-    title: "Haven Vaults",
+    title: "Haven Financial",
     description: "Best app for financial growth.",
-    images: ["/twitter.png"],
+    images: ["https://havenfinancial.xyz/twitter.png"], // ✅ absolute
   },
+
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -88,8 +93,6 @@ export default function RootLayout({
           <PrivyProviders>
             <UserProvider>
               <PwaRegister />
-
-              {/* App shell wrapper handles scrolling like a native app */}
               <div
                 id="app"
                 className="h-[100dvh] w-full overflow-y-auto overscroll-contain"

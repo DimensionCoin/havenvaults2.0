@@ -20,7 +20,7 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { href: "/invest", label: "Invest", Icon: LineChart, center: false },
+  { href: "/invest", label: "Assets", Icon: LineChart, center: false },
   { href: "/exchange", label: "Markets", Icon: ArrowDownUp, center: false },
   { href: "/dashboard", label: "Home", Icon: null, center: true },
   { href: "/amplify", label: "Amplify", Icon: Zap, center: false },
@@ -34,15 +34,16 @@ const BottomBar: React.FC = () => {
     <nav
       className={[
         "fixed inset-x-0 bottom-0 z-40 md:hidden",
-        // safe area + spacing like native apps
-        "pb-[calc(env(safe-area-inset-bottom)+2px)]",
+        // ✅ don’t pad the nav itself (this is what was lifting it)
+        "pb-0",
       ].join(" ")}
       aria-label="Primary"
     >
       <div className="mx-auto max-w-md px-2">
-        {/* Haven bottom nav primitive */}
+        {/* Background container */}
         <div className="haven-bottom-nav px-6">
-          <div className="flex items-end justify-between gap-1">
+          {/* ✅ Actual nav content (sits low + tiny padding) */}
+          <div className="flex items-end justify-between gap-1 pb-2 pt-2">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
                 href === "/dashboard"
@@ -114,6 +115,9 @@ const BottomBar: React.FC = () => {
               );
             })}
           </div>
+
+          {/* ✅ Safe-area spacer BELOW content (extends background down without lifting icons) */}
+          <div aria-hidden className="h-[env(safe-area-inset-bottom)]" />
         </div>
       </div>
     </nav>

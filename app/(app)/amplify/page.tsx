@@ -1,12 +1,7 @@
 "use client";
 
-import React, {
-  useMemo,
-  useState,
-  useCallback,
-  useEffect,
-  useRef,
-} from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import AmplifyHeader from "@/components/amplify/AmplifyHeader";
 import PriceChartPanel from "@/components/amplify/PriceChartPanel";
@@ -14,6 +9,7 @@ import MultiplierPanel from "@/components/amplify/MultiplierPanel";
 import PredictionMarketsPanel from "@/components/amplify/PredictionMarketsPanel";
 import PositionsPanel from "@/components/amplify/PositionsPanel";
 import BundlesPanel from "@/components/bundles/BundlesPanel";
+import Chat from "@/components/robo/Chat";
 
 import type {
   AmplifyTokenSymbol,
@@ -45,15 +41,28 @@ type AmplifyTab = "multiplier" | "bundles" | "robo" | "predict";
 
 const TAB_META: Record<
   AmplifyTab,
-  { label: string; icon: React.ReactNode; badge?: string }
+  { label: string; shortLabel: string; icon: React.ReactNode; badge?: string }
 > = {
+  bundles: {
+    label: "Bundles",
+    shortLabel: "Bundles",
+    icon: <Layers className="h-3.5 w-3.5" />,
+  },
+  robo: {
+    label: "Robo Invest",
+    shortLabel: "Robo",
+    icon: <Bot className="h-3.5 w-3.5" />,
+  },
   multiplier: {
     label: "Multiplier",
+    shortLabel: "Multi",
     icon: <BarChart3 className="h-3.5 w-3.5" />,
   },
-  bundles: { label: "Bundles", icon: <Layers className="h-3.5 w-3.5" /> },
-  robo: { label: "Robo Invest", icon: <Bot className="h-3.5 w-3.5" /> },
-  predict: { label: "Predict", icon: <Sparkles className="h-3.5 w-3.5" /> },
+  predict: {
+    label: "Predict",
+    shortLabel: "Predict",
+    icon: <Sparkles className="h-3.5 w-3.5" />,
+  },
 };
 
 function TabBar({
@@ -63,105 +72,71 @@ function TabBar({
   activeTab: AmplifyTab;
   onTabChange: (t: AmplifyTab) => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const activeRef = useRef<HTMLButtonElement>(null);
-
   const tabs = useMemo(() => {
     return (Object.keys(TAB_META) as AmplifyTab[]).map((id) => ({
       id,
       label: TAB_META[id].label,
+      shortLabel: TAB_META[id].shortLabel,
       icon: TAB_META[id].icon,
       badge: TAB_META[id].badge,
     }));
   }, []);
 
-  useEffect(() => {
-    if (activeRef.current && scrollRef.current) {
-      const container = scrollRef.current;
-      const button = activeRef.current;
-      const containerRect = container.getBoundingClientRect();
-      const buttonRect = button.getBoundingClientRect();
-
-      if (buttonRect.left < containerRect.left) {
-        container.scrollLeft -= containerRect.left - buttonRect.left + 16;
-      } else if (buttonRect.right > containerRect.right) {
-        container.scrollLeft += buttonRect.right - containerRect.right + 16;
-      }
-    }
-  }, [activeTab]);
-
   return (
-    <div
-      ref={scrollRef}
-      className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1"
-    >
-      {tabs.map((tab) => {
-        const isActive = activeTab === tab.id;
-        const showCount = !!tab.badge;
+    <div className="w-full">
+      <div className="grid w-full grid-cols-4 gap-1.5">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const showCount = !!tab.badge;
 
-        return (
-          <button
-            key={tab.id}
-            ref={isActive ? activeRef : undefined}
-            type="button"
-            onClick={() => onTabChange(tab.id)}
-            className={[
-              "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
-              "border focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
-              isActive
-                ? "bg-primary text-primary-foreground border-primary/25"
-                : "bg-card/40 text-muted-foreground border-border/60 hover:bg-card/60 hover:text-foreground",
-            ].join(" ")}
-          >
-            {tab.icon}
-            <span className="whitespace-nowrap">{tab.label}</span>
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => onTabChange(tab.id)}
+              className={[
+                "w-full min-w-0",
+                "inline-flex items-center justify-center gap-1.5 rounded-full",
+                "flex-col px-2 py-2 text-[11px] sm:flex-row sm:px-3 sm:py-1.5 sm:text-xs",
+                "font-semibold transition-all border",
+                "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
+                isActive
+                  ? "bg-primary text-primary-foreground border-primary/25"
+                  : "bg-card/40 text-muted-foreground border-border/60 hover:bg-card/60 hover:text-foreground",
+              ].join(" ")}
+            >
+              {tab.icon}
 
-            {showCount && (
-              <span
-                className={[
-                  "rounded-full px-1.5 py-0.5 text-[10px] border",
-                  isActive
-                    ? "bg-primary-foreground/10 text-primary-foreground border-primary-foreground/15"
-                    : "bg-card/60 text-muted-foreground border-border/60",
-                ].join(" ")}
-              >
-                {tab.badge}
+              <span className="min-w-0 truncate leading-none">
+                <span className="sm:hidden">{tab.shortLabel}</span>
+                <span className="hidden sm:inline">{tab.label}</span>
               </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
-function PlaceholderPanel({
-  title,
-  subtitle,
-}: {
-  title: string;
-  subtitle: string;
-}) {
-  return (
-    <div className="glass-panel bg-card/30 p-5">
-      <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/40 px-3 py-1.5 text-xs font-semibold text-foreground/85">
-        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-        {title}
-      </div>
-
-      <div className="mt-3 rounded-2xl border border-border/60 bg-card/30 p-4">
-        <div className="text-sm font-semibold text-foreground/90">
-          {subtitle}
-        </div>
-        <div className="mt-1 text-xs text-muted-foreground">
-          Replace this panel with the real components/layout for this tab.
-        </div>
+              {showCount && (
+                <span
+                  className={[
+                    "hidden sm:inline-flex",
+                    "rounded-full px-1.5 py-0.5 text-[10px] border",
+                    isActive
+                      ? "bg-primary-foreground/10 text-primary-foreground border-primary-foreground/15"
+                      : "bg-card/60 text-muted-foreground border-border/60",
+                  ].join(" ")}
+                >
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
 export default function AmplifyPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const { user } = useUser();
   const ownerBase58 = (user?.walletAddress || "").trim();
 
@@ -177,17 +152,37 @@ export default function AmplifyPage() {
   const [activeSymbol, setActiveSymbol] = useState<AmplifyTokenSymbol>("SOL");
   const [chartTf, setChartTf] = useState<ChartTimeframe>("1D");
 
-  const [tab, setTab] = useState<AmplifyTab>("multiplier");
+  const isAmplifyTab = (v: string | null): v is AmplifyTab =>
+    v === "multiplier" || v === "bundles" || v === "robo" || v === "predict";
 
-  // ✅ FIX: these hooks MUST be inside the component
+  const [tab, setTab] = useState<AmplifyTab>(() => {
+    const t = searchParams?.get("tab");
+    return isAmplifyTab(t) ? t : "multiplier";
+  });
+
   const [predictTf, setPredictTf] = useState<PredictionTimeframe>("daily");
+
+  useEffect(() => {
+    const t = searchParams?.get("tab");
+    if (isAmplifyTab(t) && t !== tab) setTab(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const handleTabChange = useCallback(
+    (next: AmplifyTab) => {
+      setTab(next);
+      const params = new URLSearchParams(searchParams?.toString());
+      params.set("tab", next);
+      router.replace(`/amplify?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams]
+  );
 
   const activeMeta = useMemo(
     () => findTokenBySymbol(activeSymbol),
     [activeSymbol]
   );
 
-  // multiplier + predict share the same layout
   const isTradingStyleTab = tab === "multiplier" || tab === "predict";
 
   const market = useAmplifyCoingecko({
@@ -254,10 +249,10 @@ export default function AmplifyPage() {
   }, [booster.rows]);
 
   return (
-    <div className="min-h-screen text-foreground">
+    <div className="min-h-screen text-foreground overflow-x-hidden">
       <div className="mx-auto w-full max-w-6xl px-3 pb-12 pt-4 sm:px-4 lg:px-6">
         <div className="mb-3 space-y-3">
-          <TabBar activeTab={tab} onTabChange={setTab} />
+          <TabBar activeTab={tab} onTabChange={handleTabChange} />
 
           {isTradingStyleTab && (
             <AmplifyHeader
@@ -299,7 +294,6 @@ export default function AmplifyPage() {
               />
             ) : (
               <div className="relative">
-                {/* The real panel stays mounted, but is blurred/disabled */}
                 <div className="pointer-events-none select-none blur-[1px] opacity-70">
                   <PredictionMarketsPanel
                     tokenSymbol={activeSymbol}
@@ -312,7 +306,6 @@ export default function AmplifyPage() {
                   />
                 </div>
 
-                {/* Overlay */}
                 <div className="absolute inset-0 rounded-3xl border border-border/60 bg-background/40 backdrop-blur-sm">
                   <div className="flex h-full w-full items-center justify-center p-6">
                     <div className="text-center">
@@ -366,14 +359,11 @@ export default function AmplifyPage() {
           <div className="space-y-4">
             <BundlesPanel ownerBase58={ownerBase58} />
           </div>
-        ) : (
-          <div className="space-y-4">
-            <PlaceholderPanel
-              title="Robo Invest"
-              subtitle="Set a risk level and let Haven auto-rebalance."
-            />
+        ) : tab === "robo" ? (
+          <div className="h-[calc(100vh-180px)] min-h-[500px]">
+            <Chat />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
