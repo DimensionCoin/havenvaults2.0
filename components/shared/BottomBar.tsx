@@ -19,10 +19,16 @@ export default function BottomBar() {
   const pathname = usePathname();
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 md:hidden pointer-events-none">
-      {/* This padding is the ONLY safe-area offset. */}
-      <div className="mx-auto max-w-md px-2 pb-[calc(env(safe-area-inset-bottom)+10px)] pointer-events-auto">
-        <nav className="haven-bottom-nav" aria-label="Primary">
+    <nav
+      aria-label="Primary"
+      className="fixed inset-x-0 z-50 md:hidden pointer-events-none"
+      style={{
+        // ✅ sits on the REAL bottom (safe-area aware) + slight float
+        bottom: "calc(env(safe-area-inset-bottom) + 4px)",
+      }}
+    >
+      <div className="mx-auto max-w-md px-2 pointer-events-auto">
+        <div className="haven-bottom-nav">
           <div className="flex items-end justify-between gap-1 py-2">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
@@ -91,8 +97,8 @@ export default function BottomBar() {
               );
             })}
           </div>
-        </nav>
+        </div>
       </div>
-    </div>
+    </nav>
   );
 }
