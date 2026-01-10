@@ -26,11 +26,7 @@ function d128ToNumber(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-type FxPayload = {
-  base?: string;
-  target?: string;
-  rate?: number;
-};
+type FxPayload = { base?: string; target?: string; rate?: number };
 
 const USDCAccountsCarousel: React.FC = () => {
   const { user, loading: userLoading, savingsFlex, savingsPlus } = useUser();
@@ -38,7 +34,6 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  // FX (base -> display)
   const [fxRate, setFxRate] = useState<number>(1);
   const [fxReady, setFxReady] = useState<boolean>(false);
 
@@ -67,7 +62,6 @@ const USDCAccountsCarousel: React.FC = () => {
 
         const raw = (await res.json().catch(() => ({}))) as FxPayload;
         const rate = Number(raw?.rate);
-
         if (!Number.isFinite(rate) || rate <= 0) throw new Error("Bad FX rate");
 
         if (!alive) return;
@@ -91,129 +85,60 @@ const USDCAccountsCarousel: React.FC = () => {
   const loading = userLoading || balanceLoading || !fxReady;
 
   const [activeIndex, setActiveIndex] = useState(0);
-
-  // Flex deposit modal
   const [flexDepositOpen, setFlexDepositOpen] = useState(false);
 
-  // === layout / drag state for MOBILE carousel ===
   const trackRef = useRef<HTMLDivElement | null>(null);
 
-  const [dragging, setDragging] = useState(false);
-
-  // gesture / pointer tracking
-  const pointerIdRef = useRef<number | null>(null);
+  // ✅ mouse-only dragging (desktop). Mobile uses native swipe.
+  const draggingRef = useRef(false);
   const dragStartX = useRef(0);
-  const dragStartY = useRef(0);
   const dragStartScroll = useRef(0);
-  const dragLock = useRef<"x" | "y" | null>(null);
-
-  const PEEK_FRACTION = 0.06;
-  const INTENT_THRESHOLD_PX = 8; // how far before we decide x vs y
-
-  const isInteractiveElement = (target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-
-    let el: HTMLElement | null = target;
-    while (el && el !== trackRef.current) {
-      const tag = el.tagName.toLowerCase();
-      const role = el.getAttribute("role");
-
-      if (
-        tag === "button" ||
-        tag === "a" ||
-        tag === "input" ||
-        tag === "textarea" ||
-        tag === "select" ||
-        role === "button" ||
-        el.hasAttribute("onclick") ||
-        el.style.cursor === "pointer"
-      ) {
-        return true;
-      }
-
-      el = el.parentElement;
-    }
-
-    return false;
-  };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (isInteractiveElement(e.target)) return;
-
     const el = trackRef.current;
     if (!el) return;
 
-    // reset direction lock for this gesture
-    pointerIdRef.current = e.pointerId;
-    dragLock.current = null;
-    setDragging(false);
+    // ✅ Do not hijack touch/pen on mobile
+    if (e.pointerType !== "mouse") return;
 
+    draggingRef.current = true;
     dragStartX.current = e.clientX;
-    dragStartY.current = e.clientY;
     dragStartScroll.current = el.scrollLeft;
 
-    // IMPORTANT: do NOT capture pointer yet.
-    // We only capture if user intent is horizontal (lock === "x")
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {}
+
+    el.style.scrollSnapType = "none";
+    el.classList.add("is-dragging");
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    if (pointerIdRef.current !== e.pointerId) return;
+    if (!draggingRef.current) return;
 
     const dx = e.clientX - dragStartX.current;
-    const dy = e.clientY - dragStartY.current;
-
-    // Decide intent once user moves enough
-    if (dragLock.current === null) {
-      if (
-        Math.abs(dx) < INTENT_THRESHOLD_PX &&
-        Math.abs(dy) < INTENT_THRESHOLD_PX
-      ) {
-        return;
-      }
-
-      // If vertical intent: let the page scroll naturally
-      if (Math.abs(dy) > Math.abs(dx)) {
-        dragLock.current = "y";
-        return;
-      }
-
-      // Horizontal intent: lock to x and take over
-      dragLock.current = "x";
-      try {
-        el.setPointerCapture(e.pointerId);
-      } catch {}
-      el.style.scrollSnapType = "none";
-      setDragging(true);
-    }
-
-    // If locked vertical, do nothing (page scroll works)
-    if (dragLock.current === "y") return;
-
-    // Locked horizontal: prevent vertical scroll + drag scrollLeft
-    e.preventDefault();
     el.scrollLeft = dragStartScroll.current - dx;
   };
 
   const endDrag = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
+    if (!draggingRef.current) return;
 
-    if (pointerIdRef.current === e.pointerId) {
-      if (dragLock.current === "x") {
-        try {
-          el.releasePointerCapture(e.pointerId);
-        } catch {}
-        el.style.scrollSnapType = "x mandatory";
-      }
-      pointerIdRef.current = null;
-      dragLock.current = null;
-      setDragging(false);
-    }
+    draggingRef.current = false;
+    try {
+      el.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    el.style.scrollSnapType = "x mandatory";
+    el.classList.remove("is-dragging");
   };
 
   // set card width so active card has peeks on both sides
+  const PEEK_FRACTION = 0.06;
+
   useLayoutEffect(() => {
     const el = trackRef.current;
     if (!el) return;
@@ -240,33 +165,43 @@ const USDCAccountsCarousel: React.FC = () => {
     };
   }, []);
 
+  // ✅ rAF throttle scroll handler (smooth + no state spam)
+  const rafRef = useRef<number | null>(null);
+
   const handleScroll = useCallback(() => {
-    const el = trackRef.current;
-    if (!el) return;
-    const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
-    if (!cards.length) return;
+    if (rafRef.current) return;
 
-    const viewportCenter = el.scrollLeft + el.clientWidth / 2;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
 
-    let bestIndex = 0;
-    let bestDist = Infinity;
+      const el = trackRef.current;
+      if (!el) return;
 
-    cards.forEach((card, idx) => {
-      const cardLeft = card.offsetLeft;
-      const cardCenter = cardLeft + card.clientWidth / 2;
-      const dist = Math.abs(cardCenter - viewportCenter);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestIndex = idx;
-      }
+      const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
+      if (!cards.length) return;
+
+      const viewportCenter = el.scrollLeft + el.clientWidth / 2;
+
+      let bestIndex = 0;
+      let bestDist = Infinity;
+
+      cards.forEach((card, idx) => {
+        const cardCenter = card.offsetLeft + card.clientWidth / 2;
+        const dist = Math.abs(cardCenter - viewportCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIndex = idx;
+        }
+      });
+
+      setActiveIndex((prev) => (prev !== bestIndex ? bestIndex : prev));
     });
-
-    setActiveIndex((prev) => (prev !== bestIndex ? bestIndex : prev));
   }, []);
 
   const scrollToIndex = (index: number) => {
     const el = trackRef.current;
     if (!el) return;
+
     const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
     const clamped = Math.max(0, Math.min(cards.length - 1, index));
     const target = cards[clamped];
@@ -286,41 +221,30 @@ const USDCAccountsCarousel: React.FC = () => {
     { key: "plus", label: "Plus", index: 2 },
   ];
 
-  const goPrev = () => {
-    const nextIndex = activeIndex === 0 ? slides.length - 1 : activeIndex - 1;
-    scrollToIndex(nextIndex);
-  };
-
-  const goNext = () => {
-    const nextIndex = activeIndex === slides.length - 1 ? 0 : activeIndex + 1;
-    scrollToIndex(nextIndex);
-  };
+  const goPrev = () =>
+    scrollToIndex(activeIndex === 0 ? slides.length - 1 : activeIndex - 1);
+  const goNext = () =>
+    scrollToIndex(activeIndex === slides.length - 1 ? 0 : activeIndex + 1);
 
   const mainWallet = user?.walletAddress || "";
 
   const flexAccount = useMemo(() => {
     if (!savingsFlex?.walletAddress) return undefined;
     if (!savingsFlex.marginfiAccountPk) return undefined;
-
     const base = d128ToNumber(savingsFlex.principalDeposited);
-    const display = base * fxRate;
-
     return {
       walletAddress: savingsFlex.walletAddress,
-      totalDeposited: display,
+      totalDeposited: base * fxRate,
     };
   }, [savingsFlex, fxRate]);
 
   const plusAccount = useMemo(() => {
     if (!savingsPlus?.walletAddress) return undefined;
     if (!savingsPlus.marginfiAccountPk) return undefined;
-
     const base = d128ToNumber(savingsPlus.principalDeposited);
-    const display = base * fxRate;
-
     return {
       walletAddress: savingsPlus.walletAddress,
-      totalDeposited: display,
+      totalDeposited: base * fxRate,
     };
   }, [savingsPlus, fxRate]);
 
@@ -328,19 +252,14 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const flexOpened = !!savingsFlex?.marginfiAccountPk;
 
-  // Actions (unchanged)
-  const handleDepositClick = (type: SlideKey) => {
-    if (type === "flex") setFlexDepositOpen(true);
-  };
-  const handleWithdrawClick = (type: SlideKey) => {
-    if (type === "flex") setFlexDepositOpen(true);
-  };
-  const handleOpenAccountClick = (type: SlideKey) => {
-    if (type === "flex") setFlexDepositOpen(true);
-  };
-  const handleTransferClick = (type: SlideKey) => {
-    if (type === "flex") setFlexDepositOpen(true);
-  };
+  const handleDepositClick = (type: SlideKey) =>
+    type === "flex" && setFlexDepositOpen(true);
+  const handleWithdrawClick = (type: SlideKey) =>
+    type === "flex" && setFlexDepositOpen(true);
+  const handleOpenAccountClick = (type: SlideKey) =>
+    type === "flex" && setFlexDepositOpen(true);
+  const handleTransferClick = (type: SlideKey) =>
+    type === "flex" && setFlexDepositOpen(true);
 
   return (
     <>
@@ -353,7 +272,6 @@ const USDCAccountsCarousel: React.FC = () => {
       {/* MOBILE / TABLET */}
       <section className="w-full space-y-2 lg:hidden">
         <div className="flex items-center justify-between gap-3">
-          {/* Tabs */}
           <div className="flex gap-1.5">
             {slides.map((s) => {
               const isActive = s.index === activeIndex;
@@ -376,7 +294,6 @@ const USDCAccountsCarousel: React.FC = () => {
             })}
           </div>
 
-          {/* Prev/Next */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -406,18 +323,22 @@ const USDCAccountsCarousel: React.FC = () => {
             onPointerCancel={endDrag}
             onScroll={handleScroll}
             className={[
-              "relative flex gap-2 overflow-x-auto snap-x snap-mandatory",
+              "carousel-track",
+              "relative flex gap-2 overflow-x-auto overflow-y-visible snap-x snap-mandatory",
               "scrollbar-hide",
-              dragging ? "cursor-grabbing" : "cursor-grab",
-              // KEY: allow vertical scrolling through this area
-              "touch-pan-y",
-              // nice performance
-              "[will-change:scroll-position]",
+              // ✅ vertical scroll passes through perfectly
+              "[touch-action:pan-y_pinch-zoom]",
+              // ✅ smoother iOS inertial scrolling
+              "[-webkit-overflow-scrolling:touch]",
+              // ✅ keep the horizontal momentum contained (feels native)
+              "[overscroll-behavior-x:contain] [overscroll-behavior-y:auto]",
             ].join(" ")}
             style={{ scrollSnapType: "x mandatory" }}
           >
-            {/* Deposit */}
-            <div data-carousel-card className="snap-center shrink-0">
+            <div
+              data-carousel-card
+              className="snap-center shrink-0 [scroll-snap-stop:always]"
+            >
               <DepositAccountCard
                 loading={loading}
                 walletAddress={mainWallet}
@@ -428,8 +349,10 @@ const USDCAccountsCarousel: React.FC = () => {
               />
             </div>
 
-            {/* Flex */}
-            <div data-carousel-card className="snap-center shrink-0">
+            <div
+              data-carousel-card
+              className="snap-center shrink-0 [scroll-snap-stop:always]"
+            >
               <FlexSavingsAccountCard
                 account={flexAccount}
                 loading={loading}
@@ -440,8 +363,10 @@ const USDCAccountsCarousel: React.FC = () => {
               />
             </div>
 
-            {/* Plus */}
-            <div data-carousel-card className="snap-center shrink-0">
+            <div
+              data-carousel-card
+              className="snap-center shrink-0 [scroll-snap-stop:always]"
+            >
               <PlusSavingsAccountCard
                 account={plusAccount}
                 loading={loading}
@@ -465,7 +390,6 @@ const USDCAccountsCarousel: React.FC = () => {
           onWithdraw={() => handleWithdrawClick("deposit")}
           onTransfer={() => handleTransferClick("deposit")}
         />
-
         <FlexSavingsAccountCard
           account={flexAccount}
           loading={loading}
@@ -474,7 +398,6 @@ const USDCAccountsCarousel: React.FC = () => {
           onWithdraw={() => handleWithdrawClick("flex")}
           onOpenAccount={() => handleOpenAccountClick("flex")}
         />
-
         <PlusSavingsAccountCard
           account={plusAccount}
           loading={loading}
