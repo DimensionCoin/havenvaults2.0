@@ -132,10 +132,12 @@ export default function LiveChart({
     return (
       <div
         ref={wrapRef}
-        className="relative w-full flex items-center justify-center"
+        className="relative flex w-full items-center justify-center"
         style={{ height }}
       >
-        <div className="text-xs text-white/40">Connecting to live feed…</div>
+        <div className="text-xs text-muted-foreground">
+          Connecting to live feed…
+        </div>
       </div>
     );
   }
@@ -143,21 +145,27 @@ export default function LiveChart({
   // Waiting for enough data
   if (points.length < 2) {
     return (
-      <div ref={wrapRef} className="relative w-full" style={{ height }}>
+      <div
+        ref={wrapRef}
+        className="relative w-full rounded-3xl border bg-card/40"
+        style={{ height }}
+      >
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <div className="flex items-center gap-2">
             <div className="relative">
-              <div className="h-3 w-3 rounded-full bg-emerald-500" />
-              <div className="absolute inset-0 h-3 w-3 rounded-full bg-emerald-500 animate-ping" />
+              <div className="h-3 w-3 rounded-full bg-primary" />
+              <div className="absolute inset-0 h-3 w-3 rounded-full bg-primary animate-ping" />
             </div>
-            <span className="text-sm text-white/60">Live</span>
+            <span className="text-sm text-foreground/70">Live</span>
           </div>
+
           {currentPrice !== null && (
-            <div className="mt-3 text-2xl font-semibold text-white/90">
+            <div className="mt-3 text-2xl font-semibold text-foreground">
               {formatMoney(currentPrice, displayCurrency)}
             </div>
           )}
-          <div className="mt-2 text-xs text-white/40">
+
+          <div className="mt-2 text-xs text-muted-foreground">
             Collecting data points…
           </div>
         </div>
@@ -170,10 +178,10 @@ export default function LiveChart({
       {/* Live indicator */}
       <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
         <div className="relative">
-          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-          <div className="absolute inset-0 h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping opacity-75" />
+          <div className="h-2.5 w-2.5 rounded-full bg-primary" />
+          <div className="absolute inset-0 h-2.5 w-2.5 rounded-full bg-primary animate-ping opacity-75" />
         </div>
-        <span className="text-[11px] font-medium text-emerald-400">LIVE</span>
+        <span className="text-[11px] font-medium text-primary">LIVE</span>
       </div>
 
       <svg
@@ -183,10 +191,14 @@ export default function LiveChart({
       >
         <defs>
           <linearGradient id="liveLineFade" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgb(16 185 129)" stopOpacity="0.3" />
+            <stop
+              offset="0%"
+              stopColor="var(--chart-1, rgb(16 185 129))"
+              stopOpacity="0.28"
+            />
             <stop
               offset="100%"
-              stopColor="rgb(16 185 129)"
+              stopColor="var(--chart-1, rgb(16 185 129))"
               stopOpacity="0.02"
             />
           </linearGradient>
@@ -209,8 +221,9 @@ export default function LiveChart({
             x2={width}
             y1={height * t}
             y2={height * t}
-            stroke="white"
-            strokeOpacity="0.06"
+            stroke="currentColor"
+            className="text-border"
+            strokeOpacity="0.35"
             strokeWidth="1"
           />
         ))}
@@ -228,7 +241,7 @@ export default function LiveChart({
           <path
             d={computed.pathD}
             fill="none"
-            stroke="rgb(16 185 129)"
+            stroke="var(--chart-1, rgb(16 185 129))"
             strokeOpacity="0.9"
             strokeWidth="2.5"
             strokeLinecap="round"
@@ -241,13 +254,18 @@ export default function LiveChart({
           cx={computed.lastX}
           cy={computed.lastY}
           r="6"
-          fill="rgb(16 185 129)"
+          fill="var(--chart-1, rgb(16 185 129))"
           filter="url(#glow)"
           className={priceFlash ? "animate-pulse" : ""}
         />
 
         {/* Inner dot */}
-        <circle cx={computed.lastX} cy={computed.lastY} r="3" fill="white" />
+        <circle
+          cx={computed.lastX}
+          cy={computed.lastY}
+          r="3"
+          fill="hsl(var(--background))"
+        />
 
         {/* Horizontal price line */}
         <line
@@ -255,7 +273,7 @@ export default function LiveChart({
           x2={computed.lastX - 10}
           y1={computed.lastY}
           y2={computed.lastY}
-          stroke="rgb(16 185 129)"
+          stroke="var(--chart-1, rgb(16 185 129))"
           strokeOpacity="0.3"
           strokeWidth="1"
           strokeDasharray="4 4"
@@ -265,33 +283,34 @@ export default function LiveChart({
       {/* Current price label */}
       <div
         className={[
-          "absolute right-3 top-1/2 -translate-y-1/2 rounded-xl border px-3 py-2 backdrop-blur-sm transition-colors duration-200",
+          "absolute right-3 top-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 shadow-fintech-sm backdrop-blur transition-colors duration-200",
           priceFlash === "up"
-            ? "border-emerald-400/50 bg-emerald-500/20"
+            ? "border-primary/40 bg-primary/10"
             : priceFlash === "down"
-              ? "border-rose-400/50 bg-rose-500/20"
-              : "border-white/10 bg-black/60",
+              ? "border-destructive/40 bg-destructive/10"
+              : "border-border bg-card/70",
         ].join(" ")}
       >
         <div
           className={[
             "text-lg font-semibold transition-colors duration-200",
             priceFlash === "up"
-              ? "text-emerald-300"
+              ? "text-primary"
               : priceFlash === "down"
-                ? "text-rose-300"
-                : "text-white/90",
+                ? "text-destructive"
+                : "text-foreground",
           ].join(" ")}
         >
           {currentPrice !== null
             ? formatMoney(currentPrice, displayCurrency)
             : "—"}
         </div>
+
         {priceChange !== null && (
           <div
             className={[
               "text-[11px] font-medium",
-              isUp ? "text-emerald-400" : "text-rose-400",
+              isUp ? "text-primary" : "text-destructive",
             ].join(" ")}
           >
             {isUp ? "+" : ""}
@@ -301,14 +320,16 @@ export default function LiveChart({
       </div>
 
       {/* Low/High display */}
-      <div className="mt-2 px-2 flex items-center justify-between text-[11px] text-white/35">
+      <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
         <span>
           Low:{" "}
           {computed.minY ? formatMoney(computed.minY, displayCurrency) : "—"}
         </span>
-        <span className="text-white/25">
+
+        <span className="text-muted-foreground/70">
           {points.length} points • ~{Math.round((points.length * 3) / 60)}min
         </span>
+
         <span>
           High:{" "}
           {computed.maxY ? formatMoney(computed.maxY, displayCurrency) : "—"}

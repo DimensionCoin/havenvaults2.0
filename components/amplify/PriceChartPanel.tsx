@@ -217,7 +217,7 @@ export default function PriceChartPanel({
   const isConnecting = isOracleSymbol && !convexPrice;
 
   return (
-    <div className="glass-panel bg-white/10 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6">
+    <div className="glass-panel-soft px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6">
       {/* Header */}
       <div className="flex flex-col items-center text-center">
         <div className="flex items-center gap-2">
@@ -227,29 +227,29 @@ export default function PriceChartPanel({
               alt={tokenName}
               width={32}
               height={32}
-              className="h-8 w-8 rounded-full border border-white/10"
+              className="h-8 w-8 rounded-full border border-border/60 bg-card/40"
             />
           ) : (
-            <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
+            <div className="h-8 w-8 rounded-full border border-border/60 bg-card/40" />
           )}
 
-          <div className="text-[12px] font-semibold tracking-[0.28em] text-white/55">
+          <div className="text-[12px] font-semibold tracking-[0.28em] text-muted-foreground">
             {tokenSymbol}
           </div>
 
           {/* Live indicator in header when LIVE mode */}
           {isLive && isOracleSymbol && (
-            <div className="flex items-center gap-1.5 ml-2">
+            <div className="ml-2 flex items-center gap-1.5">
               <div className="relative">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                <div className="absolute inset-0 h-2 w-2 rounded-full bg-emerald-500 animate-ping opacity-75" />
+                <div className="h-2 w-2 rounded-full bg-primary" />
+                <div className="absolute inset-0 h-2 w-2 rounded-full bg-primary animate-ping opacity-75" />
               </div>
             </div>
           )}
         </div>
 
         <div className="mt-2 flex items-baseline justify-center gap-2">
-          <span className="text-[44px] font-semibold leading-none tracking-tight text-white/92 sm:text-5xl">
+          <span className="text-[44px] font-semibold leading-none tracking-tight text-foreground sm:text-5xl">
             {isConnecting || fxLoading
               ? "…"
               : headerPrice === null
@@ -263,10 +263,10 @@ export default function PriceChartPanel({
             className={[
               "inline-flex items-center gap-1 text-sm font-semibold",
               pct === null
-                ? "text-white/40"
+                ? "text-muted-foreground"
                 : isUp
-                  ? "text-emerald-300"
-                  : "text-rose-300",
+                  ? "text-primary"
+                  : "text-destructive",
             ].join(" ")}
           >
             {pct === null ? null : isUp ? (
@@ -278,15 +278,15 @@ export default function PriceChartPanel({
             {pct === null ? "—" : `${pct.toFixed(2)}%`}
           </span>
 
-          <span className="text-xs text-white/35">
+          <span className="text-xs text-muted-foreground/80">
             ({isLive ? "vs prev" : activeTimeframe})
           </span>
         </div>
       </div>
 
       {/* Chart area */}
-      <div className="relative mt-4 overflow-hidden rounded-3xl border border-white/10 bg-black/45 shadow-[0_18px_55px_rgba(0,0,0,0.55)] -mx-4 sm:mx-0">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
+      <div className="relative mt-4 overflow-hidden rounded-3xl border border-border/60 bg-card/40 shadow-[0_18px_55px_rgba(0,0,0,0.35)] -mx-4 sm:mx-0">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-background/40 to-transparent" />
 
         <div className="absolute right-3 top-3 z-10">
           <TimeframeTabs
@@ -298,22 +298,21 @@ export default function PriceChartPanel({
 
         <div className="px-3 pb-3 pt-12 sm:px-4 sm:pb-4">
           {isLive && isOracleSymbol ? (
-            // LIVE chart from Convex
             <LiveChart
               symbol={sym as "BTC" | "ETH" | "SOL"}
               displayCurrency={displayCurrency}
               fxRate={fxRate}
             />
           ) : loading && !safeChartData.length ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
+            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
               Loading chart…
             </div>
           ) : error ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
+            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
               {error}
             </div>
           ) : !safeChartData.length ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-white/40">
+            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
               No chart data.
             </div>
           ) : (

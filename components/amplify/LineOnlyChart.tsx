@@ -176,8 +176,9 @@ export default function LineOnlyChart({
             x2={width}
             y1={height * t}
             y2={height * t}
-            stroke="white"
-            strokeOpacity="0.06"
+            stroke="currentColor"
+            className="text-border/50"
+            strokeOpacity="0.35"
             strokeWidth="1"
           />
         ))}
@@ -209,16 +210,17 @@ export default function LineOnlyChart({
               x2={activeX}
               y1={0}
               y2={height}
-              stroke="white"
-              strokeOpacity="0.10"
+              stroke="currentColor"
+              className="text-border"
+              strokeOpacity="0.45"
               strokeWidth="1"
             />
             <circle
               cx={activeX}
               cy={activeY}
               r="4.5"
-              fill="black"
-              fillOpacity="0.9"
+              fill="hsl(var(--background))"
+              fillOpacity="0.95"
               stroke="var(--chart-1, rgb(16 185 129))"
               strokeWidth="2"
             />
@@ -254,7 +256,7 @@ export default function LineOnlyChart({
           />
 
           <div
-            className="pointer-events-none absolute rounded-2xl border border-white/10 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm"
+            className="pointer-events-none absolute rounded-2xl border bg-card/85 px-3 py-2 shadow-fintech-sm backdrop-blur"
             style={{
               left: `${tooltip.boxLeftPct}%`,
               top: `${tooltip.boxTopPct}%`,
@@ -262,19 +264,25 @@ export default function LineOnlyChart({
               maxWidth: "72%",
             }}
           >
-            <div className="text-sm font-semibold text-white/90">
+            <div className="text-sm font-semibold text-foreground">
               {tooltip.priceText}
             </div>
-            <div className="mt-0.5 text-[11px] text-white/45">
+            <div className="mt-0.5 text-[11px] text-muted-foreground">
               {tooltip.timeText}
             </div>
           </div>
         </>
       )}
 
-      <div className="mt-2 px-2 flex items-center justify-between text-[11px] text-white/35">
-        <span>Low: {computed.minY ? computed.minY.toFixed(2) : "—"}</span>
-        <span>High: {computed.maxY ? computed.maxY.toFixed(2) : "—"}</span>
+      <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
+        <span>
+          Low:{" "}
+          {computed.minY ? formatMoney(computed.minY, displayCurrency) : "—"}
+        </span>
+        <span>
+          High:{" "}
+          {computed.maxY ? formatMoney(computed.maxY, displayCurrency) : "—"}
+        </span>
       </div>
     </div>
   );

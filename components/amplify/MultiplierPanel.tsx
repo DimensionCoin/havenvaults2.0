@@ -151,9 +151,9 @@ function money2(n: number) {
 
 function ProgressBar({ progress }: { progress: number }) {
   return (
-    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
       <div
-        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
         style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
       />
     </div>
@@ -165,37 +165,36 @@ function StageIcon({
 }: {
   icon: "spinner" | "wallet" | "success" | "error";
 }) {
-  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
+  const base =
+    "flex h-14 w-14 items-center justify-center rounded-2xl border shadow-fintech-sm";
 
   if (icon === "success") {
     return (
-      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
-        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      <div className={`${base} border-primary/30 bg-primary/10`}>
+        <CheckCircle2 className="h-7 w-7 text-primary" />
       </div>
     );
   }
 
   if (icon === "error") {
     return (
-      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
-        <XCircle className="h-7 w-7 text-rose-400" />
+      <div className={`${base} border-destructive/30 bg-destructive/10`}>
+        <XCircle className="h-7 w-7 text-destructive" />
       </div>
     );
   }
 
   if (icon === "wallet") {
     return (
-      <div
-        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
-      >
-        <Wallet className="h-7 w-7 text-amber-400" />
+      <div className={`${base} animate-pulse border-primary/25 bg-primary/10`}>
+        <Wallet className="h-7 w-7 text-primary" />
       </div>
     );
   }
 
   return (
-    <div className={`${base} border-white/10 bg-white/5`}>
-      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    <div className={`${base} border-border bg-card/40`}>
+      <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
     </div>
   );
 }
@@ -402,18 +401,21 @@ export default function MultiplierPanel({
   return (
     <>
       {/* PANEL */}
-      <div className="glass-panel bg-white/10 p-4 sm:p-5">
+      <div className="glass-panel-soft p-4 sm:p-5">
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white/90">Multiplier</div>
-            <div className="mt-0.5 text-xs text-white/45">
+            <div className="text-sm font-semibold text-foreground">
+              Multiplier
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
               Choose a multiplier and open a long position.
             </div>
           </div>
-          <div className="text-right text-xs text-white/45">
+
+          <div className="text-right text-xs text-muted-foreground">
             Available
-            <div className="mt-0.5 text-white/85 font-semibold">
+            <div className="mt-0.5 font-semibold text-foreground">
               {effectiveBalanceLoading
                 ? "…"
                 : formatMoney(depBal, currencySafe)}
@@ -423,54 +425,61 @@ export default function MultiplierPanel({
 
         {/* Buy-in */}
         <div className="mt-4">
-          <label className="text-xs text-white/50">Buy-in</label>
-          <div className="mt-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-            <span className="text-xs text-white/50 px-2">{currencySafe}</span>
+          <label className="text-xs text-muted-foreground">Buy-in</label>
+
+          <div className="mt-1 flex items-center gap-2 rounded-2xl border bg-card/40 p-2">
+            <span className="px-2 text-xs text-muted-foreground">
+              {currencySafe}
+            </span>
+
             <input
               value={buyIn}
               onChange={(e) => setBuyIn(clampMoneyInput(e.target.value))}
               inputMode="decimal"
               placeholder="0.00"
               disabled={busy}
-              className="w-full bg-transparent text-sm text-white/90 outline-none disabled:opacity-60"
+              className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
             />
+
             <button
               type="button"
               disabled={busy || effectiveBalanceLoading}
               onClick={() => setBuyIn(money2(depBal))}
-              className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 hover:text-white/90 disabled:opacity-60"
+              className="rounded-xl border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-foreground/80 hover:bg-card/70 disabled:opacity-60"
             >
               Max
             </button>
           </div>
 
-          
-
           {/* Validation */}
           {!ownerReady && (
-            <div className="mt-2 text-xs text-rose-200/80">
+            <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               Wallet not connected.
             </div>
           )}
+
           {!effectiveBalanceLoading && buyInNum > depBal && buyInNum > 0 && (
-            <div className="mt-2 text-xs text-rose-200/80">
+            <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               Buy-in exceeds available balance.
             </div>
           )}
+
           {fx <= 0 && (
-            <div className="mt-2 text-xs text-rose-200/80">
+            <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               FX rate unavailable.
             </div>
           )}
+
           {fxLooksInverted && (
-            <div className="mt-2 text-xs text-rose-200/80">
+            <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               FX rate looks inverted. Refresh and try again.
             </div>
           )}
+
           {!effectiveBalanceLoading &&
             buyInNum > 0 &&
             marginUsd > depBalUsd && (
-              <div className="mt-2 text-xs text-rose-200/80">
+              <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 Insufficient USD balance after FX conversion.
               </div>
             )}
@@ -478,7 +487,8 @@ export default function MultiplierPanel({
 
         {/* Multiplier */}
         <div className="mt-4">
-          <label className="text-xs text-white/50">Multiplier</label>
+          <label className="text-xs text-muted-foreground">Multiplier</label>
+
           <div className="mt-1 flex gap-2">
             {leverageOptions.map((opt) => (
               <button
@@ -488,40 +498,43 @@ export default function MultiplierPanel({
                 className={[
                   "flex-1 rounded-2xl border px-3 py-2 text-sm font-semibold transition",
                   opt === lev
-                    ? "border-emerald-300/30 bg-emerald-500/15 text-emerald-100"
-                    : "border-white/10 bg-black/25 text-white/70 hover:text-white/90",
-                  busy ? "opacity-70 cursor-not-allowed" : "",
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-border bg-card/40 text-foreground/80 hover:bg-card/60",
+                  busy ? "cursor-not-allowed opacity-70" : "",
                 ].join(" ")}
               >
                 {opt}x
               </button>
             ))}
           </div>
-          
         </div>
 
         {/* Summary */}
-        <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+        <div className="mt-4 rounded-2xl border bg-card/40 p-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="text-[11px] text-white/45">Exposure (est.)</div>
-              <div className="mt-0.5 text-sm font-semibold text-white/85">
+              <div className="text-[11px] text-muted-foreground">
+                Exposure (est.)
+              </div>
+              <div className="mt-0.5 text-sm font-semibold text-foreground">
                 {buyInNum > 0 ? formatMoney(buyInNum * lev, currencySafe) : "—"}
               </div>
             </div>
+
             <div>
-              <div className="text-[11px] text-white/45">
+              <div className="text-[11px] text-muted-foreground">
                 Liquidation (est.)
               </div>
-              <div className="mt-0.5 text-sm font-semibold text-white/85">
+              <div className="mt-0.5 text-sm font-semibold text-foreground">
                 {liq ? formatMoney(liq, currencySafe) : "—"}
               </div>
             </div>
+
             <div className="col-span-2">
-              <div className="text-[11px] text-white/45">
+              <div className="text-[11px] text-muted-foreground">
                 You receive (est.)
               </div>
-              <div className="mt-0.5 text-sm font-semibold text-white/85">
+              <div className="mt-0.5 text-sm font-semibold text-foreground">
                 {estTokenQty ? `${estTokenQty.toFixed(6)} ${sym}` : "—"}
               </div>
             </div>
@@ -535,8 +548,8 @@ export default function MultiplierPanel({
           className={[
             "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
             canSubmit && !busy
-              ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25 active:scale-[0.98]"
-              : "bg-white/5 border-white/10 text-white/35 cursor-not-allowed",
+              ? "haven-primary-btn"
+              : "bg-muted/30 border-border text-muted-foreground cursor-not-allowed",
           ].join(" ")}
         >
           {busy ? (
@@ -555,7 +568,7 @@ export default function MultiplierPanel({
       {/* MODAL */}
       {modal && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-background/70 backdrop-blur-sm px-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && modal.kind !== "processing") {
               closeModal();
@@ -563,15 +576,15 @@ export default function MultiplierPanel({
           }}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+            className="w-full max-w-sm rounded-3xl border bg-card p-5 shadow-fintech-xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
             {modal.kind !== "processing" && (
-              <div className="flex justify-end mb-2">
+              <div className="mb-2 flex justify-end">
                 <button
                   onClick={closeModal}
-                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                  className="rounded-xl border bg-card/60 p-2 text-muted-foreground hover:text-foreground transition"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -584,10 +597,10 @@ export default function MultiplierPanel({
                 <>
                   <StageIcon icon={stageConfig.icon} />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-white/90">
+                    <div className="text-base font-semibold text-foreground">
                       {stageConfig.title}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {stageConfig.subtitle}
                     </div>
                   </div>
@@ -599,10 +612,10 @@ export default function MultiplierPanel({
                 <>
                   <StageIcon icon="success" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-emerald-100">
+                    <div className="text-base font-semibold text-primary">
                       Position opened!
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Your trade is live
                     </div>
                   </div>
@@ -611,10 +624,10 @@ export default function MultiplierPanel({
                 <>
                   <StageIcon icon="error" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-rose-100">
+                    <div className="text-base font-semibold text-destructive">
                       Trade failed
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Something went wrong
                     </div>
                   </div>
@@ -624,8 +637,8 @@ export default function MultiplierPanel({
 
             {/* Error message */}
             {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                <div className="text-xs text-rose-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3">
+                <div className="text-xs text-destructive text-center">
                   {modal.errorMessage}
                 </div>
               </div>
@@ -633,8 +646,8 @@ export default function MultiplierPanel({
 
             {/* Warnings */}
             {modal.kind === "success" && modal.warnings?.length ? (
-              <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3">
-                <div className="text-xs text-amber-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-primary/25 bg-primary/10 p-3">
+                <div className="text-xs text-foreground/80 text-center">
                   {modal.warnings[0]}
                 </div>
               </div>
@@ -648,10 +661,10 @@ export default function MultiplierPanel({
                     href={explorerUrl(modal.openSig)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                    className="flex items-center justify-between rounded-2xl border bg-card/40 px-4 py-3 text-sm text-foreground/85 hover:bg-card/60 transition group"
                   >
                     <span>View transaction</span>
-                    <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
+                    <ExternalLink className="h-4 w-4 opacity-60 group-hover:opacity-100" />
                   </a>
                 )}
                 {modal.sweepSig && (
@@ -659,10 +672,10 @@ export default function MultiplierPanel({
                     href={explorerUrl(modal.sweepSig)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs text-white/60 hover:text-white/80 hover:bg-white/10 transition group"
+                    className="flex items-center justify-between rounded-2xl border bg-card/30 px-4 py-2.5 text-xs text-muted-foreground hover:bg-card/50 transition group"
                   >
                     <span>View cleanup tx</span>
-                    <ExternalLink className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
+                    <ExternalLink className="h-3.5 w-3.5 opacity-60 group-hover:opacity-100" />
                   </a>
                 )}
               </div>
@@ -675,8 +688,8 @@ export default function MultiplierPanel({
                 className={[
                   "mt-5 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
                   modal.kind === "success"
-                    ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25"
-                    : "bg-white/10 border-white/10 text-white/80 hover:bg-white/15",
+                    ? "bg-primary/10 border-primary/25 text-primary hover:bg-primary/15"
+                    : "bg-muted/30 border-border text-foreground/80 hover:bg-muted/40",
                 ].join(" ")}
               >
                 {modal.kind === "success" ? "Done" : "Close"}
@@ -685,7 +698,7 @@ export default function MultiplierPanel({
 
             {/* Processing footer */}
             {modal.kind === "processing" && (
-              <div className="mt-6 text-center text-xs text-white/30">
+              <div className="mt-6 text-center text-xs text-muted-foreground">
                 Please keep window open
               </div>
             )}

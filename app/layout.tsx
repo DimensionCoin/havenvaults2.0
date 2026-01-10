@@ -14,8 +14,6 @@ export const metadata: Metadata = {
   description: "Best app for financial growth.",
   manifest: "/manifest.json",
   themeColor: "#02010a",
-
-  // Open Graph (used by Twitter, Facebook, LinkedIn, etc.)
   openGraph: {
     title: "Haven Vaults",
     description: "Best app for financial growth.",
@@ -23,7 +21,7 @@ export const metadata: Metadata = {
     siteName: "Haven Vaults",
     images: [
       {
-        url: "/twitter.png", // or full URL: "https://yourdomain.com/og-image.png"
+        url: "/twitter.png",
         width: 1200,
         height: 630,
         alt: "Haven Vaults",
@@ -31,15 +29,12 @@ export const metadata: Metadata = {
     ],
     type: "website",
   },
-
-  // Twitter-specific (falls back to OG if not specified)
   twitter: {
-    card: "summary_large_image", // or "summary" for smaller square image
+    card: "summary_large_image",
     title: "Haven Vaults",
     description: "Best app for financial growth.",
-    images: ["/twitter.png"], // 1200x630 recommended for large image
+    images: ["/twitter.png"],
   },
-
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -67,7 +62,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* iOS PWA extras */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -81,38 +76,35 @@ export default function RootLayout({
       </head>
 
       <body
+        suppressHydrationWarning
         className={[
           inter.variable,
           dmSans.variable,
-          // App-shell behavior
           "min-h-[100dvh] bg-background text-foreground antialiased",
-          "overflow-hidden", // prevent page-level rubber-band scroll
+          "overflow-hidden",
         ].join(" ")}
       >
-        {/* App shell wrapper handles scrolling like a native app */}
-        <div
-          id="app"
-          className="h-[100dvh] w-full overflow-y-auto overscroll-contain"
-          style={{
-            paddingTop: "env(safe-area-inset-top)",
-            paddingBottom: "env(safe-area-inset-bottom)",
-            paddingLeft: "env(safe-area-inset-left)",
-            paddingRight: "env(safe-area-inset-right)",
-          }}
-        >
-          <body
-            className={`${inter.variable} ${dmSans.variable} min-h-[100dvh] bg-background text-foreground antialiased`}
-          >
-            <ThemeProvider>
-              <PrivyProviders>
-                <UserProvider>
-                  <PwaRegister />
-                  <ConvexClientProvider>{children}</ConvexClientProvider>
-                </UserProvider>
-              </PrivyProviders>
-            </ThemeProvider>
-          </body>
-        </div>
+        <ThemeProvider>
+          <PrivyProviders>
+            <UserProvider>
+              <PwaRegister />
+
+              {/* App shell wrapper handles scrolling like a native app */}
+              <div
+                id="app"
+                className="h-[100dvh] w-full overflow-y-auto overscroll-contain"
+                style={{
+                  paddingTop: "env(safe-area-inset-top)",
+                  paddingBottom: "env(safe-area-inset-bottom)",
+                  paddingLeft: "env(safe-area-inset-left)",
+                  paddingRight: "env(safe-area-inset-right)",
+                }}
+              >
+                <ConvexClientProvider>{children}</ConvexClientProvider>
+              </div>
+            </UserProvider>
+          </PrivyProviders>
+        </ThemeProvider>
       </body>
     </html>
   );

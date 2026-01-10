@@ -45,8 +45,8 @@ function getRiskIcon(risk: RiskLevel) {
 function riskPill(risk: RiskLevel) {
   const Icon = getRiskIcon(risk);
   return (
-    <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-gradient-to-r from-emerald-500/12 to-teal-500/12 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-200">
-      <Icon className="h-3 w-3" />
+    <div className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-foreground/80 backdrop-blur">
+      <Icon className="h-3 w-3 text-primary" />
       {risk}
     </div>
   );
@@ -75,7 +75,7 @@ function TokenIconsCompact({ symbols }: { symbols: string[] }) {
           return (
             <div
               key={s}
-              className="relative h-8 w-8 overflow-hidden rounded-full border-2 border-black/60 bg-zinc-800"
+              className="relative h-8 w-8 overflow-hidden rounded-full border-2 border-background/70 bg-card"
               title={s}
             >
               <Image
@@ -89,8 +89,10 @@ function TokenIconsCompact({ symbols }: { symbols: string[] }) {
         })}
       </div>
       {extra > 0 && (
-        <div className="ml-2 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white/10 bg-zinc-800">
-          <span className="text-[11px] font-bold text-white/70">+{extra}</span>
+        <div className="ml-2 flex h-8 w-8 items-center justify-center rounded-full border-2 border-border/60 bg-card">
+          <span className="text-[11px] font-bold text-muted-foreground">
+            +{extra}
+          </span>
         </div>
       )}
     </div>
@@ -234,42 +236,46 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
   return (
     <>
       {/* Main Panel */}
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+      <div className="glass-panel bg-card/30 p-5">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10">
-            <Sparkles className="h-4 w-4 text-emerald-400" />
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-card/50 backdrop-blur">
+            <Sparkles className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <h3 className="text-base font-semibold text-white">Bundles</h3>
-            <p className="text-xs text-white/40">Diversify with one tap</p>
+            <h3 className="text-base font-semibold text-foreground">Bundles</h3>
+            <p className="text-xs text-muted-foreground">
+              Diversify with one tap
+            </p>
           </div>
         </div>
 
         {/* Search */}
         <div className="relative mb-4">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search bundles..."
-            className="w-full rounded-xl border border-white/10 bg-black/20 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/30 outline-none focus:border-white/20"
+            className="w-full rounded-xl border border-border/60 bg-card/40 py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground outline-none backdrop-blur focus:border-border focus:ring-2 focus:ring-primary/25"
           />
         </div>
 
         {/* Risk Filter */}
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
           {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
             <button
               key={risk}
               type="button"
               onClick={() => setSelectedRiskFilter(risk)}
-              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
+              className={[
+                "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition",
+                "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
                 selectedRiskFilter === risk
-                  ? "bg-emerald-500/20 text-emerald-300"
-                  : "bg-white/5 text-white/50 hover:bg-white/10"
-              }`}
+                  ? "bg-primary/15 text-primary border border-primary/25"
+                  : "bg-card/40 text-muted-foreground border border-border/60 hover:text-foreground hover:bg-card/60",
+              ].join(" ")}
             >
               {risk}
             </button>
@@ -279,7 +285,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
         {/* Bundle List */}
         <div className="grid gap-3">
           {filteredBundles.length === 0 ? (
-            <div className="py-8 text-center text-sm text-white/40">
+            <div className="py-8 text-center text-sm text-muted-foreground">
               No bundles found
             </div>
           ) : (
@@ -288,13 +294,19 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 key={b.id}
                 type="button"
                 onClick={() => openBundle(b.id)}
-                className="group flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-4 text-left transition-all hover:border-white/20 hover:bg-white/[0.04]"
+                className={[
+                  "group flex items-center justify-between rounded-2xl border p-4 text-left transition",
+                  "border-border/60 bg-card/30 hover:bg-card/50 hover:border-border",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
+                ].join(" ")}
               >
                 <div className="flex items-center gap-3">
                   <TokenIconsCompact symbols={b.symbols} />
                   <div>
-                    <p className="text-sm font-medium text-white">{b.name}</p>
-                    <p className="text-xs text-white/40">
+                    <p className="text-sm font-medium text-foreground">
+                      {b.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
                       {b.symbols.length} assets
                     </p>
                   </div>
@@ -309,42 +321,42 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
       {/* Modal */}
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center"
           onClick={closeModal}
         >
           {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+          <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" />
 
           {/* Modal */}
           <div
             onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl"
+            className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl border border-border/60 bg-background/90 shadow-[0_30px_90px_rgba(0,0,0,0.65)] backdrop-blur"
           >
             {/* Progress Bar */}
             {bundle.state.items.length > 0 && (
-              <div className="absolute top-0 left-0 right-0 h-1 bg-white/5 rounded-t-2xl overflow-hidden">
+              <div className="absolute left-0 right-0 top-0 h-1 overflow-hidden rounded-t-3xl bg-foreground/5">
                 <div
-                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500"
+                  className="h-full bg-primary/70 transition-all duration-500"
                   style={{ width: `${progress}%` }}
                 />
               </div>
             )}
 
             {/* Header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-zinc-950 px-5 py-4">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/85 px-5 py-4 backdrop-blur">
               <div className="flex items-center gap-3">
                 {selected && (
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/60 bg-card/40">
                     {React.createElement(getRiskIcon(selected.risk), {
-                      className: "h-5 w-5 text-emerald-400",
+                      className: "h-5 w-5 text-primary",
                     })}
                   </div>
                 )}
                 <div>
-                  <h2 className="text-lg font-semibold text-white">
+                  <h2 className="text-lg font-semibold text-foreground">
                     {selected?.name ?? "Bundle"}
                   </h2>
-                  <p className="text-xs text-white/40">
+                  <p className="text-xs text-muted-foreground">
                     {selected?.symbols.length} assets • {selected?.risk} risk
                   </p>
                 </div>
@@ -353,24 +365,24 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
               <button
                 type="button"
                 onClick={closeModal}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-border/60 bg-card/40 text-muted-foreground hover:text-foreground hover:bg-card/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Content */}
-            <div className="p-5 space-y-4">
+            <div className="space-y-4 p-5">
               {/* Amount Input - Only before execution */}
               {bundle.state.phase === "idle" && (
                 <>
-                  <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                    <label className="text-xs font-medium text-white/50 mb-2 block">
+                  <div className="rounded-2xl border border-border/60 bg-card/30 p-4">
+                    <label className="mb-2 block text-xs font-medium text-muted-foreground">
                       Investment Amount
                     </label>
 
                     <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-white/50">
+                      <span className="text-sm font-medium text-muted-foreground">
                         {displayCurrency}
                       </span>
                       <input
@@ -381,18 +393,18 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                           setAmountDisplay(cleanNumberInput(e.target.value))
                         }
                         placeholder="0.00"
-                        className="flex-1 bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-white/20"
+                        className="flex-1 bg-transparent text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/50"
                       />
                     </div>
 
                     <div className="mt-3 flex items-center justify-between text-xs">
-                      <span className="text-white/40">Available</span>
+                      <span className="text-muted-foreground">Available</span>
                       <button
                         type="button"
                         onClick={() =>
                           setAmountDisplay(availableBalance.toFixed(2))
                         }
-                        className="text-emerald-400 hover:text-emerald-300"
+                        className="font-medium text-primary hover:text-primary/90"
                       >
                         {availableBalance.toFixed(2)} {displayCurrency}
                       </button>
@@ -401,12 +413,12 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
                   {/* Distribution Preview */}
                   {perTokenDisplay > 0 && (
-                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-xs font-medium text-white/50">
+                    <div className="rounded-2xl border border-border/60 bg-card/30 p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">
                           Distribution
                         </span>
-                        <span className="text-xs text-white/40">
+                        <span className="text-xs text-muted-foreground">
                           Equal weight
                         </span>
                       </div>
@@ -420,7 +432,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                               className="flex items-center justify-between py-1.5"
                             >
                               <div className="flex items-center gap-2">
-                                <div className="relative h-6 w-6 rounded-full overflow-hidden bg-zinc-800">
+                                <div className="relative h-6 w-6 overflow-hidden rounded-full border border-border/60 bg-card">
                                   <Image
                                     src={meta?.logo || "/placeholder.svg"}
                                     alt={s}
@@ -428,11 +440,11 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                                     className="object-cover"
                                   />
                                 </div>
-                                <span className="text-sm text-white/80">
+                                <span className="text-sm text-foreground/90">
                                   {s}
                                 </span>
                               </div>
-                              <span className="text-sm text-white/50">
+                              <span className="text-sm text-muted-foreground">
                                 {perTokenDisplay.toFixed(2)} {displayCurrency}
                               </span>
                             </div>
@@ -449,14 +461,14 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 <div className="space-y-2">
                   {/* Phase indicator */}
                   {bundle.isExecuting && (
-                    <div className="flex items-center justify-center gap-2 py-2 text-sm text-white/60">
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                    <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
                       {statusLabel}
                     </div>
                   )}
 
                   {/* Items */}
-                  {bundle.state.items.map((item, idx) => {
+                  {bundle.state.items.map((item) => {
                     const meta = findTokenBySymbol(item.symbol);
                     const isConfirmed = item.status === "confirmed";
                     const isFailed = item.status === "failed";
@@ -470,18 +482,19 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     return (
                       <div
                         key={item.symbol}
-                        className={`flex items-center justify-between rounded-xl border p-3 transition-all ${
+                        className={[
+                          "flex items-center justify-between rounded-2xl border p-3 transition",
                           isConfirmed
-                            ? "border-emerald-500/30 bg-emerald-500/5"
+                            ? "border-primary/25 bg-primary/10"
                             : isFailed
-                              ? "border-red-500/30 bg-red-500/5"
+                              ? "border-destructive/25 bg-destructive/10"
                               : isActive
-                                ? "border-emerald-500/20 bg-emerald-500/5"
-                                : "border-white/10 bg-white/[0.02]"
-                        }`}
+                                ? "border-primary/20 bg-primary/5"
+                                : "border-border/60 bg-card/30",
+                        ].join(" ")}
                       >
                         <div className="flex items-center gap-3">
-                          <div className="relative h-8 w-8 rounded-full overflow-hidden bg-zinc-800">
+                          <div className="relative h-8 w-8 overflow-hidden rounded-full border border-border/60 bg-card">
                             <Image
                               src={meta?.logo || "/placeholder.svg"}
                               alt={item.symbol}
@@ -490,10 +503,10 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                             />
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-white">
+                            <p className="text-sm font-medium text-foreground">
                               {item.symbol}
                             </p>
-                            <p className="text-xs text-white/40">
+                            <p className="text-xs text-muted-foreground">
                               {(item.amountUsdcUnits / 1_000_000).toFixed(2)}{" "}
                               USDC
                             </p>
@@ -502,16 +515,16 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
                         <div className="flex items-center gap-2">
                           {isConfirmed && (
-                            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                            <CheckCircle2 className="h-5 w-5 text-primary" />
                           )}
                           {isFailed && (
-                            <XCircle className="h-5 w-5 text-red-400" />
+                            <XCircle className="h-5 w-5 text-destructive" />
                           )}
                           {isActive && (
-                            <Loader2 className="h-5 w-5 text-emerald-400 animate-spin" />
+                            <Loader2 className="h-5 w-5 animate-spin text-primary" />
                           )}
                           {item.status === "pending" && (
-                            <div className="h-5 w-5 rounded-full border-2 border-white/20" />
+                            <div className="h-5 w-5 rounded-full border-2 border-border/60" />
                           )}
                         </div>
                       </div>
@@ -521,7 +534,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                   {/* Fee info */}
                   {bundle.state.totalFeeUnits > 0 &&
                     bundle.completedCount > 0 && (
-                      <div className="text-center text-xs text-white/40 pt-2">
+                      <div className="pt-2 text-center text-xs text-muted-foreground">
                         Fee:{" "}
                         {(bundle.state.totalFeeUnits / 1_000_000).toFixed(4)}{" "}
                         USDC
@@ -530,9 +543,9 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
                   {/* Error Summary */}
                   {bundle.hasFailed && !bundle.isExecuting && (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
                       <div className="flex items-start gap-3">
-                        <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0" />
+                        <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
                         <div className="flex-1">
                           <p className="text-sm text-amber-200">
                             {bundle.failedCount} of {bundle.state.items.length}{" "}
@@ -541,7 +554,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                           <button
                             type="button"
                             onClick={handleRetry}
-                            className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-amber-400 hover:text-amber-300"
+                            className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-amber-300 hover:text-amber-200"
                           >
                             <RefreshCw className="h-4 w-4" />
                             Retry failed
@@ -558,13 +571,15 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 type="button"
                 onClick={bundle.isComplete ? closeModal : startPurchase}
                 disabled={(!canBuy && !bundle.isComplete) || bundle.isExecuting}
-                className={`w-full rounded-xl py-4 text-base font-semibold transition-all ${
+                className={[
+                  "w-full rounded-2xl py-4 text-base font-semibold transition border",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
                   bundle.isComplete
-                    ? "bg-emerald-500 text-black hover:bg-emerald-400"
+                    ? "bg-primary text-primary-foreground border-primary/25 hover:bg-primary/90"
                     : canBuy && !bundle.isExecuting
-                      ? "bg-emerald-500 text-black hover:bg-emerald-400"
-                      : "bg-white/5 text-white/30 cursor-not-allowed"
-                }`}
+                      ? "bg-primary text-primary-foreground border-primary/25 hover:bg-primary/90 active:scale-[0.99]"
+                      : "bg-card/30 text-muted-foreground border-border/60 cursor-not-allowed",
+                ].join(" ")}
               >
                 {bundle.isExecuting ? (
                   <span className="flex items-center justify-center gap-2">
@@ -586,7 +601,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
               {/* Footer */}
               {bundle.state.phase === "idle" && (
-                <p className="text-center text-xs text-white/30">
+                <p className="text-center text-xs text-muted-foreground">
                   Sequential execution • One fee for entire bundle
                 </p>
               )}

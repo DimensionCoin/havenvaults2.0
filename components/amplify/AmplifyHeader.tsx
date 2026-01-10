@@ -15,11 +15,11 @@ export default function AmplifyHeader({
   onChangeToken,
 }: Props) {
   return (
-    <div className="glass-panel bg-white/10 px-4 py-3 sm:px-5 sm:py-4">
+    <div className="haven-card-soft px-4 py-3 sm:px-5 sm:py-4">
       <div className="flex items-center justify-center">
-        <div className="relative inline-flex items-center gap-1 rounded-2xl border border-white/10 bg-black/45 p-1 shadow-[0_10px_35px_rgba(0,0,0,0.55)]">
+        <div className="relative inline-flex items-center gap-1 rounded-2xl border bg-card/60 p-1 shadow-fintech-sm backdrop-blur">
           {/* subtle inner glow */}
-          <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-white/5" />
+          <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-border/60" />
 
           {tokens.map((t) => {
             const active = t === activeToken;
@@ -30,15 +30,14 @@ export default function AmplifyHeader({
                 onClick={() => onChangeToken(t)}
                 className={[
                   "relative rounded-xl px-5 py-2 text-[12px] font-semibold tracking-[0.22em] transition",
-                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/40",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                   active
                     ? [
-                        "text-black",
-                        "bg-emerald-400",
-                        "shadow-[0_10px_30px_rgba(16,185,129,0.25)]",
-                        "ring-1 ring-emerald-200/60",
+                        "bg-primary text-primary-foreground",
+                        "shadow-fintech-sm",
+                        "ring-1 ring-primary/30",
                       ].join(" ")
-                    : "text-white/70 hover:text-white/90 hover:bg-white/5",
+                    : "text-foreground/70 hover:text-foreground hover:bg-secondary",
                 ].join(" ")}
               >
                 {t}

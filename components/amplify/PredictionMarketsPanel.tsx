@@ -111,15 +111,17 @@ export default function PredictionMarketsPanel({
   };
 
   return (
-    <div className="glass-panel bg-white/10 p-4 sm:p-5">
+    <div className="glass-panel-soft p-4 sm:p-5">
       <div>
-        <div className="text-sm font-semibold text-white/90">
+        <div className="text-sm font-semibold text-foreground">
           Prediction Markets
         </div>
-        <div className="text-xs text-white/45">Outcomes priced like odds.</div>
+        <div className="text-xs text-muted-foreground">
+          Outcomes priced like odds.
+        </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-1 rounded-2xl border border-white/10 bg-black/30 p-1">
+      <div className="mt-3 flex items-center gap-1 rounded-2xl border bg-card/40 p-1">
         {timeframes.map((tf) => {
           const active = tf === activeTimeframe;
           return (
@@ -127,10 +129,10 @@ export default function PredictionMarketsPanel({
               key={tf}
               onClick={() => onChangeTimeframe(tf)}
               className={[
-                "flex-1 rounded-xl px-2 py-2 text-[11px] font-semibold capitalize transition",
+                "flex-1 rounded-xl px-2 py-2 text-[11px] font-semibold capitalize transition border",
                 active
-                  ? "bg-white/10 text-white/90 border border-white/10"
-                  : "text-white/50 hover:text-white/80",
+                  ? "bg-card/60 text-foreground border-border"
+                  : "bg-transparent text-muted-foreground border-transparent hover:text-foreground hover:bg-card/40",
               ].join(" ")}
             >
               {tf}
@@ -140,19 +142,21 @@ export default function PredictionMarketsPanel({
       </div>
 
       <div className="mt-3">
-        <label className="text-xs text-white/50">Stake</label>
-        <div className="mt-1 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-          <span className="text-xs text-white/50 px-2">{displayCurrency}</span>
+        <label className="text-xs text-muted-foreground">Stake</label>
+        <div className="mt-1 flex items-center gap-2 rounded-2xl border bg-card/40 p-2">
+          <span className="px-2 text-xs text-muted-foreground">
+            {displayCurrency}
+          </span>
           <input
             value={stake}
             onChange={(e) => setStake(e.target.value)}
             inputMode="decimal"
             placeholder="0.00"
-            className="w-full bg-transparent text-sm text-white/90 outline-none"
+            className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
           />
           <button
             onClick={() => setStake("10")}
-            className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 hover:text-white/90"
+            className="rounded-xl border bg-card/50 px-2.5 py-1.5 text-[11px] font-semibold text-foreground/80 hover:bg-card/70 transition"
           >
             10
           </button>
@@ -161,15 +165,12 @@ export default function PredictionMarketsPanel({
 
       <div className="mt-3 space-y-2">
         {markets.map((m) => (
-          <div
-            key={m.id}
-            className="rounded-2xl border border-white/10 bg-black/25 p-3"
-          >
+          <div key={m.id} className="rounded-2xl border bg-card/40 p-3">
             <div className="flex items-start justify-between gap-3">
-              <div className="text-sm font-semibold text-white/85">
+              <div className="text-sm font-semibold text-foreground">
                 {m.title}
               </div>
-              <div className="text-xs text-white/45 whitespace-nowrap">
+              <div className="whitespace-nowrap text-xs text-muted-foreground">
                 Ends in {m.endsInLabel}
               </div>
             </div>
@@ -181,12 +182,12 @@ export default function PredictionMarketsPanel({
                 className={[
                   "rounded-2xl border px-3 py-2 text-sm font-semibold transition",
                   stakeNum > 0
-                    ? "border-emerald-300/30 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/20"
-                    : "border-white/10 bg-white/5 text-white/35 cursor-not-allowed",
+                    ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
+                    : "border-border bg-muted/30 text-muted-foreground cursor-not-allowed",
                 ].join(" ")}
               >
                 {m.yesPct}%{" "}
-                <div className="text-[11px] font-semibold text-white/60">
+                <div className="text-[11px] font-semibold text-muted-foreground">
                   Yes
                 </div>
               </button>
@@ -197,21 +198,21 @@ export default function PredictionMarketsPanel({
                 className={[
                   "rounded-2xl border px-3 py-2 text-sm font-semibold transition",
                   stakeNum > 0
-                    ? "border-rose-300/30 bg-rose-500/10 text-rose-100 hover:bg-rose-500/15"
-                    : "border-white/10 bg-white/5 text-white/35 cursor-not-allowed",
+                    ? "border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/15"
+                    : "border-border bg-muted/30 text-muted-foreground cursor-not-allowed",
                 ].join(" ")}
               >
                 {m.noPct}%{" "}
-                <div className="text-[11px] font-semibold text-white/60">
+                <div className="text-[11px] font-semibold text-muted-foreground">
                   No
                 </div>
               </button>
             </div>
 
             {stakeNum > 0 && (
-              <div className="mt-2 text-[11px] text-white/35">
+              <div className="mt-2 text-[11px] text-muted-foreground">
                 Stake:{" "}
-                <span className="text-white/70 font-semibold">
+                <span className="font-semibold text-foreground">
                   {formatMoney(stakeNum, displayCurrency)}
                 </span>
               </div>

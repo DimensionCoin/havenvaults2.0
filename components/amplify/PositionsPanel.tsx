@@ -199,9 +199,9 @@ function asBoosterView(row: BoosterRow | null | undefined): BoosterRowView {
 
 function ProgressBar({ progress }: { progress: number }) {
   return (
-    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
       <div
-        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
         style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
       />
     </div>
@@ -213,37 +213,36 @@ function StageIcon({
 }: {
   icon: "spinner" | "wallet" | "success" | "error";
 }) {
-  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
+  const base =
+    "flex h-14 w-14 items-center justify-center rounded-2xl border shadow-fintech-sm";
 
   if (icon === "success") {
     return (
-      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
-        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      <div className={`${base} border-primary/30 bg-primary/10`}>
+        <CheckCircle2 className="h-7 w-7 text-primary" />
       </div>
     );
   }
 
   if (icon === "error") {
     return (
-      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
-        <XCircle className="h-7 w-7 text-rose-400" />
+      <div className={`${base} border-destructive/30 bg-destructive/10`}>
+        <XCircle className="h-7 w-7 text-destructive" />
       </div>
     );
   }
 
   if (icon === "wallet") {
     return (
-      <div
-        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
-      >
-        <Wallet className="h-7 w-7 text-amber-400" />
+      <div className={`${base} animate-pulse border-primary/25 bg-primary/10`}>
+        <Wallet className="h-7 w-7 text-primary" />
       </div>
     );
   }
 
   return (
-    <div className={`${base} border-white/10 bg-white/5`}>
-      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    <div className={`${base} border-border bg-card/40`}>
+      <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
     </div>
   );
 }
@@ -488,22 +487,22 @@ export default function PositionsPanel({
   return (
     <>
       {/* POSITIONS LIST */}
-      <div className="glass-panel bg-white/10 p-4 sm:p-5 lg:sticky lg:top-3">
-        <div className="text-sm font-semibold text-white/90">
+      <div className="glass-panel-soft p-4 sm:p-5 lg:sticky lg:top-3">
+        <div className="text-sm font-semibold text-foreground">
           Your Positions
         </div>
 
         <div className="mt-4 space-y-2">
           {!ownerReady ? (
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
+            <div className="rounded-2xl border bg-card/40 p-3 text-xs text-muted-foreground">
               Loading Account
             </div>
           ) : loading && rows.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
+            <div className="rounded-2xl border bg-card/40 p-3 text-xs text-muted-foreground">
               Loading positions…
             </div>
           ) : rows.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-xs text-white/45">
+            <div className="rounded-2xl border bg-card/40 p-3 text-xs text-muted-foreground">
               No Multiplied positions yet.
             </div>
           ) : (
@@ -526,16 +525,13 @@ export default function PositionsPanel({
 
               const pnlClass =
                 pnlLocal > 0
-                  ? "text-emerald-300"
+                  ? "text-primary"
                   : pnlLocal < 0
-                    ? "text-red-300"
-                    : "text-white/70";
+                    ? "text-destructive"
+                    : "text-muted-foreground";
 
               return (
-                <div
-                  key={id}
-                  className="rounded-2xl border border-white/10 bg-black/25 p-3"
-                >
+                <div key={id} className="rounded-2xl border bg-card/40 p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-start gap-2">
                       <Image
@@ -543,45 +539,48 @@ export default function PositionsPanel({
                         alt={`${symbol} logo`}
                         width={22}
                         height={22}
-                        className="h-5 w-5 rounded-full border border-white/15 bg-white/5"
+                        className="h-5 w-5 rounded-full border border-border bg-card"
                       />
                       <div>
-                        <div className="text-sm font-semibold text-white/85">
+                        <div className="text-sm font-semibold text-foreground">
                           {symbol} • {view.isLong ? "LONG" : "SHORT"}
                         </div>
-                        <div className="text-[11px] text-white/45">
+                        <div className="text-[11px] text-muted-foreground">
                           {sizeTokens.toFixed(6)} {symbol}
                         </div>
                       </div>
                     </div>
-                    <div className="whitespace-nowrap text-[11px] text-white/45">
+                    <div className="whitespace-nowrap text-[11px] text-muted-foreground">
                       {safeDateLabel(view.createdAt as unknown)}
                     </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                    <div className="text-white/50">
+                    <div className="text-muted-foreground">
                       Buy-in
-                      <div className="font-semibold text-white/80">
+                      <div className="font-semibold text-foreground">
                         {formatMoney(buyInLocal, displayCurrency)}
                       </div>
                     </div>
-                    <div className="text-white/50">
+
+                    <div className="text-muted-foreground">
                       Position value
-                      <div className="font-semibold text-white/80">
+                      <div className="font-semibold text-foreground">
                         {formatMoney(positionValueLocal, displayCurrency)}
                       </div>
                     </div>
-                    <div className="text-white/50">
+
+                    <div className="text-muted-foreground">
                       P&amp;L
                       <div className={`font-semibold ${pnlClass}`}>
                         {pnlLocal >= 0 ? "+" : ""}
                         {formatMoney(pnlLocal, displayCurrency)}
                       </div>
                     </div>
-                    <div className="text-white/50">
+
+                    <div className="text-muted-foreground">
                       Liquidation
-                      <div className="font-semibold text-white/80">
+                      <div className="font-semibold text-foreground">
                         {liqUsd > 0
                           ? formatMoney(toLocal(liqUsd), displayCurrency)
                           : "—"}
@@ -593,7 +592,7 @@ export default function PositionsPanel({
                     <button
                       onClick={() => openCloseModal(p)}
                       disabled={busy}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 disabled:opacity-60 transition"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border bg-card/40 px-3 py-2 text-xs font-semibold text-foreground/85 hover:bg-card/60 disabled:opacity-60 transition"
                     >
                       {busy ? (
                         <>
@@ -615,23 +614,23 @@ export default function PositionsPanel({
       {/* CLOSE SETUP MODAL */}
       {modal?.kind === "setup" && selected && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-background/70 backdrop-blur-sm px-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModal();
           }}
         >
           <div
-            className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+            className="w-full max-w-md rounded-3xl border bg-card p-5 shadow-fintech-xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-start justify-between gap-3">
-              <div className="text-sm font-semibold text-white/90">
+              <div className="text-sm font-semibold text-foreground">
                 Close position
               </div>
               <button
                 onClick={closeModal}
-                className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                className="rounded-xl border bg-card/60 p-2 text-muted-foreground hover:text-foreground transition"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -639,22 +638,22 @@ export default function PositionsPanel({
 
             <div className="mt-4 space-y-4">
               {/* Position info */}
-              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center gap-3 rounded-2xl border bg-card/40 p-3">
                 <Image
                   src={selectedMeta?.logo || "/placeholder.svg"}
                   alt={`${safeStr(selectedView.symbol)} logo`}
                   width={36}
                   height={36}
-                  className="h-9 w-9 rounded-full border border-white/15 bg-white/5"
+                  className="h-9 w-9 rounded-full border border-border bg-card"
                 />
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold text-white/90">
+                  <div className="text-sm font-semibold text-foreground">
                     {safeStr(selectedView.symbol)} •{" "}
                     {selectedView.isLong ? "LONG" : "SHORT"}
                   </div>
-                  <div className="text-xs text-white/50">
+                  <div className="text-xs text-muted-foreground">
                     Max close:{" "}
-                    <span className="font-semibold text-white/80">
+                    <span className="font-semibold text-foreground">
                       {formatMoney(selectedMaxLocal, displayCurrency)}
                     </span>
                   </div>
@@ -673,8 +672,8 @@ export default function PositionsPanel({
                   className={[
                     "rounded-2xl border px-3 py-2 text-sm font-semibold transition",
                     closeAll
-                      ? "border-emerald-300/30 bg-emerald-500/15 text-emerald-100"
-                      : "border-white/10 bg-black/25 text-white/70 hover:text-white/90",
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "border-border bg-card/40 text-foreground/80 hover:bg-card/60",
                     busy ? "opacity-70 cursor-not-allowed" : "",
                   ].join(" ")}
                 >
@@ -687,8 +686,8 @@ export default function PositionsPanel({
                   className={[
                     "rounded-2xl border px-3 py-2 text-sm font-semibold transition",
                     !closeAll
-                      ? "border-emerald-300/30 bg-emerald-500/15 text-emerald-100"
-                      : "border-white/10 bg-black/25 text-white/70 hover:text-white/90",
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "border-border bg-card/40 text-foreground/80 hover:bg-card/60",
                     busy ? "opacity-70 cursor-not-allowed" : "",
                   ].join(" ")}
                 >
@@ -698,13 +697,13 @@ export default function PositionsPanel({
 
               {/* Partial close controls */}
               {!closeAll && (
-                <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-xs font-semibold text-white/80">
+                <div className="space-y-3 rounded-2xl border bg-card/40 p-3">
+                  <div className="text-xs font-semibold text-foreground/90">
                     Amount to close ({displayCurrency})
                   </div>
 
-                  <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-                    <span className="text-xs text-white/50 px-2">
+                  <div className="flex items-center gap-2 rounded-2xl border bg-card/40 p-2">
+                    <span className="px-2 text-xs text-muted-foreground">
                       {displayCurrency}
                     </span>
                     <input
@@ -715,7 +714,7 @@ export default function PositionsPanel({
                       }
                       placeholder="0.00"
                       disabled={busy}
-                      className="w-full bg-transparent text-sm text-white/90 outline-none disabled:opacity-60"
+                      className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
                     />
                   </div>
 
@@ -727,7 +726,7 @@ export default function PositionsPanel({
                         type="button"
                         onClick={() => setPercent(pct)}
                         disabled={busy}
-                        className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[11px] font-semibold text-white/70 hover:bg-white/10 disabled:opacity-60"
+                        className="rounded-xl border bg-card/40 px-2 py-2 text-[11px] font-semibold text-foreground/80 hover:bg-card/60 disabled:opacity-60"
                       >
                         {pct}%
                       </button>
@@ -736,20 +735,21 @@ export default function PositionsPanel({
                       type="button"
                       onClick={setMax}
                       disabled={busy}
-                      className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-2 py-2 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-60"
+                      className="rounded-xl border border-primary/25 bg-primary/10 px-2 py-2 text-[11px] font-semibold text-primary hover:bg-primary/15 disabled:opacity-60"
                     >
                       Max
                     </button>
                   </div>
 
-                  <div className="text-[11px] text-white/45">
+                  <div className="text-[11px] text-muted-foreground">
                     {(() => {
                       const v = validatePartial();
                       if (!v.ok) return "Enter an amount above 0.";
-                      return `Will close ${v.closePercentage}% (~${formatMoney(
-                        v.finalLocal,
-                        displayCurrency
-                      )} / ${v.finalUsd.toFixed(2)} USD)`;
+                      return `Will close ${
+                        v.closePercentage
+                      }% (~${formatMoney(v.finalLocal, displayCurrency)} / ${v.finalUsd.toFixed(
+                        2
+                      )} USD)`;
                     })()}
                   </div>
                 </div>
@@ -763,8 +763,8 @@ export default function PositionsPanel({
                 className={[
                   "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
                   canSubmit && !busy
-                    ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25 active:scale-[0.98]"
-                    : "bg-white/5 border-white/10 text-white/35 cursor-not-allowed",
+                    ? "haven-primary-btn"
+                    : "bg-muted/30 border-border text-muted-foreground cursor-not-allowed",
                 ].join(" ")}
               >
                 {busy ? (
@@ -786,7 +786,7 @@ export default function PositionsPanel({
       {/* PROCESSING / SUCCESS / ERROR MODAL */}
       {modal && modal.kind !== "setup" && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-background/70 backdrop-blur-sm px-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && modal.kind !== "processing") {
               closeModal();
@@ -794,15 +794,15 @@ export default function PositionsPanel({
           }}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+            className="w-full max-w-sm rounded-3xl border bg-card p-5 shadow-fintech-xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button - only for success/error */}
             {modal.kind !== "processing" && (
-              <div className="flex justify-end mb-2">
+              <div className="mb-2 flex justify-end">
                 <button
                   onClick={closeModal}
-                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/50 hover:text-white/90 transition"
+                  className="rounded-xl border bg-card/60 p-2 text-muted-foreground hover:text-foreground transition"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -815,10 +815,10 @@ export default function PositionsPanel({
                 <>
                   <StageIcon icon={stageConfig.icon} />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-white/90">
+                    <div className="text-base font-semibold text-foreground">
                       {stageConfig.title}
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {stageConfig.subtitle}
                     </div>
                   </div>
@@ -830,10 +830,10 @@ export default function PositionsPanel({
                 <>
                   <StageIcon icon="success" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-emerald-100">
+                    <div className="text-base font-semibold text-primary">
                       Position closed!
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Your funds have been returned
                     </div>
                   </div>
@@ -842,10 +842,10 @@ export default function PositionsPanel({
                 <>
                   <StageIcon icon="error" />
                   <div className="mt-4">
-                    <div className="text-base font-semibold text-rose-100">
+                    <div className="text-base font-semibold text-destructive">
                       Close failed
                     </div>
-                    <div className="mt-1 text-sm text-white/50">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       Something went wrong
                     </div>
                   </div>
@@ -855,8 +855,8 @@ export default function PositionsPanel({
 
             {/* Error message */}
             {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                <div className="text-xs text-rose-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3">
+                <div className="text-xs text-destructive text-center">
                   {modal.errorMessage}
                 </div>
               </div>
@@ -864,8 +864,8 @@ export default function PositionsPanel({
 
             {/* Warnings */}
             {modal.kind === "success" && modal.warnings?.length ? (
-              <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3">
-                <div className="text-xs text-amber-200/80 text-center">
+              <div className="mt-4 rounded-2xl border border-primary/25 bg-primary/10 p-3">
+                <div className="text-xs text-foreground/80 text-center">
                   {modal.warnings[0]}
                 </div>
               </div>
@@ -879,10 +879,10 @@ export default function PositionsPanel({
                     href={explorerUrl(modal.closeSig)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:text-white hover:bg-white/10 transition group"
+                    className="flex items-center justify-between rounded-2xl border bg-card/40 px-4 py-3 text-sm text-foreground/85 hover:bg-card/60 transition group"
                   >
                     <span>View transaction</span>
-                    <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
+                    <ExternalLink className="h-4 w-4 opacity-60 group-hover:opacity-100" />
                   </a>
                 )}
                 {modal.sweepSig && (
@@ -890,10 +890,10 @@ export default function PositionsPanel({
                     href={explorerUrl(modal.sweepSig)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs text-white/60 hover:text-white/80 hover:bg-white/10 transition group"
+                    className="flex items-center justify-between rounded-2xl border bg-card/30 px-4 py-2.5 text-xs text-muted-foreground hover:bg-card/50 transition group"
                   >
                     <span>View cleanup tx</span>
-                    <ExternalLink className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
+                    <ExternalLink className="h-3.5 w-3.5 opacity-60 group-hover:opacity-100" />
                   </a>
                 )}
               </div>
@@ -906,8 +906,8 @@ export default function PositionsPanel({
                 className={[
                   "mt-5 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
                   modal.kind === "success"
-                    ? "bg-emerald-500/20 border-emerald-300/30 text-emerald-100 hover:bg-emerald-500/25"
-                    : "bg-white/10 border-white/10 text-white/80 hover:bg-white/15",
+                    ? "bg-primary/10 border-primary/25 text-primary hover:bg-primary/15"
+                    : "bg-muted/30 border-border text-foreground/80 hover:bg-muted/40",
                 ].join(" ")}
               >
                 {modal.kind === "success" ? "Done" : "Close"}
@@ -916,7 +916,7 @@ export default function PositionsPanel({
 
             {/* Processing footer */}
             {modal.kind === "processing" && (
-              <div className="mt-6 text-center text-xs text-white/30">
+              <div className="mt-6 text-center text-xs text-muted-foreground">
                 Please don&apos;t close this window
               </div>
             )}

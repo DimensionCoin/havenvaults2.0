@@ -66,7 +66,6 @@ function TabBar({
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  // Build tabs array from TAB_META (same shape as CategoryTabs)
   const tabs = useMemo(() => {
     return (Object.keys(TAB_META) as AmplifyTab[]).map((id) => ({
       id,
@@ -76,7 +75,6 @@ function TabBar({
     }));
   }, []);
 
-  // Scroll active tab into view on mount/change
   useEffect(() => {
     if (activeRef.current && scrollRef.current) {
       const container = scrollRef.current;
@@ -107,22 +105,25 @@ function TabBar({
             ref={isActive ? activeRef : undefined}
             type="button"
             onClick={() => onTabChange(tab.id)}
-            className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
+            className={[
+              "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+              "border focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
               isActive
-                ? "bg-zinc-100 text-zinc-900"
-                : "bg-zinc-900/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            }`}
+                ? "bg-primary text-primary-foreground border-primary/25"
+                : "bg-card/40 text-muted-foreground border-border/60 hover:bg-card/60 hover:text-foreground",
+            ].join(" ")}
           >
             {tab.icon}
             <span className="whitespace-nowrap">{tab.label}</span>
 
             {showCount && (
               <span
-                className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                className={[
+                  "rounded-full px-1.5 py-0.5 text-[10px] border",
                   isActive
-                    ? "bg-zinc-900 text-zinc-100"
-                    : "bg-zinc-700 text-zinc-300"
-                }`}
+                    ? "bg-primary-foreground/10 text-primary-foreground border-primary-foreground/15"
+                    : "bg-card/60 text-muted-foreground border-border/60",
+                ].join(" ")}
               >
                 {tab.badge}
               </span>
@@ -142,11 +143,17 @@ function PlaceholderPanel({
   subtitle: string;
 }) {
   return (
-    <div className="glass-panel-soft p-5">
-      <div className="glass-pill">{title}</div>
-      <div className="mt-3 rounded-2xl border border-white/10 bg-black/35 p-4">
-        <div className="text-sm font-semibold text-white/85">{subtitle}</div>
-        <div className="mt-1 text-xs text-white/45">
+    <div className="glass-panel bg-card/30 p-5">
+      <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/40 px-3 py-1.5 text-xs font-semibold text-foreground/85">
+        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+        {title}
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-border/60 bg-card/30 p-4">
+        <div className="text-sm font-semibold text-foreground/90">
+          {subtitle}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
           Replace this panel with the real components/layout for this tab.
         </div>
       </div>
@@ -306,16 +313,16 @@ export default function AmplifyPage() {
                 </div>
 
                 {/* Overlay */}
-                <div className="absolute inset-0 rounded-3xl border border-white/10 bg-black/35 backdrop-blur-xs">
+                <div className="absolute inset-0 rounded-3xl border border-border/60 bg-background/40 backdrop-blur-sm">
                   <div className="flex h-full w-full items-center justify-center p-6">
                     <div className="text-center">
-                      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2">
-                        <Sparkles className="h-4 w-4 text-emerald-300" />
-                        <span className="text-sm font-semibold text-white/90">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/40 px-4 py-2">
+                        <Sparkles className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-semibold text-foreground">
                           Predictions coming soon
                         </span>
                       </div>
-                      <div className="mt-2 text-xs text-white/50">
+                      <div className="mt-2 text-xs text-muted-foreground">
                         We&apos;re polishing markets + settlement. You&apos;ll
                         see this soon.
                       </div>
@@ -324,6 +331,7 @@ export default function AmplifyPage() {
                 </div>
               </div>
             )}
+
             {tab === "multiplier" ? (
               <PositionsPanel
                 ownerBase58={ownerBase58}
@@ -343,20 +351,20 @@ export default function AmplifyPage() {
             )}
 
             {!ownerBase58 && user ? (
-              <div className="text-xs text-amber-200/80">
+              <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
                 Wallet is still loading — positions will appear in a moment.
               </div>
             ) : null}
 
             {booster.error ? (
-              <div className="text-xs text-rose-200/80">{booster.error}</div>
+              <div className="rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3 text-xs text-destructive">
+                {booster.error}
+              </div>
             ) : null}
           </div>
         ) : tab === "bundles" ? (
           <div className="space-y-4">
-            <BundlesPanel
-              ownerBase58={ownerBase58}
-            />
+            <BundlesPanel ownerBase58={ownerBase58} />
           </div>
         ) : (
           <div className="space-y-4">
