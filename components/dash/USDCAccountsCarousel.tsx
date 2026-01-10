@@ -19,6 +19,7 @@ import PlusSavingsAccountCard from "@/components/accounts/PlusSavingsAccountCard
 import DepositFlex from "@/components/accounts/flex/Deposit";
 
 type SlideKey = "deposit" | "flex" | "plus";
+type FxPayload = { base?: string; target?: string; rate?: number };
 
 function d128ToNumber(v: unknown): number {
   if (typeof v !== "string") return 0;
@@ -26,7 +27,7 @@ function d128ToNumber(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-type FxPayload = { base?: string; target?: string; rate?: number };
+const PEEK_FRACTION = 0.06;
 
 const USDCAccountsCarousel: React.FC = () => {
   const { user, loading: userLoading, savingsFlex, savingsPlus } = useUser();
@@ -34,8 +35,9 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  const [fxRate, setFxRate] = useState<number>(1);
-  const [fxReady, setFxReady] = useState<boolean>(false);
+  // FX (base -> display)
+  const [fxRate, setFxRate] = useState(1);
+  const [fxReady, setFxReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -85,23 +87,32 @@ const USDCAccountsCarousel: React.FC = () => {
   const loading = userLoading || balanceLoading || !fxReady;
 
   const [activeIndex, setActiveIndex] = useState(0);
+
+  // Flex deposit modal
   const [flexDepositOpen, setFlexDepositOpen] = useState(false);
 
+  // Track ref
   const trackRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ mouse-only dragging (desktop). Mobile uses native swipe.
-  const draggingRef = useRef(false);
+  // Desktop drag (mouse only)
+  const mouseDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartScroll = useRef(0);
+
+  const getCards = () => {
+    const el = trackRef.current;
+    if (!el) return [];
+    return Array.from(el.querySelectorAll<HTMLElement>("[data-carousel-card]"));
+  };
 
   const onPointerDown = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
 
-    // ✅ Do not hijack touch/pen on mobile
+    // ✅ IMPORTANT: never hijack touch (mobile) — keep it native.
     if (e.pointerType !== "mouse") return;
 
-    draggingRef.current = true;
+    mouseDragging.current = true;
     dragStartX.current = e.clientX;
     dragStartScroll.current = el.scrollLeft;
 
@@ -109,6 +120,7 @@ const USDCAccountsCarousel: React.FC = () => {
       el.setPointerCapture(e.pointerId);
     } catch {}
 
+    // Temporarily disable snapping during drag for smoothness
     el.style.scrollSnapType = "none";
     el.classList.add("is-dragging");
   };
@@ -116,7 +128,7 @@ const USDCAccountsCarousel: React.FC = () => {
   const onPointerMove = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    if (!draggingRef.current) return;
+    if (!mouseDragging.current) return;
 
     const dx = e.clientX - dragStartX.current;
     el.scrollLeft = dragStartScroll.current - dx;
@@ -125,9 +137,10 @@ const USDCAccountsCarousel: React.FC = () => {
   const endDrag = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    if (!draggingRef.current) return;
+    if (!mouseDragging.current) return;
 
-    draggingRef.current = false;
+    mouseDragging.current = false;
+
     try {
       el.releasePointerCapture(e.pointerId);
     } catch {}
@@ -136,9 +149,7 @@ const USDCAccountsCarousel: React.FC = () => {
     el.classList.remove("is-dragging");
   };
 
-  // set card width so active card has peeks on both sides
-  const PEEK_FRACTION = 0.06;
-
+  // Set card width to show peeks
   useLayoutEffect(() => {
     const el = trackRef.current;
     if (!el) return;
@@ -146,26 +157,22 @@ const USDCAccountsCarousel: React.FC = () => {
     const safePeek = Math.max(0, Math.min(0.2, PEEK_FRACTION));
 
     const compute = () => {
+      const cards = getCards();
+      if (!cards.length) return;
       const cardWidth = el.clientWidth * (1 - 2 * safePeek);
-      const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
-      cards.forEach((c) => {
-        c.style.width = `${cardWidth}px`;
-      });
+      cards.forEach((c) => (c.style.width = `${cardWidth}px`));
+      // Helps snapping align nicely
+      el.style.scrollPaddingInline = `${el.clientWidth * safePeek}px`;
     };
 
     compute();
-    const id = requestAnimationFrame(compute);
-
-    const ro = new ResizeObserver(() => compute());
+    const ro = new ResizeObserver(compute);
     ro.observe(el);
 
-    return () => {
-      cancelAnimationFrame(id);
-      ro.disconnect();
-    };
+    return () => ro.disconnect();
   }, []);
 
-  // ✅ rAF throttle scroll handler (smooth + no state spam)
+  // rAF-throttled active index calc (no “spam”)
   const rafRef = useRef<number | null>(null);
 
   const handleScroll = useCallback(() => {
@@ -177,7 +184,7 @@ const USDCAccountsCarousel: React.FC = () => {
       const el = trackRef.current;
       if (!el) return;
 
-      const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
+      const cards = getCards();
       if (!cards.length) return;
 
       const viewportCenter = el.scrollLeft + el.clientWidth / 2;
@@ -186,8 +193,8 @@ const USDCAccountsCarousel: React.FC = () => {
       let bestDist = Infinity;
 
       cards.forEach((card, idx) => {
-        const cardCenter = card.offsetLeft + card.clientWidth / 2;
-        const dist = Math.abs(cardCenter - viewportCenter);
+        const center = card.offsetLeft + card.clientWidth / 2;
+        const dist = Math.abs(center - viewportCenter);
         if (dist < bestDist) {
           bestDist = dist;
           bestIndex = idx;
@@ -198,11 +205,17 @@ const USDCAccountsCarousel: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
   const scrollToIndex = (index: number) => {
     const el = trackRef.current;
     if (!el) return;
 
-    const cards = el.querySelectorAll<HTMLElement>("[data-carousel-card]");
+    const cards = getCards();
     const clamped = Math.max(0, Math.min(cards.length - 1, index));
     const target = cards[clamped];
     if (!target) return;
@@ -272,6 +285,7 @@ const USDCAccountsCarousel: React.FC = () => {
       {/* MOBILE / TABLET */}
       <section className="w-full space-y-2 lg:hidden">
         <div className="flex items-center justify-between gap-3">
+          {/* Tabs */}
           <div className="flex gap-1.5">
             {slides.map((s) => {
               const isActive = s.index === activeIndex;
@@ -294,6 +308,7 @@ const USDCAccountsCarousel: React.FC = () => {
             })}
           </div>
 
+          {/* Prev / Next */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -321,16 +336,16 @@ const USDCAccountsCarousel: React.FC = () => {
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
+            onPointerLeave={endDrag}
             onScroll={handleScroll}
             className={[
               "carousel-track",
-              "relative flex gap-2 overflow-x-auto overflow-y-visible snap-x snap-mandatory",
+              "relative flex gap-2 overflow-x-auto snap-x snap-mandatory",
               "scrollbar-hide",
-              // ✅ vertical scroll passes through perfectly
-              "[touch-action:pan-y_pinch-zoom]",
-              // ✅ smoother iOS inertial scrolling
               "[-webkit-overflow-scrolling:touch]",
-              // ✅ keep the horizontal momentum contained (feels native)
+              // ✅ THIS is the key: allow both directions
+              "[touch-action:pan-x_pan-y_pinch-zoom]",
+              // ✅ horizontal overscroll contained; vertical passes to page
               "[overscroll-behavior-x:contain] [overscroll-behavior-y:auto]",
             ].join(" ")}
             style={{ scrollSnapType: "x mandatory" }}
