@@ -377,7 +377,7 @@ const Transfer: React.FC<TransferProps> = ({
       const shortSig =
         sig && sig.length > 12 ? `${sig.slice(0, 6)}…${sig.slice(-6)}` : sig;
 
-      setSuccessMsg(sig ? `USDC sent. Tx: ${shortSig}` : "USDC sent.");
+      setSuccessMsg(sig ? `transfer sent. Tx: ${shortSig}` : "transfer failed.");
 
       try {
         await new Promise((r) => setTimeout(r, 1200));
@@ -489,10 +489,10 @@ const Transfer: React.FC<TransferProps> = ({
                         onChange={(e) => setRecipientInput(e.target.value)}
                         placeholder="friend@example.com"
                         className={[
-                          "haven-input pl-9 pr-3 py-2 text-[12px]",
+                          "haven-input pl-9 pr-3 py-2 text-[12px] text-foreground",
                           resolveState === "error" ||
                           resolveState === "not_found"
-                            ? "border-destructive/40 focus-visible:ring-destructive/30"
+                            ? "border-destructive/40 focus-visible:ring-destructive/30 "
                             : "",
                         ].join(" ")}
                       />
