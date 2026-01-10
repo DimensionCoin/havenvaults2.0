@@ -97,11 +97,18 @@ const USDCAccountsCarousel: React.FC = () => {
 
   // === layout / drag state for MOBILE carousel ===
   const trackRef = useRef<HTMLDivElement | null>(null);
+
   const [dragging, setDragging] = useState(false);
+
+  // gesture / pointer tracking
+  const pointerIdRef = useRef<number | null>(null);
   const dragStartX = useRef(0);
+  const dragStartY = useRef(0);
   const dragStartScroll = useRef(0);
+  const dragLock = useRef<"x" | "y" | null>(null);
 
   const PEEK_FRACTION = 0.06;
+  const INTENT_THRESHOLD_PX = 8; // how far before we decide x vs y
 
   const isInteractiveElement = (target: EventTarget | null): boolean => {
     if (!(target instanceof HTMLElement)) return false;
@@ -132,31 +139,78 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (isInteractiveElement(e.target)) return;
+
     const el = trackRef.current;
     if (!el) return;
-    el.style.scrollSnapType = "none";
-    el.setPointerCapture(e.pointerId);
-    setDragging(true);
+
+    // reset direction lock for this gesture
+    pointerIdRef.current = e.pointerId;
+    dragLock.current = null;
+    setDragging(false);
+
     dragStartX.current = e.clientX;
+    dragStartY.current = e.clientY;
     dragStartScroll.current = el.scrollLeft;
+
+    // IMPORTANT: do NOT capture pointer yet.
+    // We only capture if user intent is horizontal (lock === "x")
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!dragging) return;
     const el = trackRef.current;
     if (!el) return;
+    if (pointerIdRef.current !== e.pointerId) return;
+
     const dx = e.clientX - dragStartX.current;
+    const dy = e.clientY - dragStartY.current;
+
+    // Decide intent once user moves enough
+    if (dragLock.current === null) {
+      if (
+        Math.abs(dx) < INTENT_THRESHOLD_PX &&
+        Math.abs(dy) < INTENT_THRESHOLD_PX
+      ) {
+        return;
+      }
+
+      // If vertical intent: let the page scroll naturally
+      if (Math.abs(dy) > Math.abs(dx)) {
+        dragLock.current = "y";
+        return;
+      }
+
+      // Horizontal intent: lock to x and take over
+      dragLock.current = "x";
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {}
+      el.style.scrollSnapType = "none";
+      setDragging(true);
+    }
+
+    // If locked vertical, do nothing (page scroll works)
+    if (dragLock.current === "y") return;
+
+    // Locked horizontal: prevent vertical scroll + drag scrollLeft
+    e.preventDefault();
     el.scrollLeft = dragStartScroll.current - dx;
   };
 
   const endDrag = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    try {
-      el.releasePointerCapture(e.pointerId);
-    } catch {}
-    setDragging(false);
-    el.style.scrollSnapType = "x mandatory";
+
+    if (pointerIdRef.current === e.pointerId) {
+      if (dragLock.current === "x") {
+        try {
+          el.releasePointerCapture(e.pointerId);
+        } catch {}
+        el.style.scrollSnapType = "x mandatory";
+      }
+      pointerIdRef.current = null;
+      dragLock.current = null;
+      setDragging(false);
+    }
   };
 
   // set card width so active card has peeks on both sides
@@ -299,7 +353,7 @@ const USDCAccountsCarousel: React.FC = () => {
       {/* MOBILE / TABLET */}
       <section className="w-full space-y-2 lg:hidden">
         <div className="flex items-center justify-between gap-3">
-          {/* Tabs (token-based, matches Haven theme) */}
+          {/* Tabs */}
           <div className="flex gap-1.5">
             {slides.map((s) => {
               const isActive = s.index === activeIndex;
@@ -322,7 +376,7 @@ const USDCAccountsCarousel: React.FC = () => {
             })}
           </div>
 
-          {/* Prev/Next buttons (token-based) */}
+          {/* Prev/Next */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -352,10 +406,13 @@ const USDCAccountsCarousel: React.FC = () => {
             onPointerCancel={endDrag}
             onScroll={handleScroll}
             className={[
-              "relative flex gap-2 overflow-x-auto snap-x snap-mandatory select-none",
+              "relative flex gap-2 overflow-x-auto snap-x snap-mandatory",
               "scrollbar-hide",
               dragging ? "cursor-grabbing" : "cursor-grab",
-              "touch-pan-x [touch-action:pan-x] [will-change:scroll-position]",
+              // KEY: allow vertical scrolling through this area
+              "touch-pan-y",
+              // nice performance
+              "[will-change:scroll-position]",
             ].join(" ")}
             style={{ scrollSnapType: "x mandatory" }}
           >

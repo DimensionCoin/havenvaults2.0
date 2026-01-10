@@ -351,3 +351,22 @@ html, body {
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .trending-scroll::-webkit-scrollbar { display: none; }
 .trending-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* =============================
+   GLOBAL: hide ALL scrollbars (keep scrolling)
+   ============================= */
+* {
+  -ms-overflow-style: none;   /* IE/Edge legacy */
+  scrollbar-width: none;      /* Firefox */
+}
+
+*::-webkit-scrollbar {
+  width: 0 !important;        /* Chrome/Safari */
+  height: 0 !important;
+}
+
+/* Prevent random horizontal bars from layout overflow */
+html,
+body {
+  overflow-x: hidden;
+}

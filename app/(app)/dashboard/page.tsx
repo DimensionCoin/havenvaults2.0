@@ -7,20 +7,15 @@ import USDCAccountsCarousel from "@/components/dash/USDCAccountsCarousel";
 
 export default function DashboardPage() {
   return (
-    <main className="min-h-screen w-full px-3 pt-1 ">
+    <main className="min-h-screen w-full px-3 pt-1 pb-24">
       <section className="mx-auto w-full space-y-4">
-        {/* Big hero/balance/chart card */}
         <DashboardHeroCard />
 
-        {/* USDC accounts strip */}
         <p>Accounts</p>
         <USDCAccountsCarousel />
 
-        {/* Token holdings */}
         <p>Assets</p>
-        <div className="">
-          <InvestAccountCard />
-        </div>
+        <InvestAccountCard />
       </section>
     </main>
   );
