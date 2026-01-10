@@ -6,12 +6,12 @@ import { Loader2 } from "lucide-react";
 type Props = {
   onRefresh: () => Promise<void>;
   children: React.ReactNode;
-  /** Pull distance required to trigger refresh (default: 80) */
   threshold?: number;
-  /** Max pull distance (default: 120) */
   maxPull?: number;
-  /** Disable pull to refresh */
   disabled?: boolean;
+
+  /** ID of your scroll container (in RootLayout you have id="app") */
+  scrollContainerId?: string;
 };
 
 export default function PullToRefresh({
@@ -20,130 +20,150 @@ export default function PullToRefresh({
   threshold = 80,
   maxPull = 120,
   disabled = false,
+  scrollContainerId = "app",
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Track gesture
+  const startXRef = useRef(0);
   const startYRef = useRef(0);
-  const currentYRef = useRef(0);
+  const lockRef = useRef<"x" | "y" | null>(null);
 
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
 
-  const canPull = useCallback(() => {
-    if (disabled || isRefreshing) return false;
-    // Only allow pull when at top of page
-    return window.scrollY <= 0;
-  }, [disabled, isRefreshing]);
+  const getScrollEl = useCallback(() => {
+    // Your app scrolls inside #app (RootLayout)
+    const el = document.getElementById(scrollContainerId);
+    return el;
+  }, [scrollContainerId]);
 
-  const handleTouchStart = useCallback(
+  const getScrollTop = useCallback(() => {
+    const el = getScrollEl();
+    if (!el) return 0;
+    return el.scrollTop;
+  }, [getScrollEl]);
+
+  const canStartPull = useCallback(() => {
+    if (disabled || isRefreshing) return false;
+    // Only allow pull when REAL scroll container is at top
+    return getScrollTop() <= 0;
+  }, [disabled, isRefreshing, getScrollTop]);
+
+  const onTouchStart = useCallback(
     (e: TouchEvent) => {
-      if (!canPull()) return;
+      if (!canStartPull()) return;
+
+      lockRef.current = null;
+      startXRef.current = e.touches[0].clientX;
       startYRef.current = e.touches[0].clientY;
-      currentYRef.current = startYRef.current;
     },
-    [canPull]
+    [canStartPull]
   );
 
-  const handleTouchMove = useCallback(
+  const onTouchMove = useCallback(
     (e: TouchEvent) => {
-      if (!canPull() && !isPulling) return;
+      if (disabled || isRefreshing) return;
 
-      const currentY = e.touches[0].clientY;
-      const diff = currentY - startYRef.current;
+      const x = e.touches[0].clientX;
+      const y = e.touches[0].clientY;
 
-      // Only activate if pulling down from top
-      if (diff > 0 && window.scrollY <= 0) {
-        // Start pulling
-        if (!isPulling && diff > 10) {
-          setIsPulling(true);
+      const dx = x - startXRef.current;
+      const dy = y - startYRef.current;
+
+      // Decide gesture direction once user moves enough
+      if (lockRef.current === null) {
+        const intentThreshold = 8;
+        if (Math.abs(dx) < intentThreshold && Math.abs(dy) < intentThreshold) {
+          return;
         }
+        lockRef.current = Math.abs(dy) > Math.abs(dx) ? "y" : "x";
+      }
+
+      // If horizontal gesture, never interfere (lets carousels feel native)
+      if (lockRef.current === "x") return;
+
+      // Vertical gesture: only pull when at top and pulling DOWN
+      if (dy > 0 && getScrollTop() <= 0) {
+        if (!isPulling && dy > 10) setIsPulling(true);
 
         if (isPulling) {
-          // Prevent default scroll behavior
+          // Stop iOS rubber-band / browser refresh
           e.preventDefault();
 
-          // Apply resistance - gets harder to pull as you go
+          // Resistance curve
           const resistance = 0.5;
-          const adjustedDiff = Math.min(diff * resistance, maxPull);
-
-          currentYRef.current = currentY;
-          setPullDistance(adjustedDiff);
+          const adjusted = Math.min(dy * resistance, maxPull);
+          setPullDistance(adjusted);
         }
       }
     },
-    [canPull, isPulling, maxPull]
+    [disabled, isRefreshing, getScrollTop, isPulling, maxPull]
   );
 
-  const handleTouchEnd = useCallback(async () => {
-    if (!isPulling) return;
+  const onTouchEnd = useCallback(async () => {
+    if (!isPulling) {
+      lockRef.current = null;
+      return;
+    }
 
     setIsPulling(false);
 
     if (pullDistance >= threshold) {
-      // Trigger refresh
       setIsRefreshing(true);
-      setPullDistance(threshold * 0.6); // Hold at smaller height while refreshing
+      setPullDistance(threshold * 0.6);
 
       try {
         await onRefresh();
-      } catch (err) {
-        console.error("Refresh failed:", err);
       } finally {
         setIsRefreshing(false);
         setPullDistance(0);
       }
     } else {
-      // Snap back
       setPullDistance(0);
     }
 
-    startYRef.current = 0;
-    currentYRef.current = 0;
+    lockRef.current = null;
   }, [isPulling, pullDistance, threshold, onRefresh]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const node = containerRef.current;
+    if (!node) return;
 
-    // Use passive: false to allow preventDefault on touchmove
-    container.addEventListener("touchstart", handleTouchStart, {
-      passive: true,
-    });
-    container.addEventListener("touchmove", handleTouchMove, {
-      passive: false,
-    });
-    container.addEventListener("touchend", handleTouchEnd, { passive: true });
+    node.addEventListener("touchstart", onTouchStart, { passive: true });
+    node.addEventListener("touchmove", onTouchMove, { passive: false });
+    node.addEventListener("touchend", onTouchEnd, { passive: true });
 
     return () => {
-      container.removeEventListener("touchstart", handleTouchStart);
-      container.removeEventListener("touchmove", handleTouchMove);
-      container.removeEventListener("touchend", handleTouchEnd);
+      node.removeEventListener("touchstart", onTouchStart);
+      node.removeEventListener("touchmove", onTouchMove);
+      node.removeEventListener("touchend", onTouchEnd);
     };
-  }, [handleTouchStart, handleTouchMove, handleTouchEnd]);
+  }, [onTouchStart, onTouchMove, onTouchEnd]);
 
-  // Calculate visual states
   const progress = Math.min(pullDistance / threshold, 1);
   const showIndicator = pullDistance > 10 || isRefreshing;
   const willRefresh = pullDistance >= threshold;
 
   return (
-    <div ref={containerRef} className="relative min-h-screen">
-      {/* Pull indicator */}
+    <div ref={containerRef} className="relative min-h-[100dvh]">
+      {/* Indicator */}
       <div
-        className="absolute left-0 right-0 flex items-center justify-center overflow-hidden pointer-events-none z-50"
+        className="absolute left-0 right-0 top-0 z-50 flex items-center justify-center pointer-events-none"
         style={{
           height: pullDistance,
-          top: 0,
           transition: isPulling ? "none" : "height 0.2s ease-out",
         }}
       >
         {showIndicator && (
           <div
-            className={`flex items-center justify-center rounded-full transition-all duration-200 ${
+            className={[
+              "flex items-center justify-center rounded-full border transition-all duration-200",
               willRefresh || isRefreshing
                 ? "bg-emerald-500/20 border-emerald-500/30"
-                : "bg-white/10 border-white/20"
-            } border`}
+                : "bg-white/10 border-white/20",
+            ].join(" ")}
             style={{
               width: 40,
               height: 40,
@@ -155,12 +175,11 @@ export default function PullToRefresh({
               <Loader2 className="h-5 w-5 text-emerald-400 animate-spin" />
             ) : (
               <svg
-                className={`h-5 w-5 transition-transform duration-200 ${
-                  willRefresh ? "text-emerald-400" : "text-white/60"
-                }`}
-                style={{
-                  transform: `rotate(${progress * 180}deg)`,
-                }}
+                className={[
+                  "h-5 w-5 transition-transform duration-200",
+                  willRefresh ? "text-emerald-400" : "text-white/60",
+                ].join(" ")}
+                style={{ transform: `rotate(${progress * 180}deg)` }}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -177,7 +196,7 @@ export default function PullToRefresh({
         )}
       </div>
 
-      {/* Content with transform */}
+      {/* Content */}
       <div
         style={{
           transform: `translateY(${pullDistance}px)`,

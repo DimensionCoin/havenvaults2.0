@@ -17,8 +17,9 @@ export default function AppLayoutInner({
   }, [refresh]);
 
   return (
-    <PullToRefresh onRefresh={handleRefresh}>
-      <div className="w-full min-h-screen">{children}</div>
+    <PullToRefresh onRefresh={handleRefresh} scrollContainerId="app">
+      <div className="w-full min-h-[100dvh]">{children}</div>
     </PullToRefresh>
   );
+
 }
