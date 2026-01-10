@@ -432,7 +432,7 @@ const Transfer: React.FC<TransferProps> = ({
         className={[
           "p-0 overflow-hidden flex flex-col",
           // Haven surfaces + border
-          "border border-border bg-card text-card-foreground shadow-fintech-lg",
+          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
 
           // Desktop sizing
           "sm:w-[min(92vw,440px)] sm:max-w-[440px]",
@@ -449,10 +449,10 @@ const Transfer: React.FC<TransferProps> = ({
           {/* Scrollable body */}
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
             {/* Header */}
-            <DialogHeader className="pb-3">
+            <DialogHeader className="pb-3 text-foreground">
               <div className="flex items-start justify-between gap-2 pr-10">
-                <div>
-                  <DialogTitle className="text-base font-semibold">
+                <div className="text-foreground">
+                  <DialogTitle className="text-base font-semibold text-foreground">
                     Transfer USDC
                   </DialogTitle>
                   <DialogDescription className="mt-0.5 text-[11px] text-muted-foreground">

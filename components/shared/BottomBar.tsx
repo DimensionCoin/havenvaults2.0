@@ -24,7 +24,7 @@ export default function BottomBar() {
       className="fixed inset-x-0 z-50 md:hidden pointer-events-none"
       style={{
         // ✅ sits on the REAL bottom (safe-area aware) + slight float
-        bottom: "calc(env(safe-area-inset-bottom) + 4px)",
+        bottom: "calc(env(safe-area-inset-bottom) + 1px)",
       }}
     >
       <div className="mx-auto max-w-md px-2 pointer-events-auto">

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useMemo, useCallback } from "react";
-import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useBalance } from "@/providers/BalanceProvider";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
 
@@ -13,14 +13,12 @@ type PositionView = {
   symbol?: string | null;
   isLong?: boolean | null;
 
-  // Value fields (USD)
   spotValueUsd?: number | string | null;
   sizeUsd?: number | string | null;
   collateralUsd?: number | string | null;
   pnlUsd?: number | string | null;
   entryUsd?: number | string | null;
 
-  // Token qty (preferred)
   sizeTokens?: number | string | null;
 };
 
@@ -79,10 +77,8 @@ function asPositionView(row: unknown): PositionView {
 }
 
 /**
- * ✅ Formats like "$15.00" / "€15.00" / "£15.00"
- * ❌ Never shows "CA$" or "USD" etc.
- *
- * Uses Intl parts, keeps the currency SYMBOL only.
+ * "$15.00" / "€15.00" / "£15.00"
+ * never "CA$" etc.
  */
 function formatMoneyNoCode(n: number, currency: string) {
   const c = (currency || "USD").toUpperCase();
@@ -97,15 +93,13 @@ function formatMoneyNoCode(n: number, currency: string) {
       maximumFractionDigits: 2,
     }).formatToParts(value);
 
-    // Keep "$", "€", "£", etc. Remove longer currency displays like "CA$"
     return parts
       .filter((p) => p.type !== "currency" || p.value.length <= 2)
       .map((p) => p.value)
       .join("")
       .trim();
   } catch {
-    const abs = Number.isFinite(value) ? value : 0;
-    return `$${abs.toFixed(2)}`;
+    return `$${value.toFixed(2)}`;
   }
 }
 
@@ -119,6 +113,8 @@ function calcSizeTokensFromEntry(positionValueUsd: number, entryUsd: number) {
 /* ───────── COMPONENT ───────── */
 
 const OpenPositionsMini: React.FC = () => {
+  const router = useRouter();
+
   const balance = useBalance();
   const bal: Record<string, unknown> = isRecord(balance) ? balance : {};
 
@@ -159,6 +155,16 @@ const OpenPositionsMini: React.FC = () => {
     return sorted.slice(0, 3);
   }, [rows]);
 
+  // ✅ ONE place to control where this card goes
+  const targetUrl = "/amplify?tab=multiplier";
+
+  // ✅ bulletproof click handler (prevents parent link/onClick overriding)
+  const goToMultiplier = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    router.push(targetUrl);
+  };
+
   return (
     <div className="mt-5">
       <div className="mb-2 flex items-center justify-between px-1">
@@ -172,13 +178,14 @@ const OpenPositionsMini: React.FC = () => {
         </span>
       </div>
 
+      {/* ✅ Make BOTH states navigate correctly */}
       {!hasPositions ? (
-        <Link
-          href="/amplify?tab=multiplier"
-          className="block"
-          aria-label="Open Amplify page"
+        <button
+          type="button"
+          onClick={goToMultiplier}
+          className="block w-full text-left"
+          aria-label="Open Amplify (Multiplier tab)"
         >
-          
           <div className="rounded-2xl border border-dashed border-border bg-background/40 py-6 text-center transition hover:bg-accent">
             <p className="text-sm font-medium text-foreground">
               No open positions
@@ -187,9 +194,14 @@ const OpenPositionsMini: React.FC = () => {
               Boosted positions will show here when you open one.
             </p>
           </div>
-        </Link>
+        </button>
       ) : (
-        <Link href="/amplify" className="block" aria-label="Open Amplify page">
+        <button
+          type="button"
+          onClick={goToMultiplier}
+          className="block w-full text-left"
+          aria-label="Open Amplify (Multiplier tab)"
+        >
           <div className="overflow-hidden rounded-2xl border border-border bg-background/40 transition hover:bg-accent">
             {/* take-home summary */}
             <div className="flex items-center justify-between px-4 py-3">
@@ -209,7 +221,6 @@ const OpenPositionsMini: React.FC = () => {
                 p.spotValueUsd,
                 safeNum(p.sizeUsd, 0)
               );
-
               const collateralUsd = safeNum(p.collateralUsd, 0);
               const pnlUsd = safeNum(p.pnlUsd, 0);
               const entryUsd = safeNum(p.entryUsd, 0);
@@ -267,12 +278,10 @@ const OpenPositionsMini: React.FC = () => {
 
                   {/* RIGHT */}
                   <div className="shrink-0 text-right">
-                    {/* Collateral */}
                     <p className="text-[13px] font-semibold text-foreground">
                       {formatMoneyNoCode(collateralLocal, displayCurrency)}
                     </p>
 
-                    {/* P&L label LEFT of value */}
                     <div className="mt-2 inline-flex items-baseline gap-2">
                       <span className="text-[11px] text-muted-foreground">
                         P&amp;L
@@ -291,7 +300,7 @@ const OpenPositionsMini: React.FC = () => {
               );
             })}
           </div>
-        </Link>
+        </button>
       )}
     </div>
   );

@@ -61,7 +61,7 @@ const Deposit: React.FC<DepositProps> = ({
         className={[
           "p-0 overflow-hidden flex flex-col",
           // Haven surfaces + border
-          "border border-border bg-card text-card-foreground shadow-fintech-lg",
+          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
 
           // Desktop sizing
           "sm:w-[min(92vw,520px)] sm:max-w-[520px]",

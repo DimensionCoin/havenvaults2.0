@@ -176,7 +176,7 @@ const Withdraw: React.FC<WithdrawProps> = ({
       <DialogContent
         className={[
           "p-0 overflow-hidden flex flex-col",
-          "border border-border bg-card text-card-foreground shadow-fintech-lg",
+          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
           "sm:w-[min(92vw,520px)] sm:max-w-[520px]",
           "sm:max-h-[90vh] sm:rounded-[28px]",
           "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
