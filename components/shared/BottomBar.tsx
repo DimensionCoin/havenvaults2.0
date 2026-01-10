@@ -33,15 +33,15 @@ const BottomBar: React.FC = () => {
   return (
     <nav
       className={[
-        "fixed inset-x-0 bottom-0 z-40 md:hidden",
+        "fixed inset-x-1 bottom-0 z-30 md:hidden",
         // ✅ don’t pad the nav itself (this is what was lifting it)
-        "pb-0",
+        "pb-1",
       ].join(" ")}
       aria-label="Primary"
     >
       <div className="mx-auto max-w-md px-2">
         {/* Background container */}
-        <div className="haven-bottom-nav px-6">
+        <div className="haven-bottom-nav ">
           {/* ✅ Actual nav content (sits low + tiny padding) */}
           <div className="flex items-end justify-between gap-1 pb-2 pt-2">
             {navItems.map(({ href, label, Icon, center }) => {
