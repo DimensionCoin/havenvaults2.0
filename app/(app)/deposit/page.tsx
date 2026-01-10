@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw, PiggyBank } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -19,6 +19,25 @@ import {
   type TokenMeta,
 } from "@/lib/tokenConfig";
 
+/* =========================
+   CONSTANTS
+========================= */
+
+// ✅ Flex savings vault address
+const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
+
+// Fallback avatar when we don’t have a Haven user profile photo.
+const DEFAULT_AVATAR = "/logos/user.png";
+
+// Optional deterministic avatar for non-users
+const USE_DICEBEAR = true;
+const dicebearAvatar = (addr: string) =>
+  `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(addr)}`;
+
+/* =========================
+   TYPES
+========================= */
+
 type DrawerMode = "deposit" | "withdraw" | null;
 
 type TxRow = {
@@ -34,20 +53,30 @@ type TxRow = {
   counterparty?: string | null;
   counterpartyLabel?: string | null;
 
+  // ✅ Populate this from backend if you have a real user profile image URL
+  counterpartyAvatarUrl?: string | null;
+
   swapSoldMint?: string | null;
   swapSoldAmountUi?: number | null;
   swapBoughtMint?: string | null;
   swapBoughtAmountUi?: number | null;
 
-  source?: string | null; // from API
+  source?: string | null;
 };
 
 type FxPayload = { rate?: number };
 
+/* =========================
+   HELPERS
+========================= */
+
+const normAddr = (a?: string | null) => (a || "").trim();
+
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
-  if (addr.length <= 10) return addr;
-  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
+  const a = addr.trim();
+  if (a.length <= 10) return a;
+  return `${a.slice(0, 4)}…${a.slice(-4)}`;
 };
 
 const formatTime = (unixSeconds?: number | null) => {
@@ -105,6 +134,35 @@ function TokenBoughtPill({
   );
 }
 
+// Standard user avatar
+function Avatar({ src, alt }: { src?: string | null; alt: string }) {
+  const [broken, setBroken] = useState(false);
+  const finalSrc = !src || broken ? DEFAULT_AVATAR : src;
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={finalSrc}
+      alt={alt}
+      className="h-7 w-7 rounded-full border border-white/10 object-cover"
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
+// ✅ PiggyBank avatar for savings deposits/withdrawals
+function SavingsAvatar() {
+  return (
+    <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
+      <PiggyBank className="h-4 w-4 text-foreground/80" />
+    </span>
+  );
+}
+
+/* =========================
+   PAGE
+========================= */
+
 export default function DepositAccountPage() {
   const router = useRouter();
   const { user, loading: userLoading } = useUser();
@@ -151,7 +209,7 @@ export default function DepositAccountPage() {
 
   const cluster = useMemo(() => getCluster(), []);
 
-  // Case-insensitive mint index (so helius lowercase matches tokenConfig canonical)
+  // Case-insensitive mint index
   const mintIndex = useMemo(() => {
     const map = new Map<string, TokenMeta>();
     const clusters: Cluster[] = ["mainnet", "devnet"];
@@ -175,14 +233,6 @@ export default function DepositAccountPage() {
         cleaned.toLowerCase() === WSOL_MINT.toLowerCase() ? WSOL_MINT : cleaned;
 
       const meta = mintIndex.get(normalized.toLowerCase()) ?? null;
-
-      console.log("[resolveMeta]", {
-        raw: mint,
-        normalized,
-        cluster,
-        hit: meta?.symbol ?? null,
-      });
-
       if (!meta) return null;
 
       return {
@@ -192,7 +242,7 @@ export default function DepositAccountPage() {
         name: meta.name,
       };
     },
-    [mintIndex, cluster]
+    [mintIndex]
   );
 
   const fetchTxs = useCallback(async () => {
@@ -235,7 +285,7 @@ export default function DepositAccountPage() {
     fetchTxs();
   }, [user, loadFx, fetchTxs]);
 
-  // ✅ swaps only (as before)
+  // swaps only
   const swaps = useMemo(() => {
     return txs.filter((t) => {
       if (t.kind !== "swap") return false;
@@ -245,12 +295,12 @@ export default function DepositAccountPage() {
     });
   }, [txs]);
 
-  // ✅ transfers only
+  // transfers only
   const transfers = useMemo(() => {
     return txs.filter((t) => t.kind === "transfer" && (t.amountUsdc ?? 0) > 0);
   }, [txs]);
 
-  // ✅ combined activity (new)
+  // combined activity
   const activity = useMemo(() => {
     const rows = [...swaps, ...transfers];
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
@@ -264,6 +314,24 @@ export default function DepositAccountPage() {
   }, [usdcUsd, displayCurrency]);
 
   const loading = userLoading || balanceLoading;
+
+  // classify transfer party (frontend-only)
+  const resolveTransferParty = useCallback((tx: TxRow) => {
+    const cp = normAddr(tx.counterparty);
+    const isFlexSavings = cp === FLEX_SAVINGS_ADDR;
+
+    const label = isFlexSavings
+      ? "Flex Savings Account"
+      : tx.counterpartyLabel || shortAddress(cp) || "—";
+
+    const avatarUrl = isFlexSavings
+      ? null // ✅ we will render PiggyBank instead of an image
+      : tx.counterpartyAvatarUrl ||
+        (cp && USE_DICEBEAR ? dicebearAvatar(cp) : null) ||
+        DEFAULT_AVATAR;
+
+    return { label, avatarUrl, isFlexSavings };
+  }, []);
 
   if (!user && !userLoading) {
     return (
@@ -380,27 +448,32 @@ export default function DepositAccountPage() {
                   const boughtAmt = tx.swapBoughtAmountUi ?? 0;
 
                   // transfer fields
-                  const label =
-                    tx.counterpartyLabel ||
-                    shortAddress(tx.counterparty) ||
-                    "—";
+                  const party = !isSwap ? resolveTransferParty(tx) : null;
 
                   // FX conversion for tx amounts only
+                  const localAbs = (tx.amountUsdc ?? 0) * rate;
                   const localSpent = soldUsdc * rate;
 
+                  const isSavings = !!party?.isFlexSavings;
+
+                  // Titles
                   const title = isSwap
                     ? `Asset purchase — ${bought?.symbol ?? "TOKEN"}`
-                    : tx.direction === "in"
-                      ? "Received USDC"
-                      : "Sent USDC";
+                    : isSavings
+                      ? tx.direction === "out"
+                        ? "Savings deposit"
+                        : "Savings withdrawal"
+                      : tx.direction === "in"
+                        ? "Received Money"
+                        : "Sent Money";
 
+                  // Right side amount
                   const rightTop = isSwap
                     ? `-${formatCurrency(localSpent, displayCurrency)}`
                     : tx.direction === "in"
-                      ? `+${formatCurrency((tx.amountUsdc ?? 0) * rate, displayCurrency)}`
-                      : `-${formatCurrency((tx.amountUsdc ?? 0) * rate, displayCurrency)}`;
+                      ? `+${formatCurrency(localAbs, displayCurrency)}`
+                      : `-${formatCurrency(localAbs, displayCurrency)}`;
 
-                  
                   return (
                     <div
                       key={tx.signature}
@@ -423,9 +496,22 @@ export default function DepositAccountPage() {
                             </span>
                           </div>
                         ) : (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {tx.direction === "in" ? "From" : "To"} {label}
-                          </p>
+                          <div className="mt-1 flex items-center gap-2">
+                            {/* ✅ Savings gets PiggyBank icon instead of image */}
+                            {isSavings ? (
+                              <SavingsAvatar />
+                            ) : (
+                              <Avatar
+                                src={party?.avatarUrl}
+                                alt={party?.label ?? "Counterparty"}
+                              />
+                            )}
+
+                            <p className="text-xs text-muted-foreground">
+                              {tx.direction === "in" ? "From" : "To"}{" "}
+                              {party?.label ?? "—"}
+                            </p>
+                          </div>
                         )}
 
                         <p className="mt-1 text-[11px] text-muted-foreground">
@@ -437,7 +523,6 @@ export default function DepositAccountPage() {
                         <p className="text-sm font-semibold text-foreground">
                           {rightTop}
                         </p>
-                        
                       </div>
                     </div>
                   );
