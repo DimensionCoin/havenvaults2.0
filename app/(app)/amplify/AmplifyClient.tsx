@@ -52,12 +52,12 @@ const TAB_META: Record<
   },
   robo: {
     label: "Robo Invest",
-    shortLabel: "Robo",
+    shortLabel: "Robo Invest",
     icon: <Bot className="h-3.5 w-3.5" />,
   },
   multiplier: {
     label: "Multiplier",
-    shortLabel: "Multi",
+    shortLabel: "Multiplier",
     icon: <BarChart3 className="h-3.5 w-3.5" />,
   },
   predict: {
@@ -104,7 +104,7 @@ function TabBar({
               className={[
                 "w-full min-w-0",
                 "inline-flex items-center justify-center gap-1.5 rounded-full",
-                "flex-col px-2 py-2 text-[11px] sm:flex-row sm:px-3 sm:py-1.5 sm:text-xs",
+                "flex-col px-2 py-2 text-[8px] sm:text-[11px] sm:flex-row sm:px-3 sm:py-1.5 sm:text-xs",
                 "font-semibold transition-all border",
                 "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
                 isActive

@@ -344,7 +344,7 @@ export default function DepositAccountPage() {
   }
 
   return (
-    <div className="haven-app px-4 py-6">
+    <div className=" px-4 py-6">
       <div className="mx-auto w-full max-w-[560px] space-y-4">
         {/* Header */}
         <div className="relative flex items-start justify-center">
@@ -359,7 +359,7 @@ export default function DepositAccountPage() {
 
           <div className="text-center">
             <p className="haven-kicker">Deposit Account</p>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
               Account #{shortAddress(walletAddress)}
             </p>
           </div>

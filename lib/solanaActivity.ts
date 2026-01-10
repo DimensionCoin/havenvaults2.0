@@ -41,9 +41,9 @@ export type ActivityItem = {
   blockTime: number | null;
 
   direction: "in" | "out";
-  amountUi: number; // absolute USDC delta (UI)
+  amountUi: number; // absolute USDC amount (UI)
 
-  counterparty?: string | null;
+  counterparty?: string | null; // wallet address if possible
   counterpartyLabel?: string | null;
 
   feeLamports?: number | null;
@@ -56,6 +56,14 @@ export type ActivityItem = {
   swapBoughtAmountUi?: number;
 
   source?: string | null;
+
+  /**
+   * ✅ NEW (optional) – does NOT break existing pages
+   * - accounts: top-level account keys for the tx (wallets, programs, vaults, etc.)
+   * - tokenAccounts: token accounts owned by owner involved in this tx (best-effort)
+   */
+  accounts?: string[];
+  tokenAccounts?: string[];
 };
 
 type Json = Record<string, unknown>;
@@ -133,7 +141,6 @@ type HeliusTx = {
   transaction?: unknown; // TxTransaction
   meta?: unknown; // TxMeta
 
-  // enhanced transfer places:
   tokenTransfers?: unknown;
   events?: unknown;
 };
@@ -172,6 +179,19 @@ const CACHE_TTL_MS = 10_000;
 const CACHE = new Map<string, { ts: number; items: ActivityItem[] }>();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function isRecord(v: unknown): v is Json {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function asArray<T = unknown>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function getProp(obj: unknown, key: string): unknown {
+  if (!isRecord(obj)) return undefined;
+  return obj[key];
+}
 
 const getErrorMessage = (e: unknown) => {
   if (typeof e === "string") return e;
@@ -219,14 +239,6 @@ const toStr = (v: unknown) => (typeof v === "string" ? v : "");
 const normAddr = (v: unknown) => toStr(v).trim();
 const normMint = (v: unknown) => toStr(v).trim().toLowerCase();
 
-function isRecord(v: unknown): v is Json {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function asArray<T = unknown>(v: unknown): T[] {
-  return Array.isArray(v) ? (v as T[]) : [];
-}
-
 /**
  * Smart UI unit conversion:
  * - if string has '.' => UI
@@ -264,16 +276,18 @@ function toUiSmart(raw: unknown, decimals: number) {
 /**
  * Pull amount from a token transfer record robustly.
  */
-function readUiAmount(rec: Record<string, unknown>, mintNorm: string) {
+function readUiAmount(rec: Record<string, unknown>, mintNormStr: string) {
   const tokenAmountObj = rec.tokenAmount ?? rec.rawTokenAmount ?? rec.amount;
 
   const decimals = (() => {
     if (typeof rec.decimals === "number") return rec.decimals;
+
     if (isRecord(tokenAmountObj)) {
       const tokenDec = tokenAmountObj.decimals;
       if (typeof tokenDec === "number") return tokenDec;
     }
-    return mintNorm === USDC_MINT ? USDC_DECIMALS : 0;
+
+    return mintNormStr === USDC_MINT ? USDC_DECIMALS : 0;
   })();
 
   if (isRecord(tokenAmountObj)) {
@@ -311,13 +325,40 @@ function extractEnhancedTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
 
   const ev = isRecord(tx.events) ? tx.events : null;
   if (ev) {
-    for (const t of asArray<TokenTransferRecord>(ev.tokenTransfers))
-      out.push(t);
-    for (const t of asArray<TokenTransferRecord>(ev.fungibleTokenTransfers))
-      out.push(t);
-    for (const t of asArray<TokenTransferRecord>(ev.splTransfers)) out.push(t);
+    out.push(...asArray<TokenTransferRecord>(getProp(ev, "tokenTransfers")));
+    out.push(
+      ...asArray<TokenTransferRecord>(getProp(ev, "fungibleTokenTransfers"))
+    );
+    out.push(...asArray<TokenTransferRecord>(getProp(ev, "splTransfers")));
   }
 
+  return out;
+}
+
+/**
+ * Extract top-level account keys from the message.
+ * ✅ Used for "does this tx involve a specific vault/program" checks.
+ */
+function extractAccountKeys(tx: HeliusTx): string[] {
+  const transaction = isRecord(tx.transaction)
+    ? (tx.transaction as TxTransaction)
+    : null;
+  const message =
+    transaction && isRecord(transaction.message)
+      ? (transaction.message as TxMessage)
+      : null;
+
+  const keys = asArray<TxMessageAccountKey>(message?.accountKeys);
+
+  const out: string[] = [];
+  for (const k of keys) {
+    if (typeof k === "string") {
+      if (k) out.push(k);
+    } else if (isRecord(k)) {
+      const pk = toStr(k.pubkey);
+      if (pk) out.push(pk);
+    }
+  }
   return out;
 }
 
@@ -327,6 +368,7 @@ function buildTokenAccountMaps(tx: HeliusTx) {
   const transaction = isRecord(tx.transaction)
     ? (tx.transaction as TxTransaction)
     : null;
+
   const message =
     transaction && isRecord(transaction.message)
       ? (transaction.message as TxMessage)
@@ -394,11 +436,11 @@ function extractInnerSplTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
   const out: TokenTransferRecord[] = [];
 
   for (const group of innerGroups) {
-    const insts = asArray<InnerInstruction>(group.instructions);
+    const insts = asArray<InnerInstruction>(getProp(group, "instructions"));
 
     for (const ix of insts) {
-      const programId = toStr(ix.programId);
-      const program = toStr(ix.program);
+      const programId = toStr(getProp(ix, "programId"));
+      const program = toStr(getProp(ix, "program"));
 
       const isTokenProgram =
         program === "spl-token" ||
@@ -406,14 +448,15 @@ function extractInnerSplTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
 
       if (!isTokenProgram) continue;
 
-      const parsed = ix.parsed;
-      if (!parsed || !isRecord(parsed)) continue;
+      const parsedRaw = getProp(ix, "parsed");
+      if (!isRecord(parsedRaw)) continue;
 
-      const type = toStr(parsed.type);
+      const type = toStr(getProp(parsedRaw, "type"));
       if (type !== "transfer" && type !== "transferChecked") continue;
 
-      const info = isRecord(parsed.info)
-        ? (parsed.info as InnerParsedTransferInfo)
+      const infoRaw = getProp(parsedRaw, "info");
+      const info = isRecord(infoRaw)
+        ? (infoRaw as InnerParsedTransferInfo)
         : null;
       if (!info) continue;
 
@@ -426,7 +469,8 @@ function extractInnerSplTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
 
       const decimals = metaTok.decimals ?? 0;
 
-      const tokAmt = isRecord(info.tokenAmount) ? info.tokenAmount : null;
+      const tokAmtRaw = info.tokenAmount;
+      const tokAmt = isRecord(tokAmtRaw) ? tokAmtRaw : null;
 
       const rawAmount =
         (tokAmt &&
@@ -443,8 +487,11 @@ function extractInnerSplTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
           amount:
             typeof rawAmount === "string" ? rawAmount : String(rawAmount ?? ""),
           decimals,
-          uiAmountString: tokAmt ? tokAmt.uiAmountString : undefined,
-          uiAmount: tokAmt ? tokAmt.uiAmount : undefined,
+          uiAmountString: tokAmt ? toStr(tokAmt.uiAmountString) : undefined,
+          uiAmount:
+            tokAmt && typeof tokAmt.uiAmount === "number"
+              ? tokAmt.uiAmount
+              : undefined,
         },
       });
     }
@@ -488,11 +535,15 @@ function normalizeToActivity(
     (typeof tx.blockTime === "number" ? tx.blockTime : null);
 
   const feeLamports: number | null = (() => {
-    const fee = toNum(transaction?.fee) || toNum(tx.fee);
+    const feeFromTx = transaction ? toNum(transaction.fee) : 0;
+    const feeFromTop = toNum(tx.fee);
+    const fee = feeFromTx || feeFromTop;
     return fee ? fee : null;
   })();
 
   const source: string | null = toStr(tx.source) || toStr(tx.type) || null;
+
+  const accounts = extractAccountKeys(tx);
 
   const { tokMeta } = buildTokenAccountMaps(tx);
 
@@ -505,6 +556,16 @@ function normalizeToActivity(
   const isOwnerAddress = (addr: string) =>
     addr === owner || ownerTokenAccounts.has(addr);
 
+  // Resolve token-account -> owner wallet if known
+  const tokenAccountOwner = (addr: string): string | null => {
+    const m = tokMeta.get(addr);
+    const o = (m?.owner || "").trim();
+    return o || null;
+  };
+
+  const resolveCounterparty = (addr: string): string =>
+    tokenAccountOwner(addr) || addr;
+
   const transfers = extractTokenTransfers(tx);
 
   type ParsedXfer = {
@@ -516,18 +577,19 @@ function normalizeToActivity(
   };
   const parsed: ParsedXfer[] = [];
 
-  let usdcIn = 0;
-  let usdcOut = 0;
+  let usdcOutTotal = 0;
 
-  let cpIn: string | null = null;
-  let cpOut: string | null = null;
+  // primary leg (prevents tiny extra transfers from breaking savings)
+  let maxIn = { ui: 0, cp: "" };
+  let maxOut = { ui: 0, cp: "" };
 
   for (const t of transfers) {
     const rec = isRecord(t) ? (t as Record<string, unknown>) : null;
     if (!rec) continue;
 
-    const tokenObj = isRecord(rec.token)
-      ? (rec.token as Record<string, unknown>)
+    const tokenObjRaw = rec.token;
+    const tokenObj = isRecord(tokenObjRaw)
+      ? (tokenObjRaw as Record<string, unknown>)
       : null;
 
     const mintRaw =
@@ -536,14 +598,13 @@ function normalizeToActivity(
       toStr(rec.mintAddress) ||
       (tokenObj ? toStr(tokenObj.mint) : "");
 
-    const mintNorm = normMint(mintRaw);
-    if (!mintNorm) continue;
+    const mintNormStr = normMint(mintRaw);
+    if (!mintNormStr) continue;
 
     const fromUser =
       normAddr(rec.fromUserAccount) ||
       normAddr(rec.from) ||
       normAddr(rec.source);
-
     const toUser =
       normAddr(rec.toUserAccount) ||
       normAddr(rec.to) ||
@@ -551,7 +612,6 @@ function normalizeToActivity(
 
     const fromTok =
       normAddr(rec.fromTokenAccount) || normAddr(rec.sourceTokenAccount);
-
     const toTok =
       normAddr(rec.toTokenAccount) || normAddr(rec.destinationTokenAccount);
 
@@ -559,34 +619,37 @@ function normalizeToActivity(
     const to = toUser || toTok;
     if (!from || !to) continue;
 
-    const ui = readUiAmount(rec, mintNorm);
+    const ui = readUiAmount(rec, mintNormStr);
     if (!Number.isFinite(ui) || ui <= 0) continue;
 
-    parsed.push({ mintNorm, mintRaw: mintRaw.trim(), from, to, ui });
+    parsed.push({
+      mintNorm: mintNormStr,
+      mintRaw: mintRaw.trim(),
+      from,
+      to,
+      ui,
+    });
 
-    if (mintNorm === USDC_MINT) {
+    if (mintNormStr === USDC_MINT) {
       const toOwner = isOwnerAddress(to);
       const fromOwner = isOwnerAddress(from);
 
       // inbound to owner
       if (toOwner && !fromOwner) {
-        usdcIn += ui;
-        if (!cpIn) cpIn = from;
+        if (ui > maxIn.ui) maxIn = { ui, cp: resolveCounterparty(from) };
       }
-
       // outbound from owner
       else if (fromOwner && !toOwner) {
-        usdcOut += ui;
-        if (!cpOut) cpOut = to;
+        usdcOutTotal += ui;
+        if (ui > maxOut.ui) maxOut = { ui, cp: resolveCounterparty(to) };
       }
     }
   }
 
-  const usdcDelta = usdcIn - usdcOut;
-  if (!usdcDelta) return null;
+  if (maxIn.ui === 0 && maxOut.ui === 0) return null;
 
-  const direction: "in" | "out" = usdcDelta > 0 ? "in" : "out";
-  const amountUiAbs = Math.abs(usdcDelta);
+  const direction: "in" | "out" = maxIn.ui >= maxOut.ui ? "in" : "out";
+  const amountUiAbs = Math.max(maxIn.ui, maxOut.ui);
 
   // swap detection: owner spent USDC and received some non-USDC token
   let kind: ActivityKind = "transfer";
@@ -595,12 +658,14 @@ function normalizeToActivity(
 
   if (direction === "out") {
     let best: ParsedXfer | null = null;
+
     for (const x of parsed) {
       if (x.mintNorm === USDC_MINT) continue;
       if (isOwnerAddress(x.to)) {
         if (!best || x.ui > best.ui) best = x;
       }
     }
+
     if (best) {
       kind = "swap";
       swapBoughtMint = best.mintRaw || best.mintNorm;
@@ -608,28 +673,38 @@ function normalizeToActivity(
     }
   }
 
-  const counterparty = direction === "in" ? cpIn : cpOut;
+  const counterparty =
+    kind === "transfer"
+      ? direction === "in"
+        ? maxIn.cp || null
+        : maxOut.cp || null
+      : null;
+
+  const tokenAccounts = Array.from(ownerTokenAccounts);
 
   const item: ActivityItem = {
     signature: sig,
     blockTime,
     direction,
     amountUi: amountUiAbs,
-    counterparty: kind === "transfer" ? counterparty : null,
+    counterparty,
     feeLamports,
     kind,
     source,
+    accounts,
+    tokenAccounts,
   };
 
   if (kind === "swap") {
-    // total USDC outflow from owner (includes any USDC “fee transfers” in same tx)
-    const sold = usdcOut || amountUiAbs;
+    const sold = usdcOutTotal || amountUiAbs;
+
     item.swapSoldMint = USDC_MINT_RAW;
     item.swapSoldAmountUi = sold;
     item.amountUi = sold;
 
     item.swapBoughtMint = swapBoughtMint;
     item.swapBoughtAmountUi = swapBoughtAmountUi;
+
     item.counterparty = null;
   }
 
@@ -637,7 +712,7 @@ function normalizeToActivity(
 }
 
 /* =========================
-   PUBLIC EXPORT
+   PUBLIC EXPORT (existing)
 ========================= */
 
 export async function getUsdcActivityForOwner(
@@ -683,4 +758,94 @@ export async function getUsdcActivityForOwner(
 
   CACHE.set(cacheKey, { ts: Date.now(), items });
   return items;
+}
+
+/* =========================
+   NEW HELPERS (for savings)
+========================= */
+
+/**
+ * ✅ True if the tx's top-level account keys include `addr`.
+ */
+export function isTxInvolvingAccount(item: ActivityItem, addr: string) {
+  const a = addr.trim();
+  if (!a) return false;
+  return Array.isArray(item.accounts) && item.accounts.includes(a);
+}
+
+/**
+ * ✅ Server-side paging + filtering: returns *only* txs involving `involveAddr`.
+ */
+export async function getUsdcActivityForOwnerInvolving(
+  owner58: string,
+  involveAddr: string,
+  opts?: {
+    want?: number;
+    maxPages?: number;
+    before?: string;
+    pageSize?: number;
+  }
+): Promise<{ items: ActivityItem[]; nextBefore: string | null }> {
+  const want = Math.min(Math.max(opts?.want ?? 30, 1), 200);
+  const pageSize = Math.min(Math.max(opts?.pageSize ?? 100, 10), 100);
+  const maxPages = Math.min(Math.max(opts?.maxPages ?? 40, 1), 80);
+
+  let cursor = opts?.before;
+  let pages = 0;
+
+  const matched: ActivityItem[] = [];
+  let lastCursor: string | null = null;
+
+  while (pages < maxPages && matched.length < want) {
+    pages += 1;
+
+    const page = await getUsdcActivityForOwner(owner58, {
+      limit: pageSize,
+      before: cursor,
+    });
+
+    if (!page.length) break;
+
+    for (const it of page) {
+      if (isTxInvolvingAccount(it, involveAddr)) matched.push(it);
+      if (matched.length >= want) break;
+    }
+
+    cursor = page[page.length - 1]?.signature || cursor;
+    lastCursor = cursor || null;
+
+    if (page.length < pageSize) break;
+  }
+
+  return { items: matched.slice(0, want), nextBefore: lastCursor };
+}
+
+/**
+ * ✅ Convenience for Flex:
+ * Returns ONLY transfer rows involving the flex addr.
+ */
+export async function getFlexSavingsActivity(
+  owner58: string,
+  flexAddr: string,
+  opts?: { want?: number; before?: string; maxPages?: number }
+) {
+  const { items, nextBefore } = await getUsdcActivityForOwnerInvolving(
+    owner58,
+    flexAddr,
+    {
+      want: opts?.want ?? 30,
+      before: opts?.before,
+      maxPages: opts?.maxPages ?? 60,
+      pageSize: 100,
+    }
+  );
+
+  const transfers = items.filter(
+    (i) => i.kind === "transfer" && i.amountUi > 0
+  );
+
+  // newest first
+  transfers.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+
+  return { items: transfers, nextBefore };
 }

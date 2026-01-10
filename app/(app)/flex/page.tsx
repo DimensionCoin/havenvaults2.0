@@ -14,10 +14,10 @@ import WithdrawFlex from "@/components/accounts/flex/Withdraw";
    CONSTANTS
 ========================= */
 
-// ✅ Flex savings vault address (the counterparty for deposits/withdrawals)
+// ✅ Flex savings vault address (counterparty for deposits/withdrawals)
 const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
 
-// APY endpoint you already use in the card
+// APY endpoint
 const APY_URL = "/api/savings/flex/apy";
 
 /* =========================
@@ -73,6 +73,7 @@ const formatTime = (unixSeconds?: number | null) => {
   });
 };
 
+// returns "$123.45" (NO sign)
 function formatUsd(n?: number | null) {
   const v = n == null || Number.isNaN(n) ? 0 : Number(n);
   return `$${v.toLocaleString("en-US", {
@@ -108,7 +109,7 @@ export default function FlexAccountPage() {
 
   const hasAccount = Boolean(linkedMarginfiPk);
 
-  // -------- APY --------
+  /* -------- APY -------- */
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
   const [apyLoading, setApyLoading] = useState(false);
 
@@ -175,7 +176,7 @@ export default function FlexAccountPage() {
     };
   }, [hasAccount]);
 
-  // -------- Balance --------
+  /* -------- Balance -------- */
   const effectiveBalance = useMemo(() => {
     const n = Number(savingsFlexUsd);
     return Number.isFinite(n) ? n : 0;
@@ -183,7 +184,7 @@ export default function FlexAccountPage() {
 
   const loading = userLoading || balanceLoading;
 
-  // -------- Drawer (Deposit/Withdraw) --------
+  /* -------- Drawer (Deposit/Withdraw) -------- */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
 
@@ -192,63 +193,104 @@ export default function FlexAccountPage() {
     setDrawerOpen(true);
   };
 
-  // -------- Activity --------
+  /* -------- Activity (paginate) -------- */
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
 
-  const fetchTxs = useCallback(async () => {
-    if (!walletAddress) return;
+  // cursor for pagination (from API)
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
 
-    try {
-      setTxLoading(true);
-      setTxError(null);
+  const fetchTxsPage = useCallback(
+    async (reset = false) => {
+      if (!walletAddress) return;
 
-      const res = await fetch(`/api/user/wallet/transactions?limit=500`, {
-        method: "GET",
-        cache: "no-store",
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
+      try {
+        setTxLoading(true);
+        setTxError(null);
 
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        txs?: TxRow[];
-        error?: string;
-      };
+        const cursor =
+          !reset && nextBefore
+            ? `&before=${encodeURIComponent(nextBefore)}`
+            : "";
 
-      if (!res.ok || data?.ok === false) {
-        throw new Error(data?.error || `Failed (${res.status})`);
+        // ✅ mode=flex => server returns ONLY flex-related transfers
+        const res = await fetch(
+          `/api/user/wallet/transactions?mode=flex&limit=30${cursor}`,
+          {
+            method: "GET",
+            cache: "no-store",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          }
+        );
+
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          txs?: TxRow[];
+          nextBefore?: string | null;
+          error?: string;
+        };
+
+        if (!res.ok || data?.ok === false) {
+          throw new Error(data?.error || `Failed (${res.status})`);
+        }
+
+        const page = Array.isArray(data?.txs) ? data.txs : [];
+
+        setTxs((prev) => {
+          if (reset) return page;
+
+          const seen = new Set(prev.map((p) => p.signature));
+          const merged = [...prev];
+          for (const row of page) {
+            if (!seen.has(row.signature)) merged.push(row);
+          }
+          return merged;
+        });
+
+        const newCursor =
+          typeof data?.nextBefore === "string" && data.nextBefore.trim()
+            ? data.nextBefore.trim()
+            : null;
+
+        setNextBefore(newCursor);
+        setHasMore(Boolean(newCursor));
+      } catch (e) {
+        setTxError(e instanceof Error ? e.message : "Failed to load activity");
+        if (reset) setTxs([]);
+        setNextBefore(null);
+        setHasMore(false);
+      } finally {
+        setTxLoading(false);
       }
+    },
+    [walletAddress, nextBefore]
+  );
 
-      setTxs(Array.isArray(data?.txs) ? data.txs : []);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "";
-      setTxError(message || "Failed to load activity");
-      setTxs([]);
-    } finally {
-      setTxLoading(false);
-    }
-  }, [walletAddress]);
-
+  // initial load
   useEffect(() => {
     if (!user) return;
-    fetchTxs();
-  }, [user, fetchTxs]);
+    setTxs([]);
+    setNextBefore(null);
+    setHasMore(true);
+    fetchTxsPage(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
-  // Only savings deposits/withdrawals:
-  // - transfers only
-  // - counterparty == FLEX_SAVINGS_ADDR
+  // flex transfers only (API already filtered)
   const savingsActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
       .filter((t) => (t.amountUsdc ?? 0) > 0)
-      .filter((t) => normAddr(t.counterparty) === FLEX_SAVINGS_ADDR)
       .slice();
 
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-    return rows.slice(0, 25);
+    return rows;
   }, [txs]);
+
+  /* -------- Guards -------- */
 
   if (!user && !userLoading) {
     return (
@@ -260,7 +302,6 @@ export default function FlexAccountPage() {
     );
   }
 
-  // If they don’t have a flex account yet, keep it simple (you can replace with your “Open account” CTA later)
   if (user && !userLoading && !hasAccount) {
     return (
       <div className="haven-app px-4 py-6">
@@ -295,6 +336,8 @@ export default function FlexAccountPage() {
       </div>
     );
   }
+
+  /* -------- Render -------- */
 
   return (
     <div className="haven-app px-4 py-6">
@@ -361,19 +404,24 @@ export default function FlexAccountPage() {
           </div>
         </div>
 
-        {/* Activity (only savings deposits/withdrawals) */}
+        {/* Activity */}
         <div className="haven-card p-4 sm:p-6">
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
-              <p className="haven-kicker">Recent activity</p>
+              <p className="haven-kicker">Activity</p>
               <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Deposits & withdrawals only
+                Flex deposits & withdrawals
               </p>
             </div>
 
             <button
               type="button"
-              onClick={fetchTxs}
+              onClick={() => {
+                setTxs([]);
+                setNextBefore(null);
+                setHasMore(true);
+                fetchTxsPage(true);
+              }}
               className="haven-icon-btn"
               aria-label="Refresh"
             >
@@ -382,24 +430,28 @@ export default function FlexAccountPage() {
           </div>
 
           <div className="mt-3">
-            {txLoading ? (
+            {txLoading && txs.length === 0 ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : txError ? (
               <p className="text-sm text-muted-foreground">{txError}</p>
             ) : savingsActivity.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No recent Flex activity yet.
+                No Flex activity found in the loaded history yet.
               </p>
             ) : (
               <div className="space-y-2">
                 {savingsActivity.map((tx) => {
-                  const isDeposit = tx.direction === "out"; // wallet -> savings
+                  // Deposit: wallet -> vault (direction "out")
+                  const isDeposit = tx.direction === "out";
+
                   const title = isDeposit
                     ? "Savings deposit"
                     : "Savings withdrawal";
-                  const rightTop = isDeposit
-                    ? `-${formatUsd(tx.amountUsdc ?? 0)}`
-                    : `+${formatUsd(tx.amountUsdc ?? 0)}`;
+
+                  // ✅ FIXED: deposits are +, withdrawals are -
+                  const signedAmount = isDeposit
+                    ? `+${formatUsd(tx.amountUsdc ?? 0)}`
+                    : `-${formatUsd(tx.amountUsdc ?? 0)}`;
 
                   return (
                     <div
@@ -421,11 +473,20 @@ export default function FlexAccountPage() {
                         <p className="mt-1 text-[11px] text-muted-foreground">
                           {formatTime(tx.blockTime)}
                         </p>
+
+                        {/* Optional tiny debug line (remove whenever) */}
+                        {process.env.NODE_ENV !== "production" &&
+                          normAddr(tx.counterparty) &&
+                          normAddr(tx.counterparty) !== FLEX_SAVINGS_ADDR && (
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              Counterparty: {shortAddress(tx.counterparty)}
+                            </p>
+                          )}
                       </div>
 
                       <div className="text-right">
                         <p className="text-sm font-semibold text-foreground">
-                          {rightTop}
+                          {signedAmount}
                         </p>
                       </div>
                     </div>
@@ -433,11 +494,30 @@ export default function FlexAccountPage() {
                 })}
               </div>
             )}
+
+            {/* Load more */}
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => fetchTxsPage(false)}
+                disabled={txLoading}
+                className="haven-btn-primary w-full mt-3 text-[#0b3204] disabled:opacity-60"
+              >
+                {txLoading ? "Loading…" : "Load more"}
+              </button>
+            )}
+
+            {/* Tip */}
+            {!hasMore && savingsActivity.length > 0 && (
+              <p className="mt-3 text-[11px] text-muted-foreground">
+                You’ve reached the end of the available history.
+              </p>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Drawer-like modals */}
+      {/* Modals */}
       {drawerMode === "deposit" && (
         <DepositFlex
           open={drawerOpen}
