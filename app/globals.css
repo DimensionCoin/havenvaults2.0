@@ -370,3 +370,13 @@ html,
 body {
   overflow-x: hidden;
 }
+
+/* Better drag feel on desktop */
+.carousel-track.is-dragging {
+  cursor: grabbing;
+}
+
+/* Avoid text selection while dragging with mouse */
+.carousel-track.is-dragging * {
+  user-select: none;
+}
