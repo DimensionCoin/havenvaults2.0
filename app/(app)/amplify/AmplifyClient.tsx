@@ -108,7 +108,7 @@ function TabBar({
                 "font-semibold transition-all border",
                 "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
                 isActive
-                  ? "bg-primary text-primary-foreground border-primary/25"
+                  ? "bg-primary text-black border-primary/25"
                   : "bg-card/40 text-muted-foreground border-border/60 hover:bg-card/60 hover:text-foreground",
               ].join(" ")}
             >

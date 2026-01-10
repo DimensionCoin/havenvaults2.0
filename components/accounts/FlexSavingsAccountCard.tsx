@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Drawer, DrawerTrigger } from "@/components/ui/drawer";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -94,7 +95,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
     if (!open) setDrawerMode(null);
   };
 
-  // APY fetch (same logic, just kept)
+  // APY fetch
   useEffect(() => {
     if (!hasAccount) return;
 
@@ -168,100 +169,117 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
   // ----------------------------
   if (!hasAccount) {
     return (
-      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
-        <div>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Flex Account</p>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Earn yield with flexible access
-              </p>
+      <Link href="/flex" className="block">
+        <div className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+          <div>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="haven-kicker">Flex Account</p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">
+                  Earn yield with flexible access
+                </p>
+              </div>
+
+              <span className="haven-pill">
+                <span className="h-2 w-2 rounded-full bg-primary" />
+                New
+              </span>
             </div>
 
-            <span className="haven-pill">
-              <span className="h-2 w-2 rounded-full bg-primary" />
-              New
-            </span>
+            <p className="mt-4 text-lg font-semibold">Open Flex Account</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Start earning automatically on idle USDC.
+            </p>
           </div>
 
-          <p className="mt-4 text-lg font-semibold">Open Flex Account</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            Start earning automatically on idle USDC.
-          </p>
+          <div className="mt-5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenAccount();
+              }}
+              className="haven-btn-primary text-[#0b3204]"
+            >
+              Open account
+            </button>
+          </div>
         </div>
-
-        <div className="mt-5">
-          <button
-            type="button"
-            onClick={onOpenAccount}
-            className="haven-btn-primary text-[#0b3204]"
-          >
-            Open account
-          </button>
-        </div>
-      </div>
+      </Link>
     );
   }
 
   // ----------------------------
-  // OPEN STATE (same structure as deposit)
+  // OPEN STATE
   // ----------------------------
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
-      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
-        <div>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Flex Account</p>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Account #{shortAddress(accountPkToShow)}
-              </p>
+      <Link href="/flex" className="block">
+        <div className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+          <div>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="haven-kicker">Flex Account</p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">
+                  Account #{shortAddress(accountPkToShow)}
+                </p>
+              </div>
+
+              <span className="haven-pill">
+                {apyLoading ? (
+                  "APY …"
+                ) : apyFinal === null ? (
+                  "APY —"
+                ) : (
+                  <>APY {apyFinal.toFixed(2)}%</>
+                )}
+              </span>
             </div>
 
-            {/* APY pill (same shape as your "Active" pill) */}
-            <span className="haven-pill">
-              {apyLoading ? (
-                "APY …"
-              ) : apyFinal === null ? (
-                "APY —"
-              ) : (
-                <>APY {apyFinal.toFixed(2)}%</>
-              )}
-            </span>
+            <div className="mt-4">
+              <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
+                {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Yield accrues daily, withdraw anytime
+              </p>
+            </div>
           </div>
 
-          <div className="mt-4">
-            <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
-              {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Yield accrues daily, withdraw anytime
-            </p>
+          <div className="mt-5 flex gap-2">
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  // ✅ prevent the card link from navigating
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDrawer("deposit");
+                }}
+                className="haven-btn-primary flex-1 text-[#0b3204]"
+              >
+                Deposit
+              </button>
+            </DrawerTrigger>
+
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  // ✅ prevent the card link from navigating
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDrawer("withdraw");
+                }}
+                className="haven-btn-primary flex-1 text-[#0b3204]"
+              >
+                Withdraw
+              </button>
+            </DrawerTrigger>
           </div>
         </div>
-
-        <div className="mt-5 flex gap-2">
-          <DrawerTrigger asChild>
-            <button
-              type="button"
-              onClick={() => openDrawer("deposit")}
-              className="haven-btn-primary flex-1 text-[#0b3204]"
-            >
-              Deposit
-            </button>
-          </DrawerTrigger>
-
-          <DrawerTrigger asChild>
-            <button
-              type="button"
-              onClick={() => openDrawer("withdraw")}
-              className="haven-btn-primary flex-1 text-[#0b3204]"
-            >
-              Withdraw
-            </button>
-          </DrawerTrigger>
-        </div>
-      </div>
+      </Link>
 
       {drawerMode === "deposit" && (
         <DepositFlex

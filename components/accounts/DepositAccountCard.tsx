@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
+
 import Deposit from "@/components/accounts/deposit/Deposit";
 import Transfer from "@/components/accounts/deposit/Transfer";
 import Withdraw from "@/components/accounts/deposit/Withdraw";
@@ -23,20 +25,20 @@ const shortAddress = (addr?: string | null) => {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 };
 
-const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
+export default function DepositAccountCard({
   loading,
   walletAddress,
   balanceOverride,
   onDeposit,
   onTransfer,
   onWithdraw,
-}) => {
-  // ✅ Deposit is now a Dialog, so we don't need Drawer state anymore
+}: DepositAccountCardProps) {
+  const router = useRouter();
+
   const [modalMode, setModalMode] = useState<DrawerMode>(null);
   const [transferOpen, setTransferOpen] = useState(false);
 
   const { usdcUsd, loading: balanceLoading } = useBalance();
-
   const effectiveLoading = loading ?? balanceLoading;
   const effectiveBalance = balanceOverride ?? usdcUsd;
 
@@ -49,10 +51,73 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
     })}`;
   };
 
+  // --- ✅ MOBILE-CAROUSEL SAFE TAP NAV ---
+  const start = useRef<{ x: number; y: number; t: number } | null>(null);
+  const moved = useRef(false);
+
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(
+      target.closest(
+        'button,a,input,select,textarea,[role="button"],[data-no-card-nav="true"]'
+      )
+    );
+  };
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Only needed for touch/pen (carousel problem). Mouse clicks already work.
+    if (e.pointerType === "mouse") return;
+    start.current = { x: e.clientX, y: e.clientY, t: Date.now() };
+    moved.current = false;
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!start.current) return;
+    const dx = Math.abs(e.clientX - start.current.x);
+    const dy = Math.abs(e.clientY - start.current.y);
+
+    // threshold: if finger moves, it's a scroll gesture, not a tap
+    if (dx > 8 || dy > 8) moved.current = true;
+  }, []);
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerType === "mouse") return;
+      if (!start.current) return;
+
+      const elapsed = Date.now() - start.current.t;
+      const wasTap = !moved.current && elapsed < 600;
+
+      start.current = null;
+
+      if (!wasTap) return;
+      if (isInteractiveTarget(e.target)) return;
+
+      router.push("/deposit");
+    },
+    [router]
+  );
+
+  // (Optional) still allow desktop click
+  const onClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (isInteractiveTarget(e.target)) return;
+      router.push("/deposit");
+    },
+    [router]
+  );
+
   return (
     <>
-      {/* Card (Haven theme) */}
-      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={onClick}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6"
+      >
         {/* Header */}
         <div>
           <div className="flex items-start justify-between gap-3">
@@ -71,7 +136,7 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
 
           {/* Balance */}
           <div className="mt-4">
-            <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
+            <p className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
               {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
             </p>
             <p className="mt-1 text-[11px] text-muted-foreground">
@@ -82,28 +147,37 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
 
         {/* Actions */}
         <div className="mt-5 flex gap-2">
-          {/* Deposit -> Dialog */}
           <button
             type="button"
-            onClick={() => setModalMode("deposit")}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setModalMode("deposit");
+            }}
             className="haven-btn-primary flex-1 text-[#0b3204]"
           >
             Deposit
           </button>
 
-          {/* Transfer -> Dialog */}
           <button
             type="button"
-            onClick={() => setTransferOpen(true)}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setTransferOpen(true);
+            }}
             className="haven-btn-primary flex-1 text-[#0b3204]"
           >
             Transfer
           </button>
 
-          {/* Withdraw -> Dialog */}
           <button
             type="button"
-            onClick={() => setModalMode("withdraw")}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setModalMode("withdraw");
+            }}
             className="haven-btn-primary flex-1 text-[#0b3204]"
           >
             Withdraw
@@ -111,35 +185,29 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
         </div>
       </div>
 
-      {/* Deposit modal */}
+      {/* Modals */}
       <Deposit
         open={modalMode === "deposit"}
-        onOpenChange={(open) => {
-          if (!open) setModalMode(null);
-        }}
+        onOpenChange={(open) => !open && setModalMode(null)}
         walletAddress={walletAddress}
         balanceUsd={effectiveBalance}
-        onSuccess={async () => {
+        onSuccess={() => {
           onDeposit?.();
           setModalMode(null);
         }}
       />
 
-      {/* Withdraw modal */}
       <Withdraw
         open={modalMode === "withdraw"}
-        onOpenChange={(open) => {
-          if (!open) setModalMode(null);
-        }}
+        onOpenChange={(open) => !open && setModalMode(null)}
         walletAddress={walletAddress}
         balanceUsd={effectiveBalance}
-        onSuccess={async () => {
+        onSuccess={() => {
           onWithdraw?.();
           setModalMode(null);
         }}
       />
 
-      {/* Transfer modal */}
       <Transfer
         open={transferOpen}
         onOpenChange={(open) => {
@@ -148,13 +216,11 @@ const DepositAccountCard: React.FC<DepositAccountCardProps> = ({
         }}
         walletAddress={walletAddress}
         balanceUsd={effectiveBalance}
-        onSuccess={async () => {
+        onSuccess={() => {
           onTransfer?.();
           setTransferOpen(false);
         }}
       />
     </>
   );
-};
-
-export default DepositAccountCard;
+}

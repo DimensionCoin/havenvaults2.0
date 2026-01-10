@@ -28,6 +28,7 @@ function d128ToNumber(v: unknown): number {
 }
 
 const PEEK_FRACTION = 0.06;
+const DRAG_THRESHOLD = 6; // px
 
 const USDCAccountsCarousel: React.FC = () => {
   const { user, loading: userLoading, savingsFlex, savingsPlus } = useUser();
@@ -94,52 +95,84 @@ const USDCAccountsCarousel: React.FC = () => {
   // Track ref
   const trackRef = useRef<HTMLDivElement | null>(null);
 
-  // Desktop drag (mouse only)
-  const mouseDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const dragStartScroll = useRef(0);
-
   const getCards = () => {
     const el = trackRef.current;
     if (!el) return [];
     return Array.from(el.querySelectorAll<HTMLElement>("[data-carousel-card]"));
   };
 
+  // ✅ Prevent carousel drag logic from hijacking real interactive elements
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(
+      target.closest('button,a,input,select,textarea,[role="button"]')
+    );
+  };
+
+  // --- ✅ Desktop drag (mouse only), click-friendly ---
+  const mouseDown = useRef(false);
+  const dragStarted = useRef(false);
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const startScroll = useRef(0);
+
   const onPointerDown = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
 
-    // ✅ IMPORTANT: never hijack touch (mobile) — keep it native.
+    // ✅ keep mobile native
     if (e.pointerType !== "mouse") return;
 
-    mouseDragging.current = true;
-    dragStartX.current = e.clientX;
-    dragStartScroll.current = el.scrollLeft;
+    // ✅ do not hijack clicks on buttons/links inside cards
+    if (isInteractiveTarget(e.target)) return;
 
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch {}
+    mouseDown.current = true;
+    dragStarted.current = false;
 
-    // Temporarily disable snapping during drag for smoothness
-    el.style.scrollSnapType = "none";
-    el.classList.add("is-dragging");
+    startX.current = e.clientX;
+    startY.current = e.clientY;
+    startScroll.current = el.scrollLeft;
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    if (!mouseDragging.current) return;
+    if (!mouseDown.current) return;
 
-    const dx = e.clientX - dragStartX.current;
-    el.scrollLeft = dragStartScroll.current - dx;
+    const dx = e.clientX - startX.current;
+    const dy = e.clientY - startY.current;
+
+    // ✅ only enter drag mode after threshold (so clicks still work)
+    if (!dragStarted.current) {
+      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD)
+        return;
+
+      dragStarted.current = true;
+
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {}
+
+      // Disable snapping during real drag for smoothness
+      el.style.scrollSnapType = "none";
+      el.classList.add("is-dragging");
+    }
+
+    // Drag scroll
+    el.scrollLeft = startScroll.current - dx;
   };
 
   const endDrag = (e: React.PointerEvent) => {
     const el = trackRef.current;
     if (!el) return;
-    if (!mouseDragging.current) return;
 
-    mouseDragging.current = false;
+    if (!mouseDown.current) return;
+    mouseDown.current = false;
+
+    // ✅ If we never actually dragged, don't touch anything (clicks go through)
+    if (!dragStarted.current) return;
+
+    dragStarted.current = false;
 
     try {
       el.releasePointerCapture(e.pointerId);
@@ -161,7 +194,6 @@ const USDCAccountsCarousel: React.FC = () => {
       if (!cards.length) return;
       const cardWidth = el.clientWidth * (1 - 2 * safePeek);
       cards.forEach((c) => (c.style.width = `${cardWidth}px`));
-      // Helps snapping align nicely
       el.style.scrollPaddingInline = `${el.clientWidth * safePeek}px`;
     };
 
@@ -172,7 +204,7 @@ const USDCAccountsCarousel: React.FC = () => {
     return () => ro.disconnect();
   }, []);
 
-  // rAF-throttled active index calc (no “spam”)
+  // rAF-throttled active index calc
   const rafRef = useRef<number | null>(null);
 
   const handleScroll = useCallback(() => {
@@ -343,8 +375,8 @@ const USDCAccountsCarousel: React.FC = () => {
               "relative flex gap-2 overflow-x-auto snap-x snap-mandatory",
               "scrollbar-hide",
               "[-webkit-overflow-scrolling:touch]",
-              // ✅ THIS is the key: allow both directions
-              "[touch-action:pan-x_pan-y_pinch-zoom]",
+              // ✅ better tap/click behavior inside horizontal scroller
+              "[touch-action:pan-x]",
               // ✅ horizontal overscroll contained; vertical passes to page
               "[overscroll-behavior-x:contain] [overscroll-behavior-y:auto]",
             ].join(" ")}

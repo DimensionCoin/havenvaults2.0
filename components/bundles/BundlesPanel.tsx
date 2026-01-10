@@ -59,7 +59,6 @@ function riskLabel(risk: RiskLevel) {
 }
 
 function riskClasses(risk: RiskLevel) {
-  // uses Haven tokens; stays subtle + premium
   if (risk === "low") return "border-primary/25 bg-primary/10 text-foreground";
   if (risk === "medium") return "border-border/60 bg-card/40 text-foreground";
   if (risk === "high")
@@ -90,14 +89,16 @@ function cleanNumberInput(raw: string) {
   return `${parts[0]}.${parts.slice(1).join("")}`;
 }
 
+// ✅ Uses narrowSymbol so CAD renders like "$28.00" (not "CA$28.00")
 function formatMoney(n: number, currency: string) {
   const c = (currency || "USD").toUpperCase();
   const val = Number.isFinite(n) ? n : 0;
+
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: c,
-      currencyDisplay: "symbol",
+      currencyDisplay: "narrowSymbol",
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(val);
@@ -180,7 +181,7 @@ function TokenIconsRow({ symbols }: { symbols: string[] }) {
 ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function BundlesPanel({ ownerBase58 }: Props) {
-  const { usdcUsd, displayCurrency, fxRate } = useBalance();
+  const { usdcUsd, displayCurrency, fxRate, refreshNow } = useBalance();
   const availableBalance = usdcUsd || 0;
 
   const bundle = useBundleSwap();
@@ -271,6 +272,12 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     setOpen(false);
   }, [bundle]);
 
+  const closeAndRefresh = useCallback(async () => {
+    // ✅ refresh balance provider after a successful bundle buy
+    await refreshNow().catch(() => {});
+    closeModal();
+  }, [refreshNow, closeModal]);
+
   const startPurchase = useCallback(async () => {
     if (!canBuy || !selected || bundle.isExecuting) return;
 
@@ -298,12 +305,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     return () => window.removeEventListener("keydown", handleEsc);
   }, [open, closeModal]);
 
-  // Quick “hero” picks (optional)
-  const topBundles = useMemo(
-    () => filteredBundles.slice(0, 3),
-    [filteredBundles]
-  );
-
   return (
     <>
       {/* ───────────────── Top / Header strip ───────────────── */}
@@ -320,7 +321,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 Bundles
               </h3>
               <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Diversify instantly — one purchase, multiple assets.
+                One click portfolios — one purchase, multiple assets.
               </p>
             </div>
           </div>
@@ -364,39 +365,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             </button>
           ))}
         </div>
-
-        {/* “Featured” strip for that Robinhood/WS feel */}
-        {topBundles.length > 0 && (
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            {topBundles.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                onClick={() => openBundle(b.id)}
-                className={[
-                  "rounded-3xl border p-3 text-left transition",
-                  "bg-card/30 border-border/60 hover:bg-card/50 hover:border-border",
-                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
-                ].join(" ")}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[12px] font-semibold text-foreground truncate">
-                      {b.name}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground truncate">
-                      {b.subtitle}
-                    </p>
-                  </div>
-                  {riskPill(b.risk)}
-                </div>
-                <div className="mt-2">
-                  <TokenIconsCompact symbols={b.symbols} />
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* ───────────────── List ───────────────── */}
@@ -446,7 +414,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
         )}
       </div>
 
-      {/* ───────────────── Modal (pro, safe-area, pinned CTA) ───────────────── */}
+      {/* ───────────────── Modal (safe-area, pinned CTA) ───────────────── */}
       <Dialog
         open={open}
         onOpenChange={(v) => (v ? setOpen(true) : closeModal())}
@@ -483,12 +451,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     {selected ? (
-                      <div
-                        className={[
-                          "flex h-10 w-10 items-center justify-center rounded-2xl border",
-                          "border-border/60 bg-card/40 glow-mint",
-                        ].join(" ")}
-                      >
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/60 bg-card/40 glow-mint">
                         {React.createElement(getRiskIcon(selected.risk), {
                           className: "h-5 w-5 text-primary",
                         })}
@@ -728,7 +691,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             <DialogFooter className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
               <button
                 type="button"
-                onClick={bundle.isComplete ? closeModal : startPurchase}
+                onClick={bundle.isComplete ? closeAndRefresh : startPurchase}
                 disabled={(!canBuy && !bundle.isComplete) || bundle.isExecuting}
                 className={[
                   "haven-btn-primary",
