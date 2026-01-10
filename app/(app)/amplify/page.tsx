@@ -157,7 +157,7 @@ export default function AmplifyPage() {
 
   const [tab, setTab] = useState<AmplifyTab>(() => {
     const t = searchParams?.get("tab");
-    return isAmplifyTab(t) ? t : "multiplier";
+    return isAmplifyTab(t) ? t : "bundles";
   });
 
   const [predictTf, setPredictTf] = useState<PredictionTimeframe>("daily");
