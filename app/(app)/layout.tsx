@@ -13,7 +13,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           <AppLayoutInner>
             {/* content padding: keep space for BottomBar */}
-            <div className="py-1 pb-28 sm:px-5 lg:px-8 md:ml-18 lg:ml-22">
+            <div className="py-1 pb-[calc(env(safe-area-inset-bottom)+92px)] sm:px-5 lg:px-8 md:ml-18 lg:ml-22">
               {children}
             </div>
           </AppLayoutInner>

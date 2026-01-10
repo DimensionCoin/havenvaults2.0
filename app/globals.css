@@ -324,10 +324,11 @@
   }
 
   /* Bottom nav (optional) */
-  .haven-bottom-nav {
-    @apply sticky bottom-3 mx-auto w-full max-w-[430px]
-      rounded-[24px] border bg-card/80 px-3 py-2 backdrop-blur-xl shadow-fintech-lg;
-  }
+.haven-bottom-nav {
+  @apply mx-auto w-full max-w-[430px]
+    rounded-[24px] border bg-card/80 px-3 py-2 backdrop-blur-xl shadow-fintech-lg;
+}
+
 
   /* Charts container */
   .haven-chart {
