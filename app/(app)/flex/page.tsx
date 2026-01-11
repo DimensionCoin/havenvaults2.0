@@ -14,10 +14,6 @@ import WithdrawFlex from "@/components/accounts/flex/Withdraw";
    CONSTANTS
 ========================= */
 
-// NOTE:
-// The *most reliable* identifier for Marginfi/Flex activity is the user's own
-// marginfi account pk (linkedMarginfiPk). A single static vault address may
-// only appear in some flows, which is why you can get “only 2 txs”.
 const APY_URL = "/api/savings/flex/apy";
 
 /* =========================
@@ -49,11 +45,11 @@ type ApyResponse = {
   error?: string;
 };
 
+type FxPayload = { rate?: number };
+
 /* =========================
    HELPERS
 ========================= */
-
-const normAddr = (a?: string | null) => (a || "").trim();
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -73,12 +69,16 @@ const formatTime = (unixSeconds?: number | null) => {
   });
 };
 
-function formatUsd(n?: number | null) {
-  const v = n == null || Number.isNaN(n) ? 0 : Number(n);
-  return `$${v.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+function formatCurrency(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`;
+  }
 }
 
 function SavingsAvatar() {
@@ -100,8 +100,6 @@ export default function FlexAccountPage() {
 
   const walletAddress = user?.walletAddress || "";
 
-  // ✅ This is the address you should filter by for Marginfi/Flex:
-  // it is the account that appears in the tx's message account keys.
   const linkedMarginfiPk =
     typeof savingsFlex?.marginfiAccountPk === "string" &&
     savingsFlex.marginfiAccountPk.trim()
@@ -109,6 +107,37 @@ export default function FlexAccountPage() {
       : null;
 
   const hasAccount = Boolean(linkedMarginfiPk);
+
+  // ✅ Display currency (same as deposit account)
+  const displayCurrency = useMemo(() => {
+    const c = (user?.displayCurrency || "USD").toUpperCase();
+    return c === "USDC" ? "USD" : c;
+  }, [user?.displayCurrency]);
+
+  // ✅ FX rate for transaction amounts
+  const [rate, setRate] = useState<number>(1);
+
+  const loadFx = useCallback(async () => {
+    if (displayCurrency === "USD") {
+      setRate(1);
+      return;
+    }
+    try {
+      const r = await fetch(
+        `/api/fx?currency=${encodeURIComponent(displayCurrency)}&amount=1`,
+        {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }
+      );
+      const j = (await r.json().catch(() => ({}))) as FxPayload;
+      const fx = r.ok ? Number(j?.rate) : 1;
+      setRate(Number.isFinite(fx) && fx > 0 ? fx : 1);
+    } catch {
+      setRate(1);
+    }
+  }, [displayCurrency]);
 
   /* -------- APY -------- */
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
@@ -183,6 +212,11 @@ export default function FlexAccountPage() {
     return Number.isFinite(n) ? n : 0;
   }, [savingsFlexUsd]);
 
+  // ✅ Format balance in display currency
+  const balanceDisplay = useMemo(() => {
+    return formatCurrency(effectiveBalance, displayCurrency);
+  }, [effectiveBalance, displayCurrency]);
+
   const loading = userLoading || balanceLoading;
 
   /* -------- Drawer (Deposit/Withdraw) -------- */
@@ -199,19 +233,9 @@ export default function FlexAccountPage() {
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
 
-  // cursor for pagination (from API)
   const [nextBefore, setNextBefore] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [reachedEnd, setReachedEnd] = useState(false);
 
-  /**
-   * ✅ IMPORTANT:
-   * We pass `involve=<linkedMarginfiPk>` so the server filters using the *marginfi account pk*.
-   * This is the fix for “only 2 txs” when a static vault addr is not present in most deposits.
-   *
-   * Your API should read this query param and use it as the involve address
-   * in getUsdcActivityForOwnerInvolving(). If your API currently hardcodes the vault
-   * address, update it to prefer `involve` when provided.
-   */
   const fetchTxsPage = useCallback(
     async (reset = false) => {
       if (!walletAddress) return;
@@ -228,15 +252,16 @@ export default function FlexAccountPage() {
 
         const involve = `&involve=${encodeURIComponent(linkedMarginfiPk)}`;
 
-        const res = await fetch(
-          `/api/user/wallet/transactions?mode=flex&limit=30${cursor}${involve}`,
-          {
-            method: "GET",
-            cache: "no-store",
-            credentials: "include",
-            headers: { Accept: "application/json" },
-          }
-        );
+        const url = `/api/user/wallet/transactions?mode=flex&limit=30${cursor}${involve}`;
+
+        console.log("[FlexPage] Fetching:", url);
+
+        const res = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
 
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
@@ -244,6 +269,12 @@ export default function FlexAccountPage() {
           nextBefore?: string | null;
           error?: string;
         };
+
+        console.log("[FlexPage] Response:", {
+          ok: data.ok,
+          txCount: data.txs?.length ?? 0,
+          nextBefore: data.nextBefore,
+        });
 
         if (!res.ok || data?.ok === false) {
           throw new Error(data?.error || `Failed (${res.status})`);
@@ -267,13 +298,19 @@ export default function FlexAccountPage() {
             ? data.nextBefore.trim()
             : null;
 
+        console.log("[FlexPage] Setting cursor:", newCursor);
+
         setNextBefore(newCursor);
-        setHasMore(Boolean(newCursor));
+
+        if (newCursor === null) {
+          setReachedEnd(true);
+        }
       } catch (e) {
+        console.error("[FlexPage] Error:", e);
         setTxError(e instanceof Error ? e.message : "Failed to load activity");
         if (reset) setTxs([]);
         setNextBefore(null);
-        setHasMore(false);
+        setReachedEnd(true);
       } finally {
         setTxLoading(false);
       }
@@ -281,20 +318,19 @@ export default function FlexAccountPage() {
     [walletAddress, linkedMarginfiPk, nextBefore]
   );
 
-  // initial load
+  // ✅ Load FX rate and transactions on mount
   useEffect(() => {
     if (!user) return;
     if (!linkedMarginfiPk) return;
 
+    loadFx();
     setTxs([]);
     setNextBefore(null);
-    setHasMore(true);
+    setReachedEnd(false);
     fetchTxsPage(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, linkedMarginfiPk]);
 
-  // With mode=flex, API should already return flex-only rows.
-  // Keep minimal client filtering: transfers only + positive amounts.
   const savingsActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
@@ -304,6 +340,8 @@ export default function FlexAccountPage() {
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return rows;
   }, [txs]);
+
+  const hasMore = !reachedEnd && (nextBefore !== null || txs.length === 0);
 
   /* -------- Guards -------- */
 
@@ -341,7 +379,7 @@ export default function FlexAccountPage() {
 
           <div className="haven-card p-5">
             <p className="text-sm text-muted-foreground">
-              You don’t have a Flex account yet.
+              You don&apos;t have a Flex account yet.
             </p>
             <p className="mt-1 text-[11px] text-muted-foreground">
               Open one to start earning on idle USDC.
@@ -382,7 +420,7 @@ export default function FlexAccountPage() {
             <div>
               <p className="haven-kicker">Flex balance</p>
               <p className="mt-2 text-4xl font-semibold tracking-tight text-foreground">
-                {loading ? "…" : formatUsd(effectiveBalance)}
+                {loading ? "…" : balanceDisplay}
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Yield accrues daily, withdraw anytime
@@ -434,7 +472,7 @@ export default function FlexAccountPage() {
               onClick={() => {
                 setTxs([]);
                 setNextBefore(null);
-                setHasMore(true);
+                setReachedEnd(false);
                 fetchTxsPage(true);
               }}
               className="haven-icon-btn"
@@ -456,18 +494,20 @@ export default function FlexAccountPage() {
             ) : (
               <div className="space-y-2">
                 {savingsActivity.map((tx) => {
-                  // Based on your server normalization:
-                  // - deposit: owner sends USDC into Marginfi/Flex -> direction "out"
-                  // - withdrawal: owner receives USDC back -> direction "in"
                   const isDeposit = tx.direction === "out";
                   const title = isDeposit
                     ? "Savings deposit"
                     : "Savings withdrawal";
 
-                  const amt = tx.amountUsdc ?? 0;
+                  // ✅ Apply FX rate to transaction amount
+                  // For flex savings: deposit = +, withdrawal = -
+                  // (opposite of deposit account where sending money out is -)
+                  const amtUsdc = tx.amountUsdc ?? 0;
+                  const amtLocal = amtUsdc * rate;
+
                   const rightTop = isDeposit
-                    ? `-${formatUsd(amt)}`
-                    : `+${formatUsd(amt)}`;
+                    ? `+${formatCurrency(amtLocal, displayCurrency)}`
+                    : `-${formatCurrency(amtLocal, displayCurrency)}`;
 
                   return (
                     <div
@@ -509,8 +549,8 @@ export default function FlexAccountPage() {
               </div>
             )}
 
-            {/* Load more */}
-            {hasMore && (
+            {/* Load more button */}
+            {hasMore && savingsActivity.length > 0 && (
               <button
                 type="button"
                 onClick={() => fetchTxsPage(false)}
@@ -521,9 +561,18 @@ export default function FlexAccountPage() {
               </button>
             )}
 
-            {!hasMore && savingsActivity.length > 0 && (
-              <p className="mt-3 text-[11px] text-muted-foreground">
-                You’ve reached the end of the available history.
+            {/* End of history message */}
+            {reachedEnd && savingsActivity.length > 0 && (
+              <p className="mt-3 text-[11px] text-muted-foreground text-center">
+                You&apos;ve reached the end of the available history.
+              </p>
+            )}
+
+            {/* Debug info in development */}
+            {process.env.NODE_ENV !== "production" && (
+              <p className="mt-2 text-[10px] text-muted-foreground/50">
+                Debug: txs={txs.length} | cursor={nextBefore ? "yes" : "no"} |
+                reachedEnd={String(reachedEnd)} | hasMore={String(hasMore)}
               </p>
             )}
           </div>
