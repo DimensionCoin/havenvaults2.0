@@ -40,15 +40,24 @@ export type ActivityItem = {
   signature: string;
   blockTime: number | null;
 
+  /**
+   * "Statement amount column" is always the USDC-side delta.
+   * - direction=in  => received USDC
+   * - direction=out => spent/sent USDC (includes swaps)
+   */
   direction: "in" | "out";
-  amountUi: number; // absolute USDC amount (UI)
+  amountUi: number; // absolute USDC amount (ui units, e.g. 12.34)
 
-  counterparty?: string | null; // wallet address if possible
+  counterparty?: string | null;
   counterpartyLabel?: string | null;
 
   feeLamports?: number | null;
 
   kind: ActivityKind;
+
+  // ✅ "buy" = spent USDC for token, "sell" = sold token for USDC
+  // NOTE: token↔token swaps (no USDC) will leave this undefined
+  swapDirection?: "buy" | "sell";
 
   swapSoldMint?: string;
   swapSoldAmountUi?: number;
@@ -56,119 +65,6 @@ export type ActivityItem = {
   swapBoughtAmountUi?: number;
 
   source?: string | null;
-
-  /**
-   * ✅ NEW (optional) – does NOT break existing pages
-   * - accounts: top-level account keys for the tx (wallets, programs, vaults, etc.)
-   * - tokenAccounts: token accounts owned by owner involved in this tx (best-effort)
-   */
-  accounts?: string[];
-  tokenAccounts?: string[];
-};
-
-type Json = Record<string, unknown>;
-
-/** Parsed inner instruction shapes we care about */
-type InnerParsedTransferInfo = {
-  source?: unknown;
-  destination?: unknown;
-  amount?: unknown; // transfer
-  tokenAmount?: {
-    amount?: unknown;
-    decimals?: unknown;
-    uiAmount?: unknown;
-    uiAmountString?: unknown;
-  };
-};
-
-type InnerParsed = {
-  type?: unknown; // "transfer" | "transferChecked"
-  info?: InnerParsedTransferInfo;
-};
-
-type InnerInstruction = {
-  program?: unknown; // "spl-token"
-  programId?: unknown; // Tokenkeg...
-  parsed?: InnerParsed;
-};
-
-type InnerInstructionGroup = {
-  instructions?: unknown; // InnerInstruction[]
-};
-
-type TokenBalance = {
-  accountIndex?: unknown; // number
-  mint?: unknown; // string
-  owner?: unknown; // string
-  uiTokenAmount?: {
-    decimals?: unknown; // number
-  };
-};
-
-type TxMeta = {
-  innerInstructions?: unknown; // InnerInstructionGroup[]
-  preTokenBalances?: unknown; // TokenBalance[]
-  postTokenBalances?: unknown; // TokenBalance[]
-};
-
-type TxMessageAccountKey =
-  | string
-  | {
-      pubkey?: unknown;
-      writable?: unknown;
-      signer?: unknown;
-      source?: unknown;
-    };
-
-type TxMessage = {
-  accountKeys?: unknown; // TxMessageAccountKey[]
-};
-
-type TxTransaction = {
-  signatures?: unknown; // string[]
-  message?: unknown; // TxMessage
-  fee?: unknown; // number
-};
-
-type HeliusTx = {
-  signature?: unknown;
-  timestamp?: unknown;
-  blockTime?: unknown;
-  source?: unknown;
-  type?: unknown;
-  fee?: unknown;
-
-  transaction?: unknown; // TxTransaction
-  meta?: unknown; // TxMeta
-
-  tokenTransfers?: unknown;
-  events?: unknown;
-};
-
-/** Normalized transfer record we parse downstream */
-type TokenTransferRecord = {
-  mint?: unknown;
-  tokenAddress?: unknown;
-  mintAddress?: unknown;
-  token?: unknown;
-
-  fromUserAccount?: unknown;
-  toUserAccount?: unknown;
-  from?: unknown;
-  to?: unknown;
-  source?: unknown;
-  destination?: unknown;
-
-  // inner
-  fromTokenAccount?: unknown;
-  toTokenAccount?: unknown;
-  sourceTokenAccount?: unknown;
-  destinationTokenAccount?: unknown;
-
-  tokenAmount?: unknown;
-  rawTokenAmount?: unknown;
-  amount?: unknown;
-  decimals?: unknown;
 };
 
 /* =========================
@@ -179,19 +75,6 @@ const CACHE_TTL_MS = 10_000;
 const CACHE = new Map<string, { ts: number; items: ActivityItem[] }>();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function isRecord(v: unknown): v is Json {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function asArray<T = unknown>(v: unknown): T[] {
-  return Array.isArray(v) ? (v as T[]) : [];
-}
-
-function getProp(obj: unknown, key: string): unknown {
-  if (!isRecord(obj)) return undefined;
-  return obj[key];
-}
 
 const getErrorMessage = (e: unknown) => {
   if (typeof e === "string") return e;
@@ -230,7 +113,7 @@ async function withBackoff<T>(fn: () => Promise<T>) {
 }
 
 const toNum = (v: unknown) => {
-  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+  const n = typeof v === "string" ? Number(v) : (v as number);
   return Number.isFinite(n) ? n : 0;
 };
 
@@ -240,10 +123,13 @@ const normAddr = (v: unknown) => toStr(v).trim();
 const normMint = (v: unknown) => toStr(v).trim().toLowerCase();
 
 /**
- * Smart UI unit conversion:
- * - if string has '.' => UI
- * - if small-ish => UI
- * - else base / 10^decimals
+ * ✅ Key fix: Helius sometimes gives "amount" already in UI units.
+ * This function decides whether to divide by decimals.
+ *
+ * Rules:
+ * - If value has a decimal point => treat as UI (DON'T divide)
+ * - If it's a small-ish number (heuristic) => treat as UI
+ * - Otherwise treat as base units => divide
  */
 function toUiSmart(raw: unknown, decimals: number) {
   if (raw == null) return 0;
@@ -257,16 +143,24 @@ function toUiSmart(raw: unknown, decimals: number) {
     }
     const n = Number(s);
     if (!Number.isFinite(n)) return 0;
+
+    // heuristic: if it's not huge, it's likely already UI
+    // (base units for USDC are usually millions+ even for small transfers)
     if (Math.abs(n) < 1e9) return n;
+
     return n / Math.pow(10, decimals);
   }
 
   if (typeof raw === "number") {
     if (!Number.isFinite(raw)) return 0;
+
+    // if not an integer or relatively small, assume UI
     if (!Number.isInteger(raw) || Math.abs(raw) < 1e9) return raw;
+
     return raw / Math.pow(10, decimals);
   }
 
+  // fallback
   const n = toNum(raw);
   if (!n) return 0;
   if (Math.abs(n) < 1e9) return n;
@@ -276,26 +170,26 @@ function toUiSmart(raw: unknown, decimals: number) {
 /**
  * Pull amount from a token transfer record robustly.
  */
-function readUiAmount(rec: Record<string, unknown>, mintNormStr: string) {
+function readUiAmount(rec: Record<string, unknown>, mintNorm: string) {
   const tokenAmountObj = rec.tokenAmount ?? rec.rawTokenAmount ?? rec.amount;
 
   const decimals = (() => {
     if (typeof rec.decimals === "number") return rec.decimals;
-
-    if (isRecord(tokenAmountObj)) {
-      const tokenDec = tokenAmountObj.decimals;
+    if (tokenAmountObj && typeof tokenAmountObj === "object") {
+      const tokenDec = (tokenAmountObj as Record<string, unknown>).decimals;
       if (typeof tokenDec === "number") return tokenDec;
     }
-
-    return mintNormStr === USDC_MINT ? USDC_DECIMALS : 0;
+    return mintNorm === USDC_MINT ? USDC_DECIMALS : 0;
   })();
 
-  if (isRecord(tokenAmountObj)) {
+  // Prefer explicit ui fields when present
+  if (tokenAmountObj && typeof tokenAmountObj === "object") {
+    const tokenAmountRec = tokenAmountObj as Record<string, unknown>;
     const uiCandidate =
-      tokenAmountObj.uiAmount ??
-      tokenAmountObj.uiAmountString ??
-      tokenAmountObj.ui_amount ??
-      tokenAmountObj.ui_amount_string;
+      tokenAmountRec.uiAmount ??
+      tokenAmountRec.uiAmountString ??
+      tokenAmountRec.ui_amount ??
+      tokenAmountRec.ui_amount_string;
 
     if (uiCandidate != null) {
       const n = Number(uiCandidate);
@@ -303,9 +197,9 @@ function readUiAmount(rec: Record<string, unknown>, mintNormStr: string) {
     }
 
     const raw =
-      tokenAmountObj.amount ??
-      tokenAmountObj.value ??
-      tokenAmountObj.rawAmount ??
+      tokenAmountRec.amount ??
+      tokenAmountRec.value ??
+      tokenAmountRec.rawAmount ??
       tokenAmountObj;
 
     return toUiSmart(raw, decimals || 0);
@@ -314,397 +208,236 @@ function readUiAmount(rec: Record<string, unknown>, mintNormStr: string) {
   return toUiSmart(tokenAmountObj, decimals || 0);
 }
 
-/* =========================
-   EXTRACTION (enhanced + inner)
-========================= */
+/**
+ * Helius returns token transfers in a few possible places depending on tx type.
+ */
+type TokenTransferRecord = Record<string, unknown>;
 
-function extractEnhancedTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
-  const out: TokenTransferRecord[] = [];
+function extractTokenTransfers(
+  tx: Record<string, unknown>
+): TokenTransferRecord[] {
+  const a = Array.isArray(tx.tokenTransfers) ? tx.tokenTransfers : [];
 
-  for (const t of asArray<TokenTransferRecord>(tx.tokenTransfers)) out.push(t);
+  const ev = (tx.events ?? {}) as Record<string, unknown>;
+  const b = Array.isArray(ev.tokenTransfers) ? ev.tokenTransfers : [];
+  const c = Array.isArray(ev.fungibleTokenTransfers)
+    ? ev.fungibleTokenTransfers
+    : [];
+  const d = Array.isArray(ev.splTransfers) ? ev.splTransfers : [];
 
-  const ev = isRecord(tx.events) ? tx.events : null;
-  if (ev) {
-    out.push(...asArray<TokenTransferRecord>(getProp(ev, "tokenTransfers")));
-    out.push(
-      ...asArray<TokenTransferRecord>(getProp(ev, "fungibleTokenTransfers"))
-    );
-    out.push(...asArray<TokenTransferRecord>(getProp(ev, "splTransfers")));
-  }
-
-  return out;
+  return [...a, ...b, ...c, ...d];
 }
 
 /**
- * Extract top-level account keys from the message.
- * ✅ Used for "does this tx involve a specific vault/program" checks.
+ * Determine:
+ * - net USDC delta for owner
+ * - counterparty for transfers
+ * - swap detection for:
+ *   - USDC ↔ token swaps (your original)
+ *   - ✅ token ↔ token swaps where NO USDC is involved (added)
  */
-function extractAccountKeys(tx: HeliusTx): string[] {
-  const transaction = isRecord(tx.transaction)
-    ? (tx.transaction as TxTransaction)
-    : null;
-  const message =
-    transaction && isRecord(transaction.message)
-      ? (transaction.message as TxMessage)
-      : null;
-
-  const keys = asArray<TxMessageAccountKey>(message?.accountKeys);
-
-  const out: string[] = [];
-  for (const k of keys) {
-    if (typeof k === "string") {
-      if (k) out.push(k);
-    } else if (isRecord(k)) {
-      const pk = toStr(k.pubkey);
-      if (pk) out.push(pk);
-    }
-  }
-  return out;
-}
-
-function buildTokenAccountMaps(tx: HeliusTx) {
-  const meta = isRecord(tx.meta) ? (tx.meta as TxMeta) : null;
-
-  const transaction = isRecord(tx.transaction)
-    ? (tx.transaction as TxTransaction)
-    : null;
-
-  const message =
-    transaction && isRecord(transaction.message)
-      ? (transaction.message as TxMessage)
-      : null;
-
-  const accountKeys = asArray<TxMessageAccountKey>(message?.accountKeys);
-
-  const idxToPubkey = new Map<number, string>();
-  for (let i = 0; i < accountKeys.length; i++) {
-    const k = accountKeys[i];
-    if (typeof k === "string") {
-      if (k) idxToPubkey.set(i, k);
-    } else if (isRecord(k)) {
-      const pk = toStr(k.pubkey);
-      if (pk) idxToPubkey.set(i, pk);
-    }
-  }
-
-  const tokMeta = new Map<
-    string,
-    { mint: string; mintNorm: string; decimals: number; owner?: string | null }
-  >();
-
-  const ingest = (arr: TokenBalance[]) => {
-    for (const b of arr) {
-      const accountIndex =
-        typeof b.accountIndex === "number" ? b.accountIndex : null;
-      if (accountIndex == null) continue;
-
-      const pubkey = idxToPubkey.get(accountIndex);
-      if (!pubkey) continue;
-
-      const mint = toStr(b.mint).trim();
-      if (!mint) continue;
-
-      const decRaw = b.uiTokenAmount?.decimals;
-      const decimals = typeof decRaw === "number" ? decRaw : 0;
-
-      const owner = toStr(b.owner).trim() || null;
-
-      tokMeta.set(pubkey, {
-        mint,
-        mintNorm: mint.toLowerCase(),
-        decimals,
-        owner,
-      });
-    }
-  };
-
-  const preTB = asArray<TokenBalance>(meta?.preTokenBalances);
-  const postTB = asArray<TokenBalance>(meta?.postTokenBalances);
-
-  ingest(preTB);
-  ingest(postTB);
-
-  return { tokMeta };
-}
-
-function extractInnerSplTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
-  const meta = isRecord(tx.meta) ? (tx.meta as TxMeta) : null;
-  const innerGroups = asArray<InnerInstructionGroup>(meta?.innerInstructions);
-  if (!innerGroups.length) return [];
-
-  const { tokMeta } = buildTokenAccountMaps(tx);
-  const out: TokenTransferRecord[] = [];
-
-  for (const group of innerGroups) {
-    const insts = asArray<InnerInstruction>(getProp(group, "instructions"));
-
-    for (const ix of insts) {
-      const programId = toStr(getProp(ix, "programId"));
-      const program = toStr(getProp(ix, "program"));
-
-      const isTokenProgram =
-        program === "spl-token" ||
-        programId === "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-
-      if (!isTokenProgram) continue;
-
-      const parsedRaw = getProp(ix, "parsed");
-      if (!isRecord(parsedRaw)) continue;
-
-      const type = toStr(getProp(parsedRaw, "type"));
-      if (type !== "transfer" && type !== "transferChecked") continue;
-
-      const infoRaw = getProp(parsedRaw, "info");
-      const info = isRecord(infoRaw)
-        ? (infoRaw as InnerParsedTransferInfo)
-        : null;
-      if (!info) continue;
-
-      const sourceTA = toStr(info.source).trim();
-      const destTA = toStr(info.destination).trim();
-      if (!sourceTA || !destTA) continue;
-
-      const metaTok = tokMeta.get(sourceTA) || tokMeta.get(destTA);
-      if (!metaTok?.mint) continue;
-
-      const decimals = metaTok.decimals ?? 0;
-
-      const tokAmtRaw = info.tokenAmount;
-      const tokAmt = isRecord(tokAmtRaw) ? tokAmtRaw : null;
-
-      const rawAmount =
-        (tokAmt &&
-          (tokAmt.uiAmountString ?? tokAmt.uiAmount ?? tokAmt.amount)) ??
-        info.amount ??
-        null;
-
-      out.push({
-        mint: metaTok.mint,
-        decimals,
-        fromTokenAccount: sourceTA,
-        toTokenAccount: destTA,
-        tokenAmount: {
-          amount:
-            typeof rawAmount === "string" ? rawAmount : String(rawAmount ?? ""),
-          decimals,
-          uiAmountString: tokAmt ? toStr(tokAmt.uiAmountString) : undefined,
-          uiAmount:
-            tokAmt && typeof tokAmt.uiAmount === "number"
-              ? tokAmt.uiAmount
-              : undefined,
-        },
-      });
-    }
-  }
-
-  return out;
-}
-
-function extractTokenTransfers(tx: HeliusTx): TokenTransferRecord[] {
-  return [
-    ...extractEnhancedTokenTransfers(tx),
-    ...extractInnerSplTokenTransfers(tx),
-  ];
-}
-
-/* =========================
-   NORMALIZE
-========================= */
-
 function normalizeToActivity(
   owner58: string,
   raw: unknown
 ): ActivityItem | null {
-  const tx = isRecord(raw) ? (raw as HeliusTx) : null;
-  if (!tx) return null;
-
+  const tx = (raw ?? {}) as Record<string, unknown>;
   const owner = owner58.trim();
 
-  const transaction = isRecord(tx.transaction)
-    ? (tx.transaction as TxTransaction)
-    : null;
+  const txTransaction =
+    tx.transaction && typeof tx.transaction === "object"
+      ? (tx.transaction as Record<string, unknown>)
+      : null;
 
   const sig =
     toStr(tx.signature) ||
-    (transaction ? toStr(asArray<string>(transaction.signatures)[0]) : "");
-
-  if (!sig) return null;
+    (Array.isArray(txTransaction?.signatures)
+      ? toStr(txTransaction.signatures[0])
+      : "");
 
   const blockTime: number | null =
     toNum(tx.timestamp) ||
     (typeof tx.blockTime === "number" ? tx.blockTime : null);
 
   const feeLamports: number | null = (() => {
-    const feeFromTx = transaction ? toNum(transaction.fee) : 0;
-    const feeFromTop = toNum(tx.fee);
-    const fee = feeFromTx || feeFromTop;
+    const fee = toNum(txTransaction?.fee) || toNum(tx.fee);
     return fee ? fee : null;
   })();
 
   const source: string | null = toStr(tx.source) || toStr(tx.type) || null;
 
-  const accounts = extractAccountKeys(tx);
-
-  const { tokMeta } = buildTokenAccountMaps(tx);
-
-  // token accounts owned by `owner`
-  const ownerTokenAccounts = new Set<string>();
-  for (const [tokenAcc, m] of tokMeta.entries()) {
-    if ((m.owner || "").trim() === owner) ownerTokenAccounts.add(tokenAcc);
-  }
-
-  const isOwnerAddress = (addr: string) =>
-    addr === owner || ownerTokenAccounts.has(addr);
-
-  // Resolve token-account -> owner wallet if known
-  const tokenAccountOwner = (addr: string): string | null => {
-    const m = tokMeta.get(addr);
-    const o = (m?.owner || "").trim();
-    return o || null;
-  };
-
-  const resolveCounterparty = (addr: string): string =>
-    tokenAccountOwner(addr) || addr;
-
   const transfers = extractTokenTransfers(tx);
 
-  type ParsedXfer = {
-    mintNorm: string;
-    mintRaw: string;
-    from: string;
-    to: string;
-    ui: number;
-  };
-  const parsed: ParsedXfer[] = [];
+  type Xfer = { mint: string; from: string; to: string; ui: number };
+  const parsed: Xfer[] = [];
 
-  let usdcOutTotal = 0;
-
-  // primary leg (prevents tiny extra transfers from breaking savings)
-  let maxIn = { ui: 0, cp: "" };
-  let maxOut = { ui: 0, cp: "" };
+  let usdcIn = 0;
+  let usdcOut = 0;
+  let cpIn: string | null = null;
+  let cpOut: string | null = null;
 
   for (const t of transfers) {
-    const rec = isRecord(t) ? (t as Record<string, unknown>) : null;
-    if (!rec) continue;
+    const rec = (t ?? {}) as Record<string, unknown>;
 
-    const tokenObjRaw = rec.token;
-    const tokenObj = isRecord(tokenObjRaw)
-      ? (tokenObjRaw as Record<string, unknown>)
-      : null;
+    const tokenObj =
+      rec.token && typeof rec.token === "object"
+        ? (rec.token as Record<string, unknown>)
+        : null;
 
-    const mintRaw =
+    const mint =
       toStr(rec.mint) ||
       toStr(rec.tokenAddress) ||
       toStr(rec.mintAddress) ||
-      (tokenObj ? toStr(tokenObj.mint) : "");
+      toStr(tokenObj?.mint);
 
-    const mintNormStr = normMint(mintRaw);
-    if (!mintNormStr) continue;
+    const mintNorm = normMint(mint);
+    if (!mintNorm) continue;
 
-    const fromUser =
+    const from =
       normAddr(rec.fromUserAccount) ||
       normAddr(rec.from) ||
       normAddr(rec.source);
-    const toUser =
+
+    const to =
       normAddr(rec.toUserAccount) ||
       normAddr(rec.to) ||
       normAddr(rec.destination);
 
-    const fromTok =
-      normAddr(rec.fromTokenAccount) || normAddr(rec.sourceTokenAccount);
-    const toTok =
-      normAddr(rec.toTokenAccount) || normAddr(rec.destinationTokenAccount);
-
-    const from = fromUser || fromTok;
-    const to = toUser || toTok;
-    if (!from || !to) continue;
-
-    const ui = readUiAmount(rec, mintNormStr);
+    const ui = readUiAmount(rec, mintNorm);
     if (!Number.isFinite(ui) || ui <= 0) continue;
 
-    parsed.push({
-      mintNorm: mintNormStr,
-      mintRaw: mintRaw.trim(),
-      from,
-      to,
-      ui,
-    });
+    parsed.push({ mint: mintNorm, from, to, ui });
 
-    if (mintNormStr === USDC_MINT) {
-      const toOwner = isOwnerAddress(to);
-      const fromOwner = isOwnerAddress(from);
-
-      // inbound to owner
-      if (toOwner && !fromOwner) {
-        if (ui > maxIn.ui) maxIn = { ui, cp: resolveCounterparty(from) };
-      }
-      // outbound from owner
-      else if (fromOwner && !toOwner) {
-        usdcOutTotal += ui;
-        if (ui > maxOut.ui) maxOut = { ui, cp: resolveCounterparty(to) };
+    if (mintNorm === USDC_MINT) {
+      if (to === owner) {
+        usdcIn += ui;
+        if (!cpIn && from) cpIn = from;
+      } else if (from === owner) {
+        usdcOut += ui;
+        if (!cpOut && to) cpOut = to;
       }
     }
   }
 
-  if (maxIn.ui === 0 && maxOut.ui === 0) return null;
+  const usdcDelta = usdcIn - usdcOut;
 
-  const direction: "in" | "out" = maxIn.ui >= maxOut.ui ? "in" : "out";
-  const amountUiAbs = Math.max(maxIn.ui, maxOut.ui);
+  // ✅ ADD-ON: token↔token swap detection when NO USDC moved
+  // We only return a swap if:
+  //  - owner sent some non-USDC token out
+  //  - owner received some non-USDC token in
+  //  - (and mints differ)
+  if (!usdcDelta) {
+    let bestIn: Xfer | null = null; // non-USDC received by owner
+    let bestOut: Xfer | null = null; // non-USDC sent by owner
 
-  // swap detection: owner spent USDC and received some non-USDC token
+    for (const x of parsed) {
+      if (x.mint === USDC_MINT) continue;
+
+      if (x.to === owner) {
+        if (!bestIn || x.ui > bestIn.ui) bestIn = x;
+      } else if (x.from === owner) {
+        if (!bestOut || x.ui > bestOut.ui) bestOut = x;
+      }
+    }
+
+    // require both legs and different mints
+    if (bestIn && bestOut && bestIn.mint !== bestOut.mint) {
+      const item: ActivityItem = {
+        signature: sig,
+        blockTime,
+        // no USDC delta; pick a stable direction convention:
+        // treat as "out" because we "sold" bestOut.mint to buy bestIn.mint
+        direction: "out",
+        amountUi: 0, // no USDC amount
+        counterparty: null,
+        feeLamports,
+        kind: "swap",
+        source,
+
+        // no buy/sell because USDC isn’t involved
+        swapSoldMint: bestOut.mint,
+        swapSoldAmountUi: bestOut.ui,
+        swapBoughtMint: bestIn.mint,
+        swapBoughtAmountUi: bestIn.ui,
+      };
+
+      return item;
+    }
+
+    // otherwise: not a USDC activity and not a token↔token swap we can confidently label
+    return null;
+  }
+
+  const direction: "in" | "out" = usdcDelta > 0 ? "in" : "out";
+  const amountUiAbs = Math.abs(usdcDelta);
+
+  // ✅ Swap detection:
+  // - BUY:  USDC out + non-USDC token in  (direction = "out")
+  // - SELL: non-USDC token out + USDC in  (direction = "in")
   let kind: ActivityKind = "transfer";
   let swapBoughtMint: string | undefined;
   let swapBoughtAmountUi: number | undefined;
+  let swapSoldMint: string | undefined;
+  let swapSoldAmountUi: number | undefined;
+  let swapDirection: "buy" | "sell" | undefined;
 
   if (direction === "out") {
-    let best: ParsedXfer | null = null;
-
+    // BUY case: spent USDC, received a token
+    let best: Xfer | null = null;
     for (const x of parsed) {
-      if (x.mintNorm === USDC_MINT) continue;
-      if (isOwnerAddress(x.to)) {
+      if (x.mint === USDC_MINT) continue;
+      if (x.to === owner) {
         if (!best || x.ui > best.ui) best = x;
       }
     }
-
     if (best) {
       kind = "swap";
-      swapBoughtMint = best.mintRaw || best.mintNorm;
+      swapDirection = "buy";
+      swapSoldMint = USDC_MINT_RAW;
+      swapSoldAmountUi = usdcOut || amountUiAbs;
+      swapBoughtMint = best.mint;
       swapBoughtAmountUi = best.ui;
+    }
+  } else {
+    // SELL case: sent a token, received USDC
+    let best: Xfer | null = null;
+    for (const x of parsed) {
+      if (x.mint === USDC_MINT) continue;
+      if (x.from === owner) {
+        if (!best || x.ui > best.ui) best = x;
+      }
+    }
+    if (best) {
+      kind = "swap";
+      swapDirection = "sell";
+      swapSoldMint = best.mint;
+      swapSoldAmountUi = best.ui;
+      swapBoughtMint = USDC_MINT_RAW;
+      swapBoughtAmountUi = usdcIn || amountUiAbs;
     }
   }
 
-  const counterparty =
-    kind === "transfer"
-      ? direction === "in"
-        ? maxIn.cp || null
-        : maxOut.cp || null
-      : null;
-
-  const tokenAccounts = Array.from(ownerTokenAccounts);
+  const counterparty = direction === "in" ? cpIn : cpOut;
 
   const item: ActivityItem = {
     signature: sig,
     blockTime,
     direction,
     amountUi: amountUiAbs,
-    counterparty,
+    counterparty: kind === "transfer" ? counterparty : null,
     feeLamports,
     kind,
     source,
-    accounts,
-    tokenAccounts,
   };
 
   if (kind === "swap") {
-    const sold = usdcOutTotal || amountUiAbs;
-
-    item.swapSoldMint = USDC_MINT_RAW;
-    item.swapSoldAmountUi = sold;
-    item.amountUi = sold;
-
+    item.swapDirection = swapDirection;
+    item.swapSoldMint = swapSoldMint;
+    item.swapSoldAmountUi = swapSoldAmountUi;
     item.swapBoughtMint = swapBoughtMint;
     item.swapBoughtAmountUi = swapBoughtAmountUi;
 
+    // For display: amountUi = USDC amount (what you spent for buy, what you received for sell)
+    item.amountUi = amountUiAbs;
     item.counterparty = null;
   }
 
@@ -712,7 +445,7 @@ function normalizeToActivity(
 }
 
 /* =========================
-   PUBLIC EXPORT (existing)
+   PUBLIC EXPORT
 ========================= */
 
 export async function getUsdcActivityForOwner(
@@ -758,94 +491,4 @@ export async function getUsdcActivityForOwner(
 
   CACHE.set(cacheKey, { ts: Date.now(), items });
   return items;
-}
-
-/* =========================
-   NEW HELPERS (for savings)
-========================= */
-
-/**
- * ✅ True if the tx's top-level account keys include `addr`.
- */
-export function isTxInvolvingAccount(item: ActivityItem, addr: string) {
-  const a = addr.trim();
-  if (!a) return false;
-  return Array.isArray(item.accounts) && item.accounts.includes(a);
-}
-
-/**
- * ✅ Server-side paging + filtering: returns *only* txs involving `involveAddr`.
- */
-export async function getUsdcActivityForOwnerInvolving(
-  owner58: string,
-  involveAddr: string,
-  opts?: {
-    want?: number;
-    maxPages?: number;
-    before?: string;
-    pageSize?: number;
-  }
-): Promise<{ items: ActivityItem[]; nextBefore: string | null }> {
-  const want = Math.min(Math.max(opts?.want ?? 30, 1), 200);
-  const pageSize = Math.min(Math.max(opts?.pageSize ?? 100, 10), 100);
-  const maxPages = Math.min(Math.max(opts?.maxPages ?? 40, 1), 80);
-
-  let cursor = opts?.before;
-  let pages = 0;
-
-  const matched: ActivityItem[] = [];
-  let lastCursor: string | null = null;
-
-  while (pages < maxPages && matched.length < want) {
-    pages += 1;
-
-    const page = await getUsdcActivityForOwner(owner58, {
-      limit: pageSize,
-      before: cursor,
-    });
-
-    if (!page.length) break;
-
-    for (const it of page) {
-      if (isTxInvolvingAccount(it, involveAddr)) matched.push(it);
-      if (matched.length >= want) break;
-    }
-
-    cursor = page[page.length - 1]?.signature || cursor;
-    lastCursor = cursor || null;
-
-    if (page.length < pageSize) break;
-  }
-
-  return { items: matched.slice(0, want), nextBefore: lastCursor };
-}
-
-/**
- * ✅ Convenience for Flex:
- * Returns ONLY transfer rows involving the flex addr.
- */
-export async function getFlexSavingsActivity(
-  owner58: string,
-  flexAddr: string,
-  opts?: { want?: number; before?: string; maxPages?: number }
-) {
-  const { items, nextBefore } = await getUsdcActivityForOwnerInvolving(
-    owner58,
-    flexAddr,
-    {
-      want: opts?.want ?? 30,
-      before: opts?.before,
-      maxPages: opts?.maxPages ?? 60,
-      pageSize: 100,
-    }
-  );
-
-  const transfers = items.filter(
-    (i) => i.kind === "transfer" && i.amountUi > 0
-  );
-
-  // newest first
-  transfers.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-
-  return { items: transfers, nextBefore };
 }

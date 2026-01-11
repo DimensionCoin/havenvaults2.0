@@ -14,10 +14,10 @@ import WithdrawFlex from "@/components/accounts/flex/Withdraw";
    CONSTANTS
 ========================= */
 
-// ✅ Flex savings vault address (counterparty for deposits/withdrawals)
-const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
-
-// APY endpoint
+// NOTE:
+// The *most reliable* identifier for Marginfi/Flex activity is the user's own
+// marginfi account pk (linkedMarginfiPk). A single static vault address may
+// only appear in some flows, which is why you can get “only 2 txs”.
 const APY_URL = "/api/savings/flex/apy";
 
 /* =========================
@@ -73,7 +73,6 @@ const formatTime = (unixSeconds?: number | null) => {
   });
 };
 
-// returns "$123.45" (NO sign)
 function formatUsd(n?: number | null) {
   const v = n == null || Number.isNaN(n) ? 0 : Number(n);
   return `$${v.toLocaleString("en-US", {
@@ -101,6 +100,8 @@ export default function FlexAccountPage() {
 
   const walletAddress = user?.walletAddress || "";
 
+  // ✅ This is the address you should filter by for Marginfi/Flex:
+  // it is the account that appears in the tx's message account keys.
   const linkedMarginfiPk =
     typeof savingsFlex?.marginfiAccountPk === "string" &&
     savingsFlex.marginfiAccountPk.trim()
@@ -202,9 +203,19 @@ export default function FlexAccountPage() {
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
+  /**
+   * ✅ IMPORTANT:
+   * We pass `involve=<linkedMarginfiPk>` so the server filters using the *marginfi account pk*.
+   * This is the fix for “only 2 txs” when a static vault addr is not present in most deposits.
+   *
+   * Your API should read this query param and use it as the involve address
+   * in getUsdcActivityForOwnerInvolving(). If your API currently hardcodes the vault
+   * address, update it to prefer `involve` when provided.
+   */
   const fetchTxsPage = useCallback(
     async (reset = false) => {
       if (!walletAddress) return;
+      if (!linkedMarginfiPk) return;
 
       try {
         setTxLoading(true);
@@ -215,9 +226,10 @@ export default function FlexAccountPage() {
             ? `&before=${encodeURIComponent(nextBefore)}`
             : "";
 
-        // ✅ mode=flex => server returns ONLY flex-related transfers
+        const involve = `&involve=${encodeURIComponent(linkedMarginfiPk)}`;
+
         const res = await fetch(
-          `/api/user/wallet/transactions?mode=flex&limit=30${cursor}`,
+          `/api/user/wallet/transactions?mode=flex&limit=30${cursor}${involve}`,
           {
             method: "GET",
             cache: "no-store",
@@ -266,20 +278,23 @@ export default function FlexAccountPage() {
         setTxLoading(false);
       }
     },
-    [walletAddress, nextBefore]
+    [walletAddress, linkedMarginfiPk, nextBefore]
   );
 
   // initial load
   useEffect(() => {
     if (!user) return;
+    if (!linkedMarginfiPk) return;
+
     setTxs([]);
     setNextBefore(null);
     setHasMore(true);
     fetchTxsPage(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, linkedMarginfiPk]);
 
-  // flex transfers only (API already filtered)
+  // With mode=flex, API should already return flex-only rows.
+  // Keep minimal client filtering: transfers only + positive amounts.
   const savingsActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
@@ -441,17 +456,18 @@ export default function FlexAccountPage() {
             ) : (
               <div className="space-y-2">
                 {savingsActivity.map((tx) => {
-                  // Deposit: wallet -> vault (direction "out")
+                  // Based on your server normalization:
+                  // - deposit: owner sends USDC into Marginfi/Flex -> direction "out"
+                  // - withdrawal: owner receives USDC back -> direction "in"
                   const isDeposit = tx.direction === "out";
-
                   const title = isDeposit
                     ? "Savings deposit"
                     : "Savings withdrawal";
 
-                  // ✅ FIXED: deposits are +, withdrawals are -
-                  const signedAmount = isDeposit
-                    ? `+${formatUsd(tx.amountUsdc ?? 0)}`
-                    : `-${formatUsd(tx.amountUsdc ?? 0)}`;
+                  const amt = tx.amountUsdc ?? 0;
+                  const rightTop = isDeposit
+                    ? `-${formatUsd(amt)}`
+                    : `+${formatUsd(amt)}`;
 
                   return (
                     <div
@@ -474,19 +490,17 @@ export default function FlexAccountPage() {
                           {formatTime(tx.blockTime)}
                         </p>
 
-                        {/* Optional tiny debug line (remove whenever) */}
-                        {process.env.NODE_ENV !== "production" &&
-                          normAddr(tx.counterparty) &&
-                          normAddr(tx.counterparty) !== FLEX_SAVINGS_ADDR && (
-                            <p className="mt-1 text-[11px] text-muted-foreground">
-                              Counterparty: {shortAddress(tx.counterparty)}
-                            </p>
-                          )}
+                        {process.env.NODE_ENV !== "production" && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Source: {tx.source ?? "—"} · Sig:{" "}
+                            {shortAddress(tx.signature)}
+                          </p>
+                        )}
                       </div>
 
                       <div className="text-right">
                         <p className="text-sm font-semibold text-foreground">
-                          {signedAmount}
+                          {rightTop}
                         </p>
                       </div>
                     </div>
@@ -507,7 +521,6 @@ export default function FlexAccountPage() {
               </button>
             )}
 
-            {/* Tip */}
             {!hasMore && savingsActivity.length > 0 && (
               <p className="mt-3 text-[11px] text-muted-foreground">
                 You’ve reached the end of the available history.

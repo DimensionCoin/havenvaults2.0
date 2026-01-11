@@ -26,7 +26,7 @@ import {
 // ✅ Flex savings vault address
 const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
 
-// Fallback avatar when we don’t have a Haven user profile photo.
+// Fallback avatar when we don't have a Haven user profile photo.
 const DEFAULT_AVATAR = "/logos/user.png";
 
 // Optional deterministic avatar for non-users
@@ -48,12 +48,16 @@ type TxRow = {
   kind?: "transfer" | "swap";
   direction?: "in" | "out" | "neutral";
 
+  // ✅ "buy" = spent USDC for token, "sell" = sold token for USDC
+  // token→token swaps will be null
+  swapDirection?: "buy" | "sell" | null;
+
+  // USDC statement amount (will be 0 for token→token swaps)
   amountUsdc?: number | null;
 
   counterparty?: string | null;
   counterpartyLabel?: string | null;
 
-  // ✅ Populate this from backend if you have a real user profile image URL
   counterpartyAvatarUrl?: string | null;
 
   swapSoldMint?: string | null;
@@ -102,16 +106,18 @@ function formatCurrency(amount: number, currency: string) {
   }
 }
 
-function TokenBoughtPill({
+function TokenPill({
   mint,
   amountUi,
   resolveMeta,
+  label,
 }: {
   mint?: string | null;
   amountUi?: number | null;
   resolveMeta: (
     m?: string | null
   ) => { symbol: string; logo: string; decimals: number; name: string } | null;
+  label?: string;
 }) {
   if (!mint || !amountUi || amountUi <= 0) return null;
 
@@ -127,6 +133,7 @@ function TokenBoughtPill({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={logo} alt={symbol} className="h-4 w-4 rounded-sm" />
       <span className="text-xs text-foreground/80">
+        {label ? `${label} ` : ""}
         {amountUi.toFixed(Math.min(6, dec))}
       </span>
       <span className="text-xs text-foreground/60">{symbol}</span>
@@ -289,9 +296,35 @@ export default function DepositAccountPage() {
   const swaps = useMemo(() => {
     return txs.filter((t) => {
       if (t.kind !== "swap") return false;
-      const src = (t.source || "").toUpperCase();
-      if (src && src !== "JUPITER") return false;
-      return !!t.swapBoughtMint && (t.swapBoughtAmountUi ?? 0) > 0;
+
+      // ✅ token→token swap: no swapDirection, and both legs exist
+      const tokenToToken =
+        !t.swapDirection &&
+        !!t.swapSoldMint &&
+        !!t.swapBoughtMint &&
+        (t.swapSoldAmountUi ?? 0) > 0 &&
+        (t.swapBoughtAmountUi ?? 0) > 0;
+
+      if (tokenToToken) return true;
+
+      // ✅ USDC swaps (buy/sell)
+      if (t.swapDirection === "buy") {
+        return (
+          !!t.swapBoughtMint &&
+          (t.swapBoughtAmountUi ?? 0) > 0 &&
+          (t.swapSoldAmountUi ?? 0) > 0
+        );
+      }
+
+      if (t.swapDirection === "sell") {
+        return (
+          !!t.swapSoldMint &&
+          (t.swapSoldAmountUi ?? 0) > 0 &&
+          (t.swapBoughtAmountUi ?? 0) > 0
+        );
+      }
+
+      return false;
     });
   }, [txs]);
 
@@ -325,7 +358,7 @@ export default function DepositAccountPage() {
       : tx.counterpartyLabel || shortAddress(cp) || "—";
 
     const avatarUrl = isFlexSavings
-      ? null // ✅ we will render PiggyBank instead of an image
+      ? null
       : tx.counterpartyAvatarUrl ||
         (cp && USE_DICEBEAR ? dicebearAvatar(cp) : null) ||
         DEFAULT_AVATAR;
@@ -344,7 +377,7 @@ export default function DepositAccountPage() {
   }
 
   return (
-    <div className=" px-4 py-6">
+    <div className="haven-app px-4 py-6">
       <div className="mx-auto w-full max-w-[560px] space-y-4">
         {/* Header */}
         <div className="relative flex items-start justify-center">
@@ -359,7 +392,7 @@ export default function DepositAccountPage() {
 
           <div className="text-center">
             <p className="haven-kicker">Deposit Account</p>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
+            <p className="mt-0.5 text-[12px] text-muted-foreground">
               Account #{shortAddress(walletAddress)}
             </p>
           </div>
@@ -441,24 +474,55 @@ export default function DepositAccountPage() {
               <div className="space-y-2">
                 {activity.map((tx) => {
                   const isSwap = tx.kind === "swap";
+                  const isBuy = tx.swapDirection === "buy";
+                  const isSell = tx.swapDirection === "sell";
 
-                  // swap fields
-                  const bought = isSwap ? resolveMeta(tx.swapBoughtMint) : null;
-                  const soldUsdc = tx.swapSoldAmountUi ?? tx.amountUsdc ?? 0;
-                  const boughtAmt = tx.swapBoughtAmountUi ?? 0;
+                  const isTokenToToken =
+                    isSwap &&
+                    !isBuy &&
+                    !isSell &&
+                    !!tx.swapSoldMint &&
+                    !!tx.swapBoughtMint &&
+                    (tx.swapSoldAmountUi ?? 0) > 0 &&
+                    (tx.swapBoughtAmountUi ?? 0) > 0;
+
+                  // Swap legs
+                  const soldMint = tx.swapSoldMint;
+                  const soldAmount = tx.swapSoldAmountUi;
+
+                  const boughtMint = tx.swapBoughtMint;
+                  const boughtAmount = tx.swapBoughtAmountUi;
+
+                  // For USDC swaps, pick the “asset” mint for title/meta
+                  const tokenMint = isBuy ? boughtMint : soldMint;
+                  const tokenAmount = isBuy ? boughtAmount : soldAmount;
+
+                  const tokenMeta = isSwap ? resolveMeta(tokenMint) : null;
 
                   // transfer fields
                   const party = !isSwap ? resolveTransferParty(tx) : null;
 
-                  // FX conversion for tx amounts only
+                  // FX conversion for transfers only
                   const localAbs = (tx.amountUsdc ?? 0) * rate;
-                  const localSpent = soldUsdc * rate;
 
                   const isSavings = !!party?.isFlexSavings;
 
                   // Titles
+                  const soldMeta = isTokenToToken
+                    ? resolveMeta(soldMint)
+                    : null;
+                  const boughtMeta = isTokenToToken
+                    ? resolveMeta(boughtMint)
+                    : null;
+
                   const title = isSwap
-                    ? `Asset purchase — ${bought?.symbol ?? "TOKEN"}`
+                    ? isTokenToToken
+                      ? `Asset swap — ${soldMeta?.symbol ?? "TOKEN"} → ${
+                          boughtMeta?.symbol ?? "TOKEN"
+                        }`
+                      : isSell
+                        ? `Asset sale — ${tokenMeta?.symbol ?? "TOKEN"}`
+                        : `Asset purchase — ${tokenMeta?.symbol ?? "TOKEN"}`
                     : isSavings
                       ? tx.direction === "out"
                         ? "Savings deposit"
@@ -467,9 +531,21 @@ export default function DepositAccountPage() {
                         ? "Received Money"
                         : "Sent Money";
 
-                  // Right side amount
+                  // Right side amount:
+                  // - token→token swaps are neutral (no +/- fiat)
+                  // - USDC swaps show +/- using amountUsdc (statement column)
+                  // - transfers show +/- using amountUsdc
                   const rightTop = isSwap
-                    ? `-${formatCurrency(localSpent, displayCurrency)}`
+                    ? isTokenToToken
+                      ? "—"
+                      : (() => {
+                          const usdcDeltaAbs = Math.abs(tx.amountUsdc ?? 0);
+                          const local = usdcDeltaAbs * rate;
+                          if (!local) return "—";
+                          return isSell
+                            ? `+${formatCurrency(local, displayCurrency)}`
+                            : `-${formatCurrency(local, displayCurrency)}`;
+                        })()
                     : tx.direction === "in"
                       ? `+${formatCurrency(localAbs, displayCurrency)}`
                       : `-${formatCurrency(localAbs, displayCurrency)}`;
@@ -486,18 +562,41 @@ export default function DepositAccountPage() {
 
                         {isSwap ? (
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <TokenBoughtPill
-                              mint={tx.swapBoughtMint}
-                              amountUi={boughtAmt}
-                              resolveMeta={resolveMeta}
-                            />
-                            <span className="text-xs text-muted-foreground">
-                              {bought?.name ?? "Unknown token"}
-                            </span>
+                            {isTokenToToken ? (
+                              <>
+                                <TokenPill
+                                  mint={soldMint}
+                                  amountUi={soldAmount}
+                                  resolveMeta={resolveMeta}
+                                  label="Sold"
+                                />
+                                <TokenPill
+                                  mint={boughtMint}
+                                  amountUi={boughtAmount}
+                                  resolveMeta={resolveMeta}
+                                  label="Bought"
+                                />
+                                <span className="text-xs text-muted-foreground">
+                                  {soldMeta?.name ?? "Unknown token"} →{" "}
+                                  {boughtMeta?.name ?? "Unknown token"}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <TokenPill
+                                  mint={tokenMint}
+                                  amountUi={tokenAmount}
+                                  resolveMeta={resolveMeta}
+                                  label={isSell ? "Sold" : "Bought"}
+                                />
+                                <span className="text-xs text-muted-foreground">
+                                  {tokenMeta?.name ?? "Unknown token"}
+                                </span>
+                              </>
+                            )}
                           </div>
                         ) : (
                           <div className="mt-1 flex items-center gap-2">
-                            {/* ✅ Savings gets PiggyBank icon instead of image */}
                             {isSavings ? (
                               <SavingsAvatar />
                             ) : (
