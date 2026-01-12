@@ -539,7 +539,7 @@ export default function DepositAccountPage() {
                   const detailLine = isSwap
                     ? isTokenToToken
                       ? `${soldName} → ${boughtName}`
-                      : tokenName
+                      : ""
                     : `${tx.direction === "in" ? "From" : "To"} ${
                         party?.label ?? "—"
                       }`;
