@@ -58,12 +58,14 @@ const shortAddress = (addr?: string | null) => {
   return `${a.slice(0, 4)}…${a.slice(-4)}`;
 };
 
-const formatTime = (unixSeconds?: number | null) => {
+// ✅ Friendlier timestamp (matches deposit page vibe)
+const formatDayTime = (unixSeconds?: number | null) => {
   if (!unixSeconds) return "—";
   const d = new Date(unixSeconds * 1000);
   return d.toLocaleString("en-US", {
+    weekday: "short",
     month: "short",
-    day: "2-digit",
+    day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -83,7 +85,7 @@ function formatCurrency(amount: number, currency: string) {
 
 function SavingsAvatar() {
   return (
-    <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
+    <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center shrink-0">
       <PiggyBank className="h-4 w-4 text-foreground/80" />
     </span>
   );
@@ -212,7 +214,6 @@ export default function FlexAccountPage() {
     return Number.isFinite(n) ? n : 0;
   }, [savingsFlexUsd]);
 
-  // ✅ Format balance in display currency
   const balanceDisplay = useMemo(() => {
     return formatCurrency(effectiveBalance, displayCurrency);
   }, [effectiveBalance, displayCurrency]);
@@ -254,8 +255,6 @@ export default function FlexAccountPage() {
 
         const url = `/api/user/wallet/transactions?mode=flex&limit=30${cursor}${involve}`;
 
-        console.log("[FlexPage] Fetching:", url);
-
         const res = await fetch(url, {
           method: "GET",
           cache: "no-store",
@@ -269,12 +268,6 @@ export default function FlexAccountPage() {
           nextBefore?: string | null;
           error?: string;
         };
-
-        console.log("[FlexPage] Response:", {
-          ok: data.ok,
-          txCount: data.txs?.length ?? 0,
-          nextBefore: data.nextBefore,
-        });
 
         if (!res.ok || data?.ok === false) {
           throw new Error(data?.error || `Failed (${res.status})`);
@@ -298,15 +291,9 @@ export default function FlexAccountPage() {
             ? data.nextBefore.trim()
             : null;
 
-        console.log("[FlexPage] Setting cursor:", newCursor);
-
         setNextBefore(newCursor);
-
-        if (newCursor === null) {
-          setReachedEnd(true);
-        }
+        if (newCursor === null) setReachedEnd(true);
       } catch (e) {
-        console.error("[FlexPage] Error:", e);
         setTxError(e instanceof Error ? e.message : "Failed to load activity");
         if (reset) setTxs([]);
         setNextBefore(null);
@@ -331,7 +318,8 @@ export default function FlexAccountPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, linkedMarginfiPk]);
 
-  const savingsActivity = useMemo(() => {
+  // ✅ ONLY Flex deposits/withdrawals (simple)
+  const flexActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
       .filter((t) => (t.amountUsdc ?? 0) > 0)
@@ -393,7 +381,7 @@ export default function FlexAccountPage() {
   /* -------- Render -------- */
 
   return (
-    <div className="haven-app px-4 py-6">
+    <div className="px-4 py-6">
       <div className="mx-auto w-full max-w-[560px] space-y-4">
         {/* Header */}
         <div className="relative flex items-start justify-center">
@@ -487,59 +475,52 @@ export default function FlexAccountPage() {
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : txError ? (
               <p className="text-sm text-muted-foreground">{txError}</p>
-            ) : savingsActivity.length === 0 ? (
+            ) : flexActivity.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No Flex activity found in the loaded history yet.
+                No Flex activity yet.
               </p>
             ) : (
               <div className="space-y-2">
-                {savingsActivity.map((tx) => {
-                  const isDeposit = tx.direction === "out";
-                  const title = isDeposit
-                    ? "Savings deposit"
-                    : "Savings withdrawal";
+                {flexActivity.map((tx) => {
+                  // ✅ Keep it simple + consistent:
+                  // Deposit into Flex = "Flex deposit"
+                  // Withdrawal from Flex = "Flex withdrawal"
+                  const isFlexDeposit = tx.direction === "out";
+                  const title = isFlexDeposit
+                    ? "Flex deposit"
+                    : "Flex withdrawal";
 
-                  // ✅ Apply FX rate to transaction amount
-                  // For flex savings: deposit = +, withdrawal = -
-                  // (opposite of deposit account where sending money out is -)
                   const amtUsdc = tx.amountUsdc ?? 0;
                   const amtLocal = amtUsdc * rate;
 
-                  const rightTop = isDeposit
+                  const rightTop = isFlexDeposit
                     ? `+${formatCurrency(amtLocal, displayCurrency)}`
                     : `-${formatCurrency(amtLocal, displayCurrency)}`;
 
                   return (
                     <div
                       key={tx.signature}
-                      className="haven-row hover:bg-accent transition"
+                      className="haven-row hover:bg-accent transition flex items-start gap-3"
                     >
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground">
+                      {/* Left icon */}
+                      <div className="pt-0.5">
+                        <SavingsAvatar />
+                      </div>
+
+                      {/* Main text */}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-foreground truncate">
                           {title}
                         </p>
 
-                        <div className="mt-1 flex items-center gap-2">
-                          <SavingsAvatar />
-                          <p className="text-xs text-muted-foreground">
-                            {isDeposit ? "To" : "From"} Flex Savings Account
-                          </p>
-                        </div>
-
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {formatTime(tx.blockTime)}
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {formatDayTime(tx.blockTime)}
                         </p>
-
-                        {process.env.NODE_ENV !== "production" && (
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            Source: {tx.source ?? "—"} · Sig:{" "}
-                            {shortAddress(tx.signature)}
-                          </p>
-                        )}
                       </div>
 
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-foreground">
+                      {/* Right amount */}
+                      <div className="text-right shrink-0 pl-2">
+                        <p className="text-sm font-semibold text-foreground tabular-nums">
                           {rightTop}
                         </p>
                       </div>
@@ -549,8 +530,8 @@ export default function FlexAccountPage() {
               </div>
             )}
 
-            {/* Load more button */}
-            {hasMore && savingsActivity.length > 0 && (
+            {/* Load more */}
+            {hasMore && flexActivity.length > 0 && (
               <button
                 type="button"
                 onClick={() => fetchTxsPage(false)}
@@ -561,18 +542,9 @@ export default function FlexAccountPage() {
               </button>
             )}
 
-            {/* End of history message */}
-            {reachedEnd && savingsActivity.length > 0 && (
+            {reachedEnd && flexActivity.length > 0 && (
               <p className="mt-3 text-[11px] text-muted-foreground text-center">
                 You&apos;ve reached the end of the available history.
-              </p>
-            )}
-
-            {/* Debug info in development */}
-            {process.env.NODE_ENV !== "production" && (
-              <p className="mt-2 text-[10px] text-muted-foreground/50">
-                Debug: txs={txs.length} | cursor={nextBefore ? "yes" : "no"} |
-                reachedEnd={String(reachedEnd)} | hasMore={String(hasMore)}
               </p>
             )}
           </div>
