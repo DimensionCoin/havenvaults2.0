@@ -15,7 +15,10 @@ import {
   Search,
   RefreshCw,
   AlertTriangle,
-  Info,
+  ChevronRight,
+  Layers,
+  PieChart,
+  X,
 } from "lucide-react";
 
 import { BUNDLES, type RiskLevel } from "./bundlesConfig";
@@ -26,7 +29,6 @@ import { useBundleSwap } from "@/hooks/useBundleSwap";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -52,34 +54,10 @@ function getRiskIcon(risk: RiskLevel) {
 }
 
 function riskLabel(risk: RiskLevel) {
-  if (risk === "low") return "Low risk";
-  if (risk === "medium") return "Medium risk";
-  if (risk === "high") return "High risk";
-  return "Degen";
-}
-
-function riskClasses(risk: RiskLevel) {
-  if (risk === "low") return "border-primary/25 bg-primary/10 text-foreground";
-  if (risk === "medium") return "border-border/60 bg-card/40 text-foreground";
-  if (risk === "high")
-    return "border-amber-500/25 bg-amber-500/10 text-foreground";
-  return "border-destructive/25 bg-destructive/10 text-foreground";
-}
-
-function riskPill(risk: RiskLevel) {
-  const Icon = getRiskIcon(risk);
-  return (
-    <div
-      className={[
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5",
-        "text-[11px] font-bold uppercase tracking-wider backdrop-blur",
-        riskClasses(risk),
-      ].join(" ")}
-    >
-      <Icon className="h-3 w-3 text-primary" />
-      {risk}
-    </div>
-  );
+  if (risk === "low") return "Conservative";
+  if (risk === "medium") return "Balanced";
+  if (risk === "high") return "Aggressive";
+  return "Speculative";
 }
 
 function cleanNumberInput(raw: string) {
@@ -89,7 +67,6 @@ function cleanNumberInput(raw: string) {
   return `${parts[0]}.${parts.slice(1).join("")}`;
 }
 
-// ✅ Uses narrowSymbol so CAD renders like "$28.00" (not "CA$28.00")
 function formatMoney(n: number, currency: string) {
   const c = (currency || "USD").toUpperCase();
   const val = Number.isFinite(n) ? n : 0;
@@ -108,22 +85,60 @@ function formatMoney(n: number, currency: string) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   TOKEN ICONS
+   STYLED COMPONENTS
 ═══════════════════════════════════════════════════════════════════════════ */
 
-function TokenIconsCompact({ symbols }: { symbols: string[] }) {
-  const shown = symbols.slice(0, 4);
+// Risk badge using Haven theme
+function RiskBadge({ risk }: { risk: RiskLevel }) {
+  const styles = {
+    low: "bg-primary/10 text-primary border-primary/20",
+    medium: "bg-accent text-accent-foreground border-border",
+    high: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+    degen: "bg-destructive/10 text-destructive border-destructive/20",
+  };
+
+  return (
+    <span
+      className={`
+        inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold 
+        uppercase tracking-wide border ${styles[risk]}
+      `}
+    >
+      {risk}
+    </span>
+  );
+}
+
+// Token stack for bundle cards
+function TokenStack({
+  symbols,
+  size = "md",
+}: {
+  symbols: string[];
+  size?: "sm" | "md" | "lg";
+}) {
+  const shown = symbols.slice(0, 5);
   const extra = Math.max(0, symbols.length - shown.length);
+
+  const sizeClasses = {
+    sm: "h-6 w-6",
+    md: "h-8 w-8",
+    lg: "h-10 w-10",
+  };
 
   return (
     <div className="flex items-center">
-      <div className="flex -space-x-2.5">
-        {shown.map((s) => {
+      <div className="flex -space-x-2">
+        {shown.map((s, i) => {
           const meta = findTokenBySymbol(s);
           return (
             <div
               key={s}
-              className="relative h-9 w-9 overflow-hidden rounded-full border-2 border-background/70 bg-card shadow-fintech-sm"
+              className={`
+                relative ${sizeClasses[size]} overflow-hidden rounded-full 
+                ring-2 ring-background bg-card
+              `}
+              style={{ zIndex: shown.length - i }}
               title={s}
             >
               <Image
@@ -136,48 +151,145 @@ function TokenIconsCompact({ symbols }: { symbols: string[] }) {
           );
         })}
       </div>
-
       {extra > 0 && (
-        <div className="ml-2 flex h-9 w-9 items-center justify-center rounded-full border border-border/60 bg-card/40 shadow-fintech-sm">
-          <span className="text-[11px] font-bold text-muted-foreground">
-            +{extra}
-          </span>
-        </div>
+        <span className="ml-2 text-xs font-medium text-muted-foreground">
+          +{extra}
+        </span>
       )}
     </div>
   );
 }
 
-function TokenIconsRow({ symbols }: { symbols: string[] }) {
+// Allocation row for modal
+function AllocationRow({
+  symbol,
+  percentage,
+  amount,
+  currency,
+}: {
+  symbol: string;
+  percentage: number;
+  amount: number;
+  currency: string;
+}) {
+  const meta = findTokenBySymbol(symbol);
+
   return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {symbols.map((s) => {
-        const meta = findTokenBySymbol(s);
-        return (
-          <div
-            key={s}
-            className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/30 px-3 py-2"
-          >
-            <div className="relative h-5 w-5 overflow-hidden rounded-full border border-border/60 bg-card">
-              <Image
-                src={meta?.logo || "/placeholder.svg"}
-                alt={s}
-                fill
-                className="object-cover"
-              />
-            </div>
-            <span className="text-[12px] font-semibold text-foreground/90">
-              {s}
-            </span>
+    <div className="flex items-center justify-between py-3 border-b border-border last:border-0">
+      <div className="flex items-center gap-3">
+        <div className="relative h-8 w-8 overflow-hidden rounded-full bg-secondary ring-1 ring-border">
+          <Image
+            src={meta?.logo || "/placeholder.svg"}
+            alt={symbol}
+            fill
+            className="object-cover"
+          />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-foreground">{symbol}</p>
+          <p className="text-xs text-muted-foreground">
+            {meta?.name || symbol}
+          </p>
+        </div>
+      </div>
+      <div className="text-right">
+        <p className="text-sm font-medium text-foreground">
+          {formatMoney(amount, currency)}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {percentage.toFixed(0)}%
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Execution step indicator
+function ExecutionStep({
+  item,
+  isActive,
+}: {
+  item: { symbol: string; status: string; amountUsdcUnits: number };
+  isActive: boolean;
+}) {
+  const meta = findTokenBySymbol(item.symbol);
+  const isConfirmed = item.status === "confirmed";
+  const isFailed = item.status === "failed";
+
+  return (
+    <div
+      className={`
+        flex items-center justify-between p-3 rounded-2xl transition-all duration-300
+        ${
+          isConfirmed
+            ? "bg-primary/10 border border-primary/20"
+            : isFailed
+              ? "bg-destructive/10 border border-destructive/20"
+              : isActive
+                ? "bg-accent border border-primary/30"
+                : "bg-secondary border border-border"
+        }
+      `}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className={`
+          relative h-9 w-9 overflow-hidden rounded-full ring-2
+          ${
+            isConfirmed
+              ? "ring-primary/30"
+              : isFailed
+                ? "ring-destructive/30"
+                : isActive
+                  ? "ring-primary/40"
+                  : "ring-border"
+          }
+        `}
+        >
+          <Image
+            src={meta?.logo || "/placeholder.svg"}
+            alt={item.symbol}
+            fill
+            className="object-cover"
+          />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-foreground">{item.symbol}</p>
+          <p className="text-xs text-muted-foreground">
+            {(item.amountUsdcUnits / 1_000_000).toFixed(2)} USDC
+          </p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {isConfirmed && (
+          <div className="flex items-center gap-1.5 text-primary">
+            <CheckCircle2 className="h-4 w-4" />
+            <span className="text-xs font-medium">Done</span>
           </div>
-        );
-      })}
+        )}
+        {isFailed && (
+          <div className="flex items-center gap-1.5 text-destructive">
+            <XCircle className="h-4 w-4" />
+            <span className="text-xs font-medium">Failed</span>
+          </div>
+        )}
+        {isActive && (
+          <div className="flex items-center gap-1.5 text-primary">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-xs font-medium">Processing</span>
+          </div>
+        )}
+        {!isConfirmed && !isFailed && !isActive && (
+          <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/30" />
+        )}
+      </div>
     </div>
   );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   MAIN
+   MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function BundlesPanel({ ownerBase58 }: Props) {
@@ -245,13 +357,13 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     if (!current) return "Processing...";
     switch (current.status) {
       case "building":
-        return `Preparing ${current.symbol}...`;
+        return `Preparing ${current.symbol}`;
       case "signing":
         return `Sign to buy ${current.symbol}`;
       case "sending":
-        return `Sending ${current.symbol}...`;
+        return `Sending ${current.symbol}`;
       case "confirming":
-        return `Confirming ${current.symbol}...`;
+        return `Confirming ${current.symbol}`;
       default:
         return "Processing...";
     }
@@ -273,7 +385,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
   }, [bundle]);
 
   const closeAndRefresh = useCallback(async () => {
-    // ✅ refresh balance provider after a successful bundle buy
     await refreshNow().catch(() => {});
     closeModal();
   }, [refreshNow, closeModal]);
@@ -281,7 +392,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
   const startPurchase = useCallback(async () => {
     if (!canBuy || !selected || bundle.isExecuting) return;
 
-    // amountDisplay is in display currency
     const perUsd = amountNumber / (fxRate || 1) / selected.symbols.length;
 
     const swaps = selected.symbols.map((symbol) => ({
@@ -305,415 +415,477 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     return () => window.removeEventListener("keydown", handleEsc);
   }, [open, closeModal]);
 
+  // Quick amount presets
+  const presets = [25, 50, 100, 250];
+
   return (
     <>
-      {/* ───────────────── Top / Header strip ───────────────── */}
-      <div className="haven-glass p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/60 bg-card/40 glow-mint">
-              <Sparkles className="h-4 w-4 text-primary" />
+      {/* ═══════════════ Header Section ═══════════════ */}
+      <div className="haven-glass p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 glow-mint">
+              <Layers className="h-5 w-5 text-primary" />
             </div>
-
-            <div className="min-w-0">
-              <p className="haven-kicker">INVEST</p>
-              <h3 className="text-[18px] font-semibold leading-tight text-foreground">
-                Bundles
-              </h3>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                One click portfolios — one purchase, multiple assets.
+            <div>
+              <p className="haven-kicker">Invest</p>
+              <h2 className="text-lg font-semibold text-foreground tracking-tight">
+                Portfolio Bundles
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Diversify instantly with curated portfolios
               </p>
             </div>
           </div>
 
           <div className="text-right">
-            <p className="text-[10px] text-muted-foreground">Available</p>
-            <p className="text-[14px] font-semibold text-foreground">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+              Available
+            </p>
+            <p className="text-base font-semibold text-foreground tabular-nums">
               {formatMoney(availableBalance, displayCurrency)}
             </p>
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative mt-4">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        {/* Search Bar */}
+        <div className="relative mt-5">
+          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search bundles, tokens, themes…"
-            className="haven-input pl-10"
+            placeholder="Search bundles or tokens..."
+            className="haven-input pl-11"
           />
         </div>
 
-        {/* Filters */}
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+        {/* Risk Filters */}
+        <div className="flex gap-2 mt-4 overflow-x-auto pb-1">
           {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
             <button
               key={risk}
               type="button"
               onClick={() => setSelectedRiskFilter(risk)}
-              className={[
-                "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition border",
-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
-                selectedRiskFilter === risk
-                  ? "bg-primary/15 text-primary border-primary/25"
-                  : "bg-card/30 text-muted-foreground border-border/60 hover:text-foreground hover:bg-card/50",
-              ].join(" ")}
+              className={`
+                shrink-0 px-4 py-2 rounded-full text-xs font-medium transition-all duration-200 border
+                ${
+                  selectedRiskFilter === risk
+                    ? "bg-primary/15 text-primary border-primary/25"
+                    : "bg-secondary text-muted-foreground border-border hover:bg-accent hover:text-foreground"
+                }
+              `}
             >
-              {risk}
+              {risk === "all"
+                ? "All Bundles"
+                : risk.charAt(0).toUpperCase() + risk.slice(1)}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ───────────────── List ───────────────── */}
+      {/* ═══════════════ Bundle Cards ═══════════════ */}
       <div className="mt-4 grid gap-3">
         {filteredBundles.length === 0 ? (
-          <div className="haven-card p-6 text-center">
+          <div className="haven-card p-8 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary mx-auto mb-3">
+              <Search className="h-5 w-5 text-muted-foreground" />
+            </div>
             <p className="text-sm font-medium text-foreground">
               No bundles found
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Try a different keyword or risk filter.
+            <p className="text-xs text-muted-foreground mt-1">
+              Try a different search term or filter
             </p>
           </div>
         ) : (
-          filteredBundles.map((b) => (
-            <button
-              key={b.id}
-              type="button"
-              onClick={() => openBundle(b.id)}
-              className={[
-                "haven-row",
-                "text-left transition",
-                "hover:bg-accent/60 hover:border-border",
-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
-              ].join(" ")}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <TokenIconsCompact symbols={b.symbols} />
-                <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-foreground truncate">
-                    {b.name}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {b.subtitle} • {b.symbols.length} assets
-                  </p>
-                </div>
-              </div>
+          filteredBundles.map((b) => {
+            const Icon = getRiskIcon(b.risk);
+            return (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => openBundle(b.id)}
+                className="
+                  haven-row group w-full text-left p-4
+                  transition-all duration-300 
+                  hover:shadow-fintech-md hover:border-primary/20
+                "
+              >
+                <div className="flex items-start justify-between gap-4 w-full">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div
+                        className={`
+                        flex h-10 w-10 items-center justify-center rounded-2xl border
+                        ${
+                          b.risk === "low"
+                            ? "bg-primary/10 border-primary/20"
+                            : b.risk === "medium"
+                              ? "bg-accent border-border"
+                              : b.risk === "high"
+                                ? "bg-amber-500/10 border-amber-500/20"
+                                : "bg-destructive/10 border-destructive/20"
+                        }
+                      `}
+                      >
+                        <Icon
+                          className={`h-4 w-4
+                          ${
+                            b.risk === "low"
+                              ? "text-primary"
+                              : b.risk === "medium"
+                                ? "text-foreground"
+                                : b.risk === "high"
+                                  ? "text-amber-500"
+                                  : "text-destructive"
+                          }
+                        `}
+                        />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
+                          {b.name}
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                          {b.symbols.length} assets • Equal weight
+                        </p>
+                      </div>
+                    </div>
 
-              <div className="flex items-center gap-2">
-                {riskPill(b.risk)}
-                <div className="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-full border border-border/60 bg-card/30 text-muted-foreground">
-                  <ArrowRight className="h-4 w-4" />
+                    <p className="text-xs text-muted-foreground mb-4 line-clamp-2">
+                      {b.subtitle}
+                    </p>
+
+                    <div className="flex items-center justify-between">
+                      <TokenStack symbols={b.symbols} size="sm" />
+                      <RiskBadge risk={b.risk} />
+                    </div>
+                  </div>
+
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-all duration-300">
+                    <ChevronRight className="h-4 w-4" />
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))
+              </button>
+            );
+          })
         )}
       </div>
 
-      {/* ───────────────── Modal (safe-area, pinned CTA) ───────────────── */}
+      {/* ═══════════════ Purchase Modal ═══════════════ */}
       <Dialog
         open={open}
         onOpenChange={(v) => (v ? setOpen(true) : closeModal())}
       >
         <DialogContent
-          className={[
-            "p-0 overflow-hidden flex flex-col",
-            "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
-
-            // Desktop sizing
-            "sm:w-[min(92vw,520px)] sm:max-w-[520px]",
-            "sm:max-h-[90vh] sm:rounded-[28px]",
-
-            // Mobile fullscreen
-            "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-            "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-            "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-          ].join(" ")}
+          className="
+            p-0 overflow-hidden flex flex-col gap-0
+            bg-card border-border text-foreground shadow-fintech-lg
+            sm:w-[min(92vw,480px)] sm:max-w-[480px] sm:max-h-[90vh] sm:rounded-3xl
+            max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none
+            max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none
+            max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0
+          "
         >
+          {/* Progress bar */}
+          {bundle.state.items.length > 0 && (
+            <div className="h-1 w-full bg-secondary">
+              <div
+                className="h-full bg-primary transition-all duration-500"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+
           <div className="flex min-h-0 flex-1 flex-col">
-            {/* Progress */}
-            {bundle.state.items.length > 0 && (
-              <div className="h-1 w-full bg-foreground/5">
-                <div
-                  className="h-full bg-primary/70 transition-all duration-500"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            )}
-
-            {/* Scroll body */}
-            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
-              <DialogHeader className="pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {selected ? (
-                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/60 bg-card/40 glow-mint">
-                        {React.createElement(getRiskIcon(selected.risk), {
-                          className: "h-5 w-5 text-primary",
-                        })}
-                      </div>
-                    ) : null}
-
-                    <div className="min-w-0">
-                      <DialogTitle className="text-base font-semibold text-foreground">
-                        {selected?.name ?? "Bundle"}
-                      </DialogTitle>
-                      <DialogDescription className="mt-0.5 text-[11px] text-muted-foreground">
-                        {selected?.symbols.length ?? 0} assets •{" "}
-                        {riskLabel((selected?.risk as RiskLevel) ?? "low")}
-                      </DialogDescription>
-                    </div>
-                  </div>
-
-                  {selected ? riskPill(selected.risk) : null}
-                </div>
-              </DialogHeader>
-
-              {/* Bundle info */}
-              {selected?.symbols?.length ? (
-                <div className="haven-card-soft px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[12px] font-semibold text-foreground">
-                        What you’re buying
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
-                        Equal-weight allocation across the bundle.
-                      </p>
-                    </div>
-                    <div className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/30 px-2.5 py-1 text-[10px] text-muted-foreground">
-                      <Info className="h-3.5 w-3.5" />1 fee total
-                    </div>
-                  </div>
-                  <TokenIconsRow symbols={selected.symbols} />
-                </div>
-              ) : null}
-
-              <div className="mt-4 space-y-4">
-                {/* Amount */}
-                {bundle.state.phase === "idle" && (
-                  <div className="haven-card-soft p-4">
-                    <label className="mb-2 block text-[11px] font-medium text-muted-foreground">
-                      Investment Amount
-                    </label>
-
-                    <div className="flex items-end justify-between gap-3">
-                      <div className="flex items-end gap-2">
-                        <span className="mb-[2px] text-[12px] font-semibold text-muted-foreground">
-                          {displayCurrency}
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={amountDisplay}
-                          onChange={(e) =>
-                            setAmountDisplay(cleanNumberInput(e.target.value))
-                          }
-                          placeholder="0.00"
-                          className="w-[170px] bg-transparent text-3xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/50"
-                        />
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAmountDisplay(availableBalance.toFixed(2))
-                        }
-                        className="haven-pill haven-pill-positive hover:bg-primary/15"
-                      >
-                        Max: {formatMoney(availableBalance, displayCurrency)}
-                      </button>
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between text-[11px]">
-                      <span className="text-muted-foreground">Available</span>
-                      <span className="font-semibold text-foreground">
-                        {formatMoney(availableBalance, displayCurrency)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Distribution */}
-                {bundle.state.phase === "idle" && perTokenDisplay > 0 && (
-                  <div className="haven-card-soft p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-muted-foreground">
-                        Distribution
-                      </span>
-                      <span className="text-[11px] text-muted-foreground">
-                        Equal weight
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      {(selected?.symbols ?? []).map((s) => {
-                        const meta = findTokenBySymbol(s);
-                        return (
-                          <div
-                            key={s}
-                            className="flex items-center justify-between py-1"
-                          >
-                            <div className="flex items-center gap-2">
-                              <div className="relative h-6 w-6 overflow-hidden rounded-full border border-border/60 bg-card">
-                                <Image
-                                  src={meta?.logo || "/placeholder.svg"}
-                                  alt={s}
-                                  fill
-                                  className="object-cover"
-                                />
-                              </div>
-                              <span className="text-[12px] font-semibold text-foreground/90">
-                                {s}
-                              </span>
-                            </div>
-
-                            <span className="text-[12px] text-muted-foreground">
-                              {perTokenDisplay.toFixed(2)} {displayCurrency}
-                            </span>
-                          </div>
-                        );
+            {/* Modal Header */}
+            <div className="shrink-0 px-5 pt-5 pb-4 border-b border-border">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  {selected && (
+                    <div
+                      className={`
+                      flex h-11 w-11 items-center justify-center rounded-2xl border
+                      ${
+                        selected.risk === "low"
+                          ? "bg-primary/10 border-primary/20"
+                          : selected.risk === "medium"
+                            ? "bg-accent border-border"
+                            : selected.risk === "high"
+                              ? "bg-amber-500/10 border-amber-500/20"
+                              : "bg-destructive/10 border-destructive/20"
+                      }
+                    `}
+                    >
+                      {React.createElement(getRiskIcon(selected.risk), {
+                        className: `h-5 w-5 ${
+                          selected.risk === "low"
+                            ? "text-primary"
+                            : selected.risk === "medium"
+                              ? "text-foreground"
+                              : selected.risk === "high"
+                                ? "text-amber-500"
+                                : "text-destructive"
+                        }`,
                       })}
                     </div>
+                  )}
+                  <div>
+                    <DialogTitle className="text-base font-semibold text-foreground">
+                      {selected?.name ?? "Bundle"}
+                    </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                      {selected?.symbols.length ?? 0} assets •{" "}
+                      {riskLabel(selected?.risk as RiskLevel)}
+                    </DialogDescription>
                   </div>
-                )}
+                </div>
+                <button onClick={closeModal} className="haven-icon-btn h-8 w-8">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
 
-                {/* Execution */}
-                {bundle.state.items.length > 0 && (
-                  <div className="space-y-2">
-                    {bundle.isExecuting && (
-                      <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                        {statusLabel}
-                      </div>
-                    )}
+            {/* Scrollable Content */}
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4">
+              {/* Bundle Preview */}
+              {selected?.symbols?.length && bundle.state.phase === "idle" && (
+                <div className="haven-card-soft p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <PieChart className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Portfolio Allocation
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      Equal weight
+                    </span>
+                  </div>
 
-                    {bundle.state.items.map((item) => {
-                      const meta = findTokenBySymbol(item.symbol);
-                      const isConfirmed = item.status === "confirmed";
-                      const isFailed = item.status === "failed";
-                      const isActive = [
-                        "building",
-                        "signing",
-                        "sending",
-                        "confirming",
-                      ].includes(item.status);
-
+                  <div className="flex flex-wrap gap-2">
+                    {selected.symbols.map((s) => {
+                      const meta = findTokenBySymbol(s);
                       return (
                         <div
-                          key={item.symbol}
-                          className={[
-                            "flex items-center justify-between rounded-2xl border p-3 transition",
-                            isConfirmed
-                              ? "border-primary/25 bg-primary/10"
-                              : isFailed
-                                ? "border-destructive/25 bg-destructive/10"
-                                : isActive
-                                  ? "border-primary/20 bg-primary/5"
-                                  : "border-border/60 bg-card/30",
-                          ].join(" ")}
+                          key={s}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-background border border-border"
                         >
-                          <div className="flex items-center gap-3">
-                            <div className="relative h-8 w-8 overflow-hidden rounded-full border border-border/60 bg-card">
-                              <Image
-                                src={meta?.logo || "/placeholder.svg"}
-                                alt={item.symbol}
-                                fill
-                                className="object-cover"
-                              />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-foreground">
-                                {item.symbol}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {(item.amountUsdcUnits / 1_000_000).toFixed(2)}{" "}
-                                USDC
-                              </p>
-                            </div>
+                          <div className="relative h-5 w-5 overflow-hidden rounded-full">
+                            <Image
+                              src={meta?.logo || "/placeholder.svg"}
+                              alt={s}
+                              fill
+                              className="object-cover"
+                            />
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            {isConfirmed && (
-                              <CheckCircle2 className="h-5 w-5 text-primary" />
-                            )}
-                            {isFailed && (
-                              <XCircle className="h-5 w-5 text-destructive" />
-                            )}
-                            {isActive && (
-                              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                            )}
-                            {item.status === "pending" && (
-                              <div className="h-5 w-5 rounded-full border-2 border-border/60" />
-                            )}
-                          </div>
+                          <span className="text-xs font-medium text-foreground">
+                            {s}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {(100 / selected.symbols.length).toFixed(0)}%
+                          </span>
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              )}
 
-                    {bundle.hasFailed && !bundle.isExecuting && (
-                      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                        <div className="flex items-start gap-3">
-                          <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
-                          <div className="flex-1">
-                            <p className="text-sm text-amber-200">
-                              {bundle.failedCount} of{" "}
-                              {bundle.state.items.length} purchases failed
-                            </p>
-                            <button
-                              type="button"
-                              onClick={handleRetry}
-                              className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-amber-300 hover:text-amber-200"
-                            >
-                              <RefreshCw className="h-4 w-4" />
-                              Retry failed
-                            </button>
-                          </div>
+              {/* Amount Input */}
+              {bundle.state.phase === "idle" && (
+                <div className="haven-card-soft p-4 mb-4">
+                  <label className="haven-kicker block mb-3">
+                    Investment Amount
+                  </label>
+
+                  <div className="flex items-baseline gap-2 mb-4">
+                    <span className="text-lg font-medium text-muted-foreground">
+                      {displayCurrency}
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={amountDisplay}
+                      onChange={(e) =>
+                        setAmountDisplay(cleanNumberInput(e.target.value))
+                      }
+                      placeholder="0.00"
+                      className="
+                        flex-1 bg-transparent text-3xl font-semibold text-foreground 
+                        outline-none placeholder:text-muted-foreground/40 tabular-nums
+                      "
+                    />
+                  </div>
+
+                  {/* Quick Presets */}
+                  <div className="flex gap-2 mb-4">
+                    {presets.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setAmountDisplay(preset.toString())}
+                        className="
+                          flex-1 py-2 rounded-xl text-xs font-medium
+                          bg-secondary border border-border text-muted-foreground
+                          hover:bg-accent hover:text-foreground hover:border-primary/20
+                          transition-all duration-200
+                        "
+                      >
+                        ${preset}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAmountDisplay(availableBalance.toFixed(2))
+                      }
+                      className="haven-pill haven-pill-positive hover:bg-primary/15 transition-all duration-200"
+                    >
+                      Max
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">
+                      Available Balance
+                    </span>
+                    <span className="font-semibold text-foreground tabular-nums">
+                      {formatMoney(availableBalance, displayCurrency)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Distribution Preview */}
+              {bundle.state.phase === "idle" && perTokenDisplay > 0 && (
+                <div className="haven-card-soft p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="haven-kicker">You&apos;ll Receive</span>
+                    <span className="text-xs text-muted-foreground">
+                      ~{formatMoney(perTokenDisplay, displayCurrency)} each
+                    </span>
+                  </div>
+
+                  <div className="space-y-0">
+                    {(selected?.symbols ?? []).map((s) => (
+                      <AllocationRow
+                        key={s}
+                        symbol={s}
+                        percentage={100 / (selected?.symbols.length ?? 1)}
+                        amount={perTokenDisplay}
+                        currency={displayCurrency}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Execution Progress */}
+              {bundle.state.items.length > 0 && (
+                <div className="space-y-3">
+                  {bundle.isExecuting && (
+                    <div className="flex items-center justify-center gap-3 py-3 px-4 rounded-2xl bg-primary/10 border border-primary/20">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      <span className="text-sm text-primary font-medium">
+                        {statusLabel}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {bundle.state.items.map((item, i) => (
+                      <ExecutionStep
+                        key={item.symbol}
+                        item={item}
+                        isActive={
+                          bundle.isExecuting &&
+                          bundle.state.currentIndex === i &&
+                          [
+                            "building",
+                            "signing",
+                            "sending",
+                            "confirming",
+                          ].includes(item.status)
+                        }
+                      />
+                    ))}
+                  </div>
+
+                  {/* Retry Failed */}
+                  {bundle.hasFailed && !bundle.isExecuting && (
+                    <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 p-4">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                            {bundle.failedCount} of {bundle.state.items.length}{" "}
+                            purchases failed
+                          </p>
+                          <p className="text-xs text-amber-600/70 dark:text-amber-400/70 mt-1">
+                            You can retry the failed transactions below
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleRetry}
+                            className="
+                              mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl
+                              bg-amber-500/10 border border-amber-500/20
+                              text-sm font-medium text-amber-600 dark:text-amber-400
+                              hover:bg-amber-500/20 hover:border-amber-500/30
+                              transition-all duration-200
+                            "
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            Retry Failed
+                          </button>
                         </div>
                       </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {bundle.state.phase === "idle" && (
-                <p className="mt-4 text-center text-[11px] text-muted-foreground">
-                  Sequential execution • One fee for the entire bundle
-                </p>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
-            {/* Pinned footer */}
-            <DialogFooter className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
+            {/* Footer CTA */}
+            <DialogFooter className="shrink-0 border-t border-border bg-card px-5 py-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+              {bundle.state.phase === "idle" && (
+                <p className="text-xs text-muted-foreground text-center mb-3">
+                  Sequential execution • Network fees apply
+                </p>
+              )}
+
               <button
                 type="button"
                 onClick={bundle.isComplete ? closeAndRefresh : startPurchase}
                 disabled={(!canBuy && !bundle.isComplete) || bundle.isExecuting}
-                className={[
-                  "haven-btn-primary",
-                  (!canBuy && !bundle.isComplete) || bundle.isExecuting
-                    ? "opacity-60"
-                    : "",
-                ].join(" ")}
+                className={`
+                  haven-btn-primary
+                  ${
+                    bundle.isComplete
+                      ? "!bg-primary"
+                      : !canBuy || bundle.isExecuting
+                        ? "opacity-60 cursor-not-allowed"
+                        : ""
+                  }
+                `}
               >
                 {bundle.isExecuting ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="h-5 w-5 animate-spin" />
+                  <span className="flex items-center justify-center gap-2 text-black">
+                    <Loader2 className="h-4 w-4 animate-spin" />
                     {statusLabel}
                   </span>
                 ) : bundle.isComplete ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <CheckCircle2 className="h-5 w-5" />
-                    Done ({bundle.completedCount}/{bundle.state.items.length})
+                  <span className="flex items-center justify-center gap-2 text-black">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Complete ({bundle.completedCount}/
+                    {bundle.state.items.length})
                   </span>
                 ) : (
-                  <span className="flex items-center justify-center gap-2">
-                    Purchase bundle
-                    <ArrowRight className="h-5 w-5" />
+                  <span className="flex items-center justify-center gap-2 text-black">
+                    Purchase Bundle
+                    <ArrowRight className="h-4 w-4" />
                   </span>
                 )}
               </button>

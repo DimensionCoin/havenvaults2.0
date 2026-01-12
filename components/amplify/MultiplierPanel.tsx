@@ -1,3 +1,4 @@
+// components/amplify/MultiplierPanel.tsx
 "use client";
 
 import React, {
@@ -74,12 +75,7 @@ const STAGE_CONFIG: Record<
     icon: "spinner" | "wallet" | "success" | "error";
   }
 > = {
-  idle: {
-    title: "",
-    subtitle: "",
-    progress: 0,
-    icon: "spinner",
-  },
+  idle: { title: "", subtitle: "", progress: 0, icon: "spinner" },
   building: {
     title: "Preparing trade",
     subtitle: "Building transaction...",
@@ -281,8 +277,40 @@ export default function MultiplierPanel({
     [pDisplay, lev]
   );
 
+  // ✅ Minimum buy-in requirement: $10 USD (converted to user's currency)
+  const MIN_BUYIN_USD = 10;
+
+  const minBuyInLocal = useMemo(() => (fx > 0 ? MIN_BUYIN_USD * fx : 0), [fx]);
+
+  const meetsMinBuyIn = useMemo(
+    () => (fx > 0 ? marginUsd >= MIN_BUYIN_USD : false),
+    [fx, marginUsd]
+  );
+
+  // ✅ NEW: Debounced "show minimum error" (wait 1s after user stops typing)
+  const [showMinError, setShowMinError] = useState(false);
+
+  useEffect(() => {
+    // reset immediately if input cleared or fx missing
+    if (!buyIn || buyInNum <= 0 || fx <= 0) {
+      setShowMinError(false);
+      return;
+    }
+
+    const t = window.setTimeout(() => {
+      // only show if they're still under minimum after 1s of no typing
+      setShowMinError(!meetsMinBuyIn);
+    }, 1000);
+
+    return () => window.clearTimeout(t);
+  }, [buyIn, buyInNum, fx, meetsMinBuyIn]);
+
   const canSubmit = useMemo(() => {
     if (!ownerReady || effectiveBalanceLoading) return false;
+
+    // must be at least $10 USD worth (in user's currency)
+    if (!meetsMinBuyIn) return false;
+
     if (buyInNum <= 0 || buyInNum > depBal) return false;
     if (marginUsd > depBalUsd) return false;
     if (pDisplay <= 0 || fx <= 0 || marginUsd <= 0) return false;
@@ -291,6 +319,7 @@ export default function MultiplierPanel({
   }, [
     ownerReady,
     effectiveBalanceLoading,
+    meetsMinBuyIn,
     buyInNum,
     depBal,
     marginUsd,
@@ -300,13 +329,18 @@ export default function MultiplierPanel({
     fxLooksInverted,
   ]);
 
+  // button label uses the user's input amount (formatted)
+  const buyInLabel = useMemo(() => {
+    const n = safeNum(buyIn, 0);
+    return formatMoney(n > 0 ? n : 0, currencySafe);
+  }, [buyIn, currencySafe]);
+
   /* ───────── Sync modal with hook status ───────── */
 
   useEffect(() => {
     // Only sync if we're in processing mode and we started this trade
     if (!modal || modal.kind !== "processing" || !tradeStartedRef.current)
       return;
-    // Hook handles its own status, we just observe it
   }, [openHook.status, modal]);
 
   // Get current stage config
@@ -360,8 +394,6 @@ export default function MultiplierPanel({
       onPositionsChange([pos, ...safePositions]);
       setBuyIn("");
 
-      // ✅ Immediately trigger balance refresh on success
-      // This updates USDC balance (reduced by margin) and positions list
       refreshBalance?.().catch((e) => {
         console.warn("[MultiplierPanel] Balance refresh failed:", e);
       });
@@ -458,6 +490,14 @@ export default function MultiplierPanel({
             </div>
           )}
 
+          {/* ✅ Minimum buy-in validation (debounced 1s) */}
+          {fx > 0 && buyInNum > 0 && showMinError && (
+            <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Minimum buy-in is {formatMoney(minBuyInLocal, currencySafe)} (≈
+              $10 USD).
+            </div>
+          )}
+
           {!effectiveBalanceLoading && buyInNum > depBal && buyInNum > 0 && (
             <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               Buy-in exceeds available balance.
@@ -546,21 +586,21 @@ export default function MultiplierPanel({
           disabled={!canSubmit || busy}
           onClick={onOpen}
           className={[
-            "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border",
+            "mt-4 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2 border bg-primary",
             canSubmit && !busy
               ? "haven-primary-btn"
               : "bg-muted/30 border-border text-muted-foreground cursor-not-allowed",
           ].join(" ")}
         >
           {busy ? (
-            <>
+            <span className="text-black inline-flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" />
               Opening position...
-            </>
+            </span>
           ) : (
-            <>
-              Open Long {lev}x <ArrowUpRight className="h-4 w-4" />
-            </>
+            <span className="text-black">
+              {lev}x Multiply {buyInLabel}
+            </span>
           )}
         </button>
       </div>

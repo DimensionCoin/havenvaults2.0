@@ -92,7 +92,8 @@ export default function BottomBar() {
                     )}
                   </div>
 
-                  {!center && <span className={labelCls}>{label}</span>}
+                  {/* ✅ show Home under the center Haven logo too */}
+                  <span className={labelCls}>{label}</span>
                 </Link>
               );
             })}

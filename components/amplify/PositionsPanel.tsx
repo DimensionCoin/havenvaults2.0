@@ -18,7 +18,7 @@ import {
   Wallet,
 } from "lucide-react";
 
-import { formatMoney, safeNum, safeStr, safeDateLabel } from "./utils";
+import { formatMoney, safeNum, safeStr } from "./utils";
 import type { BoosterRow } from "@/hooks/useBoosterPositions";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
 import {
@@ -56,7 +56,7 @@ type ModalState = {
 type BoosterRowView = {
   id?: string | null;
   symbol?: string | null;
-  isLong?: boolean | null;
+  isLong?: boolean | null; // kept for safety, but UI assumes long only
   createdAt?: string | number | Date | null;
 
   collateralUsd?: number | string | null;
@@ -156,8 +156,6 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 function asBoosterView(row: BoosterRow | null | undefined): BoosterRowView {
-  // BoosterRow is imported but may be wide; we safely read properties
-  // without using `any`.
   if (!row || !isRecord(row)) return {};
   const r = row as Record<string, unknown>;
 
@@ -193,6 +191,44 @@ function asBoosterView(row: BoosterRow | null | undefined): BoosterRowView {
         ? (r.sizeTokens as number | string)
         : null,
   };
+}
+
+function toMs(d: string | number | Date | null | undefined) {
+  if (!d) return null;
+  if (d instanceof Date) return d.getTime();
+  if (typeof d === "number") {
+    // heuristics: seconds vs ms
+    return d < 1_000_000_000_000 ? d * 1000 : d;
+  }
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? t : null;
+}
+
+// ✅ “2h / 3d / 4mo” style label
+function ageLabel(createdAt: string | number | Date | null | undefined) {
+  const ms = toMs(createdAt);
+  if (!ms) return "—";
+  const diff = Date.now() - ms;
+  if (!Number.isFinite(diff) || diff < 0) return "—";
+
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const month = 30 * day;
+  const year = 365 * day;
+
+  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  if (diff < month) return `${Math.floor(diff / day)}d`;
+  if (diff < year) return `${Math.floor(diff / month)}mo`;
+  return `${Math.floor(diff / year)}y`;
+}
+
+function formatTokenQty(n: number) {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1) return n.toFixed(3);
+  if (n >= 0.1) return n.toFixed(4);
+  return n.toFixed(6);
 }
 
 /* ───────── SUB COMPONENTS ───────── */
@@ -298,7 +334,6 @@ export default function PositionsPanel({
     [selectedMaxUsd, toLocal]
   );
 
-  // Get current stage config for processing modal
   const currentStage = modal?.kind === "processing" ? closeHook.status : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
 
@@ -317,7 +352,6 @@ export default function PositionsPanel({
   );
 
   const closeModal = useCallback(() => {
-    // Can't close during processing
     if (modal?.kind === "processing") return;
 
     const wasSuccess = modal?.kind === "success";
@@ -328,10 +362,7 @@ export default function PositionsPanel({
     setAmountLocal("");
     closeStartedRef.current = false;
 
-    // ✅ If successful, call parent callback (balance already refreshed)
-    if (wasSuccess) {
-      onClosed?.();
-    }
+    if (wasSuccess) onClosed?.();
   }, [modal, onClosed]);
 
   const setPercent = useCallback(
@@ -413,6 +444,7 @@ export default function PositionsPanel({
           : "SOL"
       ) as "BTC" | "ETH" | "SOL";
 
+      // ✅ UI assumes long-only, but keep backend side correct just in case
       const side: "long" | "short" = selectedView.isLong ? "long" : "short";
 
       let result: Awaited<ReturnType<typeof closeHook.run>>;
@@ -444,7 +476,6 @@ export default function PositionsPanel({
         });
       }
 
-      // ✅ Immediately trigger balance refresh on success
       refreshBalance().catch((e: unknown) => {
         console.warn("[PositionsPanel] Balance refresh failed:", e);
       });
@@ -474,12 +505,9 @@ export default function PositionsPanel({
     selectedView.isLong,
   ]);
 
-  /* ───────── Sync with hook status (for processing animation) ───────── */
-
   useEffect(() => {
     if (!modal || modal.kind !== "processing" || !closeStartedRef.current)
       return;
-    // stageConfig is derived from closeHook.status; React will re-render.
   }, [closeHook.status, modal]);
 
   /* ───────── Render ───────── */
@@ -509,7 +537,7 @@ export default function PositionsPanel({
             rows.map((p, idx) => {
               const view = asBoosterView(p);
 
-              const symbol = safeStr(view.symbol, "SOL");
+              const symbol = safeStr(view.symbol, "SOL").toUpperCase();
               const meta = findTokenBySymbol(symbol);
               const id = safeStr(view.id, `${symbol}-${idx}`);
 
@@ -519,9 +547,13 @@ export default function PositionsPanel({
               const liqUsd = safeNum(view.liqUsd, 0);
               const sizeTokens = safeNum(view.sizeTokens, 0);
 
-              const buyInLocal = toLocal(collateralUsd);
+              const collateralLocal = toLocal(collateralUsd);
               const positionValueLocal = toLocal(spotValueUsd);
               const pnlLocal = toLocal(pnlUsd);
+
+              // ✅ Take home = collateral + P&L (in USD then FX)
+              const takeHomeUsd = collateralUsd + pnlUsd;
+              const takeHomeLocal = toLocal(takeHomeUsd);
 
               const pnlClass =
                 pnlLocal > 0
@@ -530,43 +562,55 @@ export default function PositionsPanel({
                     ? "text-destructive"
                     : "text-muted-foreground";
 
+              // ✅ “(0.304 SOL $60.09)” small subline
+              const qtyStr = formatTokenQty(sizeTokens);
+              const inlineSub = `(${qtyStr} ${symbol} ${formatMoney(
+                positionValueLocal,
+                displayCurrency
+              )})`;
+
               return (
                 <div key={id} className="rounded-2xl border bg-card/40 p-3">
+                  {/* Top row: logo + symbol + inline small info, age on right */}
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-start gap-2">
+                    <div className="flex min-w-0 items-start gap-2">
                       <Image
                         src={meta?.logo || "/placeholder.svg"}
                         alt={`${symbol} logo`}
                         width={22}
                         height={22}
-                        className="h-5 w-5 rounded-full border border-border bg-card"
+                        className="h-5 w-5 rounded-full border border-border bg-card shrink-0"
                       />
-                      <div>
-                        <div className="text-sm font-semibold text-foreground">
-                          {symbol} • {view.isLong ? "LONG" : "SHORT"}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {sizeTokens.toFixed(6)} {symbol}
+                      <div className="min-w-0">
+                        <div className="flex items-baseline gap-2 min-w-0">
+                          <div className="text-sm font-semibold text-foreground truncate">
+                            {symbol}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            {inlineSub}
+                          </div>
                         </div>
                       </div>
                     </div>
-                    <div className="whitespace-nowrap text-[11px] text-muted-foreground">
-                      {safeDateLabel(view.createdAt as unknown)}
+
+                    <div className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
+                      {ageLabel(view.createdAt)}
                     </div>
                   </div>
 
+                  {/* Metrics: Collateral / Take home / P&L / Liquidation */}
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                     <div className="text-muted-foreground">
-                      Buy-in
+                      Collateral
                       <div className="font-semibold text-foreground">
-                        {formatMoney(buyInLocal, displayCurrency)}
+                        {formatMoney(collateralLocal, displayCurrency)}
                       </div>
                     </div>
 
                     <div className="text-muted-foreground">
-                      Position value
+                      Take home
                       <div className="font-semibold text-foreground">
-                        {formatMoney(positionValueLocal, displayCurrency)}
+                        {formatMoney(takeHomeLocal, displayCurrency)}
                       </div>
                     </div>
 
@@ -648,8 +692,7 @@ export default function PositionsPanel({
                 />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-foreground">
-                    {safeStr(selectedView.symbol)} •{" "}
-                    {selectedView.isLong ? "LONG" : "SHORT"}
+                    {safeStr(selectedView.symbol)}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Max close:{" "}
@@ -745,11 +788,10 @@ export default function PositionsPanel({
                     {(() => {
                       const v = validatePartial();
                       if (!v.ok) return "Enter an amount above 0.";
-                      return `Will close ${
-                        v.closePercentage
-                      }% (~${formatMoney(v.finalLocal, displayCurrency)} / ${v.finalUsd.toFixed(
-                        2
-                      )} USD)`;
+                      return `Will close ${v.closePercentage}% (~${formatMoney(
+                        v.finalLocal,
+                        displayCurrency
+                      )})`;
                     })()}
                   </div>
                 </div>
@@ -797,7 +839,6 @@ export default function PositionsPanel({
             className="w-full max-w-sm rounded-3xl border bg-card p-5 shadow-fintech-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Close button - only for success/error */}
             {modal.kind !== "processing" && (
               <div className="mb-2 flex justify-end">
                 <button
@@ -809,7 +850,6 @@ export default function PositionsPanel({
               </div>
             )}
 
-            {/* Content */}
             <div className="flex flex-col items-center text-center pt-2">
               {modal.kind === "processing" && stageConfig ? (
                 <>
@@ -853,7 +893,6 @@ export default function PositionsPanel({
               )}
             </div>
 
-            {/* Error message */}
             {modal.kind === "error" && modal.errorMessage && (
               <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3">
                 <div className="text-xs text-destructive text-center">
@@ -862,7 +901,6 @@ export default function PositionsPanel({
               </div>
             )}
 
-            {/* Warnings */}
             {modal.kind === "success" && modal.warnings?.length ? (
               <div className="mt-4 rounded-2xl border border-primary/25 bg-primary/10 p-3">
                 <div className="text-xs text-foreground/80 text-center">
@@ -871,7 +909,6 @@ export default function PositionsPanel({
               </div>
             ) : null}
 
-            {/* Transaction links */}
             {modal.kind === "success" && (modal.closeSig || modal.sweepSig) && (
               <div className="mt-5 space-y-2">
                 {modal.closeSig && (
@@ -899,7 +936,6 @@ export default function PositionsPanel({
               </div>
             )}
 
-            {/* Action button */}
             {modal.kind !== "processing" && (
               <button
                 onClick={closeModal}
@@ -914,7 +950,6 @@ export default function PositionsPanel({
               </button>
             )}
 
-            {/* Processing footer */}
             {modal.kind === "processing" && (
               <div className="mt-6 text-center text-xs text-muted-foreground">
                 Please don&apos;t close this window
