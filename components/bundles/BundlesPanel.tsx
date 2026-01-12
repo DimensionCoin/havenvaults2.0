@@ -641,9 +641,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     </DialogDescription>
                   </div>
                 </div>
-                <button onClick={closeModal} className="haven-icon-btn h-8 w-8">
-                  <X className="h-4 w-4" />
-                </button>
+                
               </div>
             </div>
 

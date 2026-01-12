@@ -23,7 +23,8 @@ const HELIUS_NETWORK = (process.env.HELIUS_NETWORK || "mainnet-beta") as
    TYPES
 ========================= */
 
-export type ActivityKind = "transfer" | "swap";
+// ✅ Added "perp" kind for Jupiter Perpetuals
+export type ActivityKind = "transfer" | "swap" | "perp";
 
 export type ActivityItem = {
   signature: string;
@@ -97,6 +98,50 @@ const toStr = (v: unknown) => (typeof v === "string" ? v : "");
 
 const normAddr = (v: unknown) => toStr(v).trim();
 const normMint = (v: unknown) => toStr(v).trim().toLowerCase();
+
+/* =========================
+   ✅ Jupiter Perps detection helpers
+========================= */
+
+const JUP_PERPS_PROGRAM_ID = "PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu";
+
+type JupPerpsAction =
+  | "increase"
+  | "decrease"
+  | "close"
+  | "liquidate"
+  | "unknown";
+
+function getLogMessages(tx: Record<string, unknown>): string[] {
+  const top = Array.isArray(tx.logMessages)
+    ? (tx.logMessages as unknown[])
+    : [];
+  const meta =
+    tx.meta && typeof tx.meta === "object"
+      ? (tx.meta as Record<string, unknown>)
+      : null;
+  const metaLogs = Array.isArray(meta?.logMessages)
+    ? (meta!.logMessages as unknown[])
+    : [];
+
+  const out: string[] = [];
+  for (const l of [...top, ...metaLogs]) {
+    const s = toStr(l);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
+function detectJupPerpsAction(tx: Record<string, unknown>): JupPerpsAction {
+  const logs = getLogMessages(tx).join(" | ");
+  if (!logs) return "unknown";
+
+  if (/Instruction:\s*IncreasePosition/i.test(logs)) return "increase";
+  if (/Instruction:\s*DecreasePosition/i.test(logs)) return "decrease";
+  if (/Instruction:\s*ClosePosition/i.test(logs)) return "close";
+  if (/liquidat/i.test(logs)) return "liquidate";
+  return "unknown";
+}
 
 function toUiSmart(raw: unknown, decimals: number) {
   if (raw == null) return 0;
@@ -197,7 +242,7 @@ function extractTokenTransfers(
   const d = Array.isArray(ev.splTransfers) ? ev.splTransfers : [];
   results.push(...b, ...c, ...d);
 
-  // 3) ✅ NEW: Parse accountData[].tokenBalanceChanges[] for transfers NOT in tokenTransfers
+  // 3) Parse accountData[].tokenBalanceChanges[] for transfers NOT in tokenTransfers
   // This catches Token-2022 transfers that Helius doesn't include in tokenTransfers
   const accountData = tx.accountData;
   if (Array.isArray(accountData)) {
@@ -373,7 +418,7 @@ function extractTokenTransfers(
 }
 
 /**
- * ✅ Build a map of token account address -> owner wallet address
+ * Build a map of token account address -> owner wallet address
  * Handles BOTH:
  * - Helius Enhanced format (accountData[].tokenBalanceChanges[])
  * - RPC format (meta.preTokenBalances/postTokenBalances)
@@ -584,7 +629,7 @@ function normalizeToActivity(
   const involvedAccounts = extractAccountKeys(tx);
   const transfers = extractTokenTransfers(tx);
 
-  // ✅ Build token account -> owner map for resolving ownership
+  // Build token account -> owner map for resolving ownership
   const tokenAcctOwnerMap = buildTokenAccountOwnerMap(tx);
 
   // Helper to resolve an address to its owner (if it's a token account)
@@ -592,80 +637,19 @@ function normalizeToActivity(
     return tokenAcctOwnerMap.get(addr) || addr;
   };
 
-  // ✅ DEBUG: Check if this is a Jupiter swap (has JUP program)
-  const isJupiterTx = involvedAccounts.some((a) => a.startsWith("JUP"));
-  const shortSig = sig.slice(0, 12);
-
-  if (isJupiterTx && transfers.length > 0) {
-    console.log(`[DEBUG:${shortSig}] Jupiter TX detected`);
-    console.log(`[DEBUG:${shortSig}] owner=${owner}`);
-    console.log(
-      `[DEBUG:${shortSig}] tokenAcctOwnerMap size=${tokenAcctOwnerMap.size}`
+  // ✅ Detect Jupiter Perps EARLY - before any other parsing
+  const logs = getLogMessages(tx);
+  const isJupPerpsTx =
+    involvedAccounts.includes(JUP_PERPS_PROGRAM_ID) ||
+    logs.some((l) =>
+      /Jupiter Perps Program|IncreasePosition|DecreasePosition|ClosePosition/i.test(
+        l
+      )
     );
-    for (const [acc, own] of tokenAcctOwnerMap.entries()) {
-      if (own === owner) {
-        console.log(
-          `[DEBUG:${shortSig}]   owned: ${acc.slice(0, 8)}... -> ${own.slice(0, 8)}...`
-        );
-      }
-    }
-    console.log(`[DEBUG:${shortSig}] transfers=${transfers.length}`);
 
-    // ✅ DEBUG: Check what keys exist in the raw tx
-    if (transfers.length <= 2) {
-      console.log(`[DEBUG:${shortSig}] TX KEYS: ${Object.keys(tx).join(", ")}`);
-      const instructions = Array.isArray(tx.instructions)
-        ? tx.instructions
-        : null;
-      if (instructions) {
-        console.log(
-          `[DEBUG:${shortSig}] has instructions array, length=${instructions.length}`
-        );
-      }
-      if (tx.innerInstructions) {
-        console.log(`[DEBUG:${shortSig}] has innerInstructions at top level`);
-      }
-      const meta =
-        tx.meta && typeof tx.meta === "object"
-          ? (tx.meta as Record<string, unknown>)
-          : null;
-      if (meta?.innerInstructions) {
-        console.log(`[DEBUG:${shortSig}] has meta.innerInstructions`);
-      }
-
-      // ✅ Check accountData for token balance changes
-      if (tx.accountData && Array.isArray(tx.accountData)) {
-        console.log(
-          `[DEBUG:${shortSig}] accountData length=${tx.accountData.length}`
-        );
-        for (const ad of tx.accountData) {
-          const adRec =
-            ad && typeof ad === "object"
-              ? (ad as Record<string, unknown>)
-              : null;
-          const tokenBalanceChanges = adRec?.tokenBalanceChanges;
-          if (
-            Array.isArray(tokenBalanceChanges) &&
-            tokenBalanceChanges.length > 0
-          ) {
-            const account = adRec?.account;
-            const accountStr = typeof account === "string" ? account : "";
-            console.log(
-              `[DEBUG:${shortSig}] accountData entry: account=${accountStr.slice(0, 8)} tokenBalanceChanges=${JSON.stringify(tokenBalanceChanges)}`
-            );
-          }
-        }
-      }
-
-      // ✅ Check tokenTransfers content
-      if (tx.tokenTransfers && Array.isArray(tx.tokenTransfers)) {
-        console.log(
-          `[DEBUG:${shortSig}] tokenTransfers raw:`,
-          JSON.stringify(tx.tokenTransfers, null, 2)
-        );
-      }
-    }
-  }
+  const jupPerpsAction: JupPerpsAction = isJupPerpsTx
+    ? detectJupPerpsAction(tx)
+    : "unknown";
 
   type Xfer = { mint: string; from: string; to: string; ui: number };
   const parsed: Xfer[] = [];
@@ -702,26 +686,12 @@ function normalizeToActivity(
       normAddr(rec.to) ||
       normAddr(rec.destination);
 
-    // ✅ Resolve token accounts to their owners
+    // Resolve token accounts to their owners
     const from = resolveOwner(fromRaw);
     const to = resolveOwner(toRaw);
 
     const ui = readUiAmount(rec, mintNorm);
     if (!Number.isFinite(ui) || ui <= 0) continue;
-
-    // ✅ DEBUG for Jupiter txs
-    if (isJupiterTx) {
-      const isUSDC = mintNorm === USDC_MINT;
-      console.log(
-        `[DEBUG:${shortSig}] transfer: mint=${mintNorm.slice(0, 8)}${isUSDC ? "(USDC)" : ""} ui=${ui.toFixed(6)}`
-      );
-      console.log(
-        `[DEBUG:${shortSig}]   fromRaw=${fromRaw.slice(0, 8)} -> resolved=${from.slice(0, 8)} isOwner=${from === owner}`
-      );
-      console.log(
-        `[DEBUG:${shortSig}]   toRaw=${toRaw.slice(0, 8)} -> resolved=${to.slice(0, 8)} isOwner=${to === owner}`
-      );
-    }
 
     parsed.push({ mint: mintNorm, from, to, ui });
 
@@ -738,6 +708,37 @@ function normalizeToActivity(
 
   const usdcDelta = usdcIn - usdcOut;
 
+  // ✅ Handle Jupiter Perps transactions FIRST
+  if (isJupPerpsTx) {
+    const direction: "in" | "out" = usdcDelta > 0 ? "in" : "out";
+    const amountUiAbs = Math.abs(usdcDelta);
+
+    const item: ActivityItem = {
+      signature: sig,
+      blockTime,
+      direction,
+      amountUi: amountUiAbs,
+      counterparty: null,
+      feeLamports,
+      kind: "perp",
+      source: "jupiter-perps",
+      involvedAccounts,
+      counterpartyLabel:
+        jupPerpsAction === "increase"
+          ? "Add collateral"
+          : jupPerpsAction === "decrease"
+            ? "Remove collateral"
+            : jupPerpsAction === "close"
+              ? "Close position"
+              : jupPerpsAction === "liquidate"
+                ? "Liquidation"
+                : "Position update",
+    };
+
+    return item;
+  }
+
+  // Handle non-perp transactions (existing logic)
   if (!usdcDelta) {
     let bestIn: Xfer | null = null;
     let bestOut: Xfer | null = null;
@@ -799,17 +800,6 @@ function normalizeToActivity(
       swapBoughtMint = best.mint;
       swapBoughtAmountUi = best.ui;
     }
-
-    // ✅ DEBUG
-    if (isJupiterTx) {
-      console.log(
-        `[DEBUG:${shortSig}] direction=out, usdcOut=${usdcOut}, looking for token IN where to===owner`
-      );
-      console.log(
-        `[DEBUG:${shortSig}] best token in: ${best ? `${best.mint.slice(0, 8)} ui=${best.ui}` : "NONE FOUND"}`
-      );
-      console.log(`[DEBUG:${shortSig}] final kind=${kind}`);
-    }
   } else {
     let best: Xfer | null = null;
     for (const x of parsed) {
@@ -859,84 +849,82 @@ function normalizeToActivity(
    PUBLIC EXPORT
 ========================= */
 
- export async function getUsdcActivityForOwner(
-   owner58: string,
-   opts?: { limit?: number; before?: string }
- ): Promise<ActivityItem[]> {
-   const limit = Math.min(Math.max(opts?.limit ?? 30, 1), 100);
+export async function getUsdcActivityForOwner(
+  owner58: string,
+  opts?: { limit?: number; before?: string }
+): Promise<ActivityItem[]> {
+  const limit = Math.min(Math.max(opts?.limit ?? 30, 1), 100);
 
-   // ✅ We will page Helius in batches because your normalizeToActivity filters a lot.
-   // Keep cursor local so the external API route doesn't need to change yet.
-   let before = opts?.before;
+  // We will page Helius in batches because your normalizeToActivity filters a lot.
+  // Keep cursor local so the external API route doesn't need to change yet.
+  let before = opts?.before;
 
-   // How many RAW pages we will try (1 initial + 3 extra = 4 total)
-   const MAX_PAGES = 4;
+  // How many RAW pages we will try (1 initial + 3 extra = 4 total)
+  const MAX_PAGES = 4;
 
-   // Fetch bigger raw pages to compensate for filtering.
-   const RAW_PAGE_LIMIT = 100;
+  // Fetch bigger raw pages to compensate for filtering.
+  const RAW_PAGE_LIMIT = 100;
 
-   const cacheKey = `${owner58}|${before || ""}|${limit}|${HELIUS_NETWORK}|paged4`;
-   const cached = CACHE.get(cacheKey);
-   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.items;
+  const cacheKey = `${owner58}|${before || ""}|${limit}|${HELIUS_NETWORK}|paged4`;
+  const cached = CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.items;
 
-   const all: ActivityItem[] = [];
+  const all: ActivityItem[] = [];
 
-   for (let page = 0; page < MAX_PAGES; page++) {
-     const base = `${HELIUS_BASE_URL}/v0/addresses/${encodeURIComponent(
-       owner58
-     )}/transactions`;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const base = `${HELIUS_BASE_URL}/v0/addresses/${encodeURIComponent(
+      owner58
+    )}/transactions`;
 
-     const qs = new URLSearchParams({
-       "api-key": HELIUS_API_KEY!,
-       network: HELIUS_NETWORK,
-       limit: String(RAW_PAGE_LIMIT),
-     });
+    const qs = new URLSearchParams({
+      "api-key": HELIUS_API_KEY!,
+      network: HELIUS_NETWORK,
+      limit: String(RAW_PAGE_LIMIT),
+    });
 
-     if (before) qs.set("before", before);
+    if (before) qs.set("before", before);
 
-     const url = `${base}?${qs.toString()}`;
+    const url = `${base}?${qs.toString()}`;
 
-     const raw = await withBackoff(async () => {
-       const r = await fetch(url, { method: "GET", next: { revalidate: 0 } });
-       if (!r.ok) {
-         const text = await r.text().catch(() => "");
-         throw new Error(`Helius ${r.status}: ${text || r.statusText}`);
-       }
-       const j = (await r.json()) as unknown;
-       return Array.isArray(j) ? (j as unknown[]) : [];
-     });
+    const raw = await withBackoff(async () => {
+      const r = await fetch(url, { method: "GET", next: { revalidate: 0 } });
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`Helius ${r.status}: ${text || r.statusText}`);
+      }
+      const j = (await r.json()) as unknown;
+      return Array.isArray(j) ? (j as unknown[]) : [];
+    });
 
-     // No more history
-     if (!raw.length) break;
+    // No more history
+    if (!raw.length) break;
 
-     // ✅ Advance the cursor using the LAST RAW tx signature (not filtered items)
-     const last = raw[raw.length - 1] as Record<string, unknown>;
+    // Advance the cursor using the LAST RAW tx signature (not filtered items)
+    const last = raw[raw.length - 1] as Record<string, unknown>;
     const lastTx =
       last.transaction && typeof last.transaction === "object"
         ? (last.transaction as Record<string, unknown>)
         : null;
     const lastSig =
       toStr(last.signature) ||
-      (Array.isArray(lastTx?.signatures)
-        ? toStr(lastTx.signatures[0])
-        : "");
+      (Array.isArray(lastTx?.signatures) ? toStr(lastTx.signatures[0]) : "");
 
-     before = lastSig || before;
+    before = lastSig || before;
 
-     // Normalize + collect
-     for (const tx of raw) {
-       const row = normalizeToActivity(owner58, tx);
-       if (row) all.push(row);
-       if (all.length >= limit) break;
-     }
+    // Normalize + collect
+    for (const tx of raw) {
+      const row = normalizeToActivity(owner58, tx);
+      if (row) all.push(row);
+      if (all.length >= limit) break;
+    }
 
-     if (all.length >= limit) break;
+    if (all.length >= limit) break;
 
-     // If we couldn't extract a cursor, stop to avoid looping forever
-     if (!lastSig) break;
-   }
+    // If we couldn't extract a cursor, stop to avoid looping forever
+    if (!lastSig) break;
+  }
 
-   const items = all.slice(0, limit);
-   CACHE.set(cacheKey, { ts: Date.now(), items });
-   return items;
- }
+  const items = all.slice(0, limit);
+  CACHE.set(cacheKey, { ts: Date.now(), items });
+  return items;
+}

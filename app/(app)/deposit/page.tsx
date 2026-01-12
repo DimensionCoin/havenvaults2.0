@@ -2,7 +2,13 @@
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, RefreshCw, PiggyBank, User } from "lucide-react";
+import {
+  ArrowLeft,
+  RefreshCw,
+  PiggyBank,
+  User,
+  TrendingUp,
+} from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -40,12 +46,13 @@ const dicebearAvatar = (addr: string) =>
 
 type DrawerMode = "deposit" | "withdraw" | null;
 
+// ✅ Added "perp" kind for Jupiter Perpetuals
 type TxRow = {
   signature: string;
   blockTime: number | null;
   status: "success" | "failed";
 
-  kind?: "transfer" | "swap";
+  kind?: "transfer" | "swap" | "perp";
   direction?: "in" | "out" | "neutral";
 
   // ✅ "buy" = spent USDC for token, "sell" = sold token for USDC
@@ -83,7 +90,7 @@ const shortAddress = (addr?: string | null) => {
   return `${a.slice(0, 4)}…${a.slice(-4)}`;
 };
 
-// ✅ Friendlier “Robinhood-style” timestamp
+// ✅ Friendlier "Robinhood-style" timestamp
 const formatDayTime = (unixSeconds?: number | null) => {
   if (!unixSeconds) return "—";
   const d = new Date(unixSeconds * 1000);
@@ -136,7 +143,7 @@ function AssetIcon({ logo, alt }: { logo?: string | null; alt: string }) {
   );
 }
 
-// ✅ Generic user icon for transfers (keeps it “normie”)
+// ✅ Generic user icon for transfers (keeps it "normie")
 function UserIconAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
@@ -150,6 +157,15 @@ function SavingsAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
       <PiggyBank className="h-4 w-4 text-foreground/80" />
+    </span>
+  );
+}
+
+// ✅ Perp position avatar (chart icon)
+function PerpAvatar() {
+  return (
+    <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
+      <TrendingUp className="h-4 w-4 text-foreground/80" />
     </span>
   );
 }
@@ -321,12 +337,17 @@ export default function DepositAccountPage() {
     return txs.filter((t) => t.kind === "transfer" && (t.amountUsdc ?? 0) > 0);
   }, [txs]);
 
-  // combined activity
+  // ✅ perps only (filter out $0 position updates)
+  const perps = useMemo(() => {
+    return txs.filter((t) => t.kind === "perp" && (t.amountUsdc ?? 0) > 0);
+  }, [txs]);
+
+  // combined activity (includes perps now)
   const activity = useMemo(() => {
-    const rows = [...swaps, ...transfers];
+    const rows = [...swaps, ...transfers, ...perps];
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return rows.slice(0, 25);
-  }, [swaps, transfers]);
+  }, [swaps, transfers, perps]);
 
   // Balance shown raw (NO FX)
   const balanceDisplay = useMemo(() => {
@@ -463,6 +484,7 @@ export default function DepositAccountPage() {
               <div className="space-y-2">
                 {activity.map((tx) => {
                   const isSwap = tx.kind === "swap";
+                  const isPerp = tx.kind === "perp";
                   const isBuy = tx.swapDirection === "buy";
                   const isSell = tx.swapDirection === "sell";
 
@@ -482,14 +504,15 @@ export default function DepositAccountPage() {
                   const boughtMint = tx.swapBoughtMint;
                   const boughtAmount = tx.swapBoughtAmountUi;
 
-                  // For USDC swaps, pick the “asset” mint for title/meta
+                  // For USDC swaps, pick the "asset" mint for title/meta
                   const tokenMint = isBuy ? boughtMint : soldMint;
                   const tokenAmount = isBuy ? boughtAmount : soldAmount;
 
                   const tokenMeta = isSwap ? resolveMeta(tokenMint) : null;
 
-                  // transfers
-                  const party = !isSwap ? resolveTransferParty(tx) : null;
+                  // transfers (not swaps, not perps)
+                  const party =
+                    !isSwap && !isPerp ? resolveTransferParty(tx) : null;
                   const isSavings = !!party?.isFlexSavings;
 
                   // Names/meta
@@ -507,42 +530,53 @@ export default function DepositAccountPage() {
                   // FX for amounts shown on the right (so it matches their display currency)
                   const localAbs = (tx.amountUsdc ?? 0) * rate;
 
-                  const title = isSwap
-                    ? isTokenToToken
-                      ? `Swap ${soldName} → ${boughtName}`
-                      : isSell
-                        ? `Sold ${tokenName}`
-                        : `Bought ${tokenName}`
-                    : isSavings
-                      ? tx.direction === "out"
-                        ? "Savings deposit"
-                        : "Savings withdrawal"
-                      : tx.direction === "in"
-                        ? "Received money"
-                        : "Sent money";
+                  // ✅ Updated title logic to handle perps
+                  const title = isPerp
+                    ? tx.counterpartyLabel || "Perp position"
+                    : isSwap
+                      ? isTokenToToken
+                        ? `Swap ${soldName} → ${boughtName}`
+                        : isSell
+                          ? `Sold ${tokenName}`
+                          : `Bought ${tokenName}`
+                      : isSavings
+                        ? tx.direction === "out"
+                          ? "Savings deposit"
+                          : "Savings withdrawal"
+                        : tx.direction === "in"
+                          ? "Received money"
+                          : "Sent money";
 
-                  const rightTop = isSwap
-                    ? isTokenToToken
-                      ? "—"
-                      : (() => {
-                          const usdcDeltaAbs = Math.abs(tx.amountUsdc ?? 0);
-                          const local = usdcDeltaAbs * rate;
-                          if (!local) return "—";
-                          return isSell
-                            ? `+${formatCurrency(local, displayCurrency)}`
-                            : `-${formatCurrency(local, displayCurrency)}`;
-                        })()
-                    : tx.direction === "in"
+                  // ✅ Updated rightTop logic to handle perps
+                  const rightTop = isPerp
+                    ? tx.direction === "in"
                       ? `+${formatCurrency(localAbs, displayCurrency)}`
-                      : `-${formatCurrency(localAbs, displayCurrency)}`;
+                      : `-${formatCurrency(localAbs, displayCurrency)}`
+                    : isSwap
+                      ? isTokenToToken
+                        ? "—"
+                        : (() => {
+                            const usdcDeltaAbs = Math.abs(tx.amountUsdc ?? 0);
+                            const local = usdcDeltaAbs * rate;
+                            if (!local) return "—";
+                            return isSell
+                              ? `+${formatCurrency(local, displayCurrency)}`
+                              : `-${formatCurrency(local, displayCurrency)}`;
+                          })()
+                      : tx.direction === "in"
+                        ? `+${formatCurrency(localAbs, displayCurrency)}`
+                        : `-${formatCurrency(localAbs, displayCurrency)}`;
 
-                  const detailLine = isSwap
-                    ? isTokenToToken
-                      ? `${soldName} → ${boughtName}`
-                      : ""
-                    : `${tx.direction === "in" ? "From" : "To"} ${
-                        party?.label ?? "—"
-                      }`;
+                  // ✅ Updated detailLine logic to handle perps
+                  const detailLine = isPerp
+                    ? "Jupiter Perpetuals"
+                    : isSwap
+                      ? isTokenToToken
+                        ? `${soldName} → ${boughtName}`
+                        : ""
+                      : `${tx.direction === "in" ? "From" : "To"} ${
+                          party?.label ?? "—"
+                        }`;
 
                   const tokenToTokenAmounts =
                     isTokenToToken &&
@@ -567,12 +601,9 @@ export default function DepositAccountPage() {
                         )} ${tokenName}`
                       : "";
 
-                  // ✅ LEFT ICON RULES:
-                  // - swaps: show token logo (or bought logo for buy / sold logo for sell)
-                  // - token→token: show sold token logo (clean + consistent)
-                  // - savings: piggy bank
-                  // - transfers: generic user icon (normie)
+                  // ✅ Updated leftIcon logic to handle perps
                   const leftIcon = (() => {
+                    if (isPerp) return <PerpAvatar />;
                     if (isSavings) return <SavingsAvatar />;
 
                     if (isSwap) {
