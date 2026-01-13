@@ -610,7 +610,7 @@ const Transfer: React.FC<TransferProps> = ({
                           <p className="text-[10px] text-muted-foreground">
                             Sending to
                           </p>
-                          <p className="text-[11px] font-semibold">
+                          <p className="text-[11px] font-semibold text-primary">
                             {recipientLabel}
                           </p>
                           <p className="text-[10px] text-muted-foreground">
@@ -658,7 +658,7 @@ const Transfer: React.FC<TransferProps> = ({
                               : 0;
                           setAmountInput(safe > 0 ? String(safe) : "");
                         }}
-                        className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40"
+                        className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40 text-primary"
                         disabled={
                           laneBalanceDisplay <= effectiveFeeUsdc * effectiveFx
                         }
@@ -718,7 +718,7 @@ const Transfer: React.FC<TransferProps> = ({
 
                     {/* Keypad */}
                     <div className="mt-3">
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-3 gap-2 text-foreground">
                         {[
                           "1",
                           "2",

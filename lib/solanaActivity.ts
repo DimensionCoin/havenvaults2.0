@@ -732,7 +732,7 @@ function normalizeToActivity(
               ? "Close position"
               : jupPerpsAction === "liquidate"
                 ? "Liquidation"
-                : "Position update",
+                : " Multiplier position update",
     };
 
     return item;

@@ -127,6 +127,12 @@ const fmtTokenAmt = (n?: number | null, decimals = 6) => {
   return v.toFixed(max);
 };
 
+// ✅ Replace "Jupiter Perpetuals" wording anywhere it might show up
+const toMultiplierLabel = (s?: string | null) => {
+  if (!s) return s;
+  return s.replace(/jupiter\s*perp(etuals)?/gi, "Multiplier");
+};
+
 // ✅ Small round asset icon (token logo)
 function AssetIcon({ logo, alt }: { logo?: string | null; alt: string }) {
   const [broken, setBroken] = useState(false);
@@ -527,12 +533,12 @@ export default function DepositAccountPage() {
                   const soldName = safeName(soldMeta, "Asset");
                   const boughtName = safeName(boughtMeta, "Asset");
 
-                  // FX for amounts shown on the right (so it matches their display currency)
+                  // FX for amounts shown on the right
                   const localAbs = (tx.amountUsdc ?? 0) * rate;
 
-                  // ✅ Updated title logic to handle perps
+                  // ✅ Title logic (perps => Multiplier)
                   const title = isPerp
-                    ? tx.counterpartyLabel || "Perp position"
+                    ? toMultiplierLabel(tx.counterpartyLabel) || "Multiplier"
                     : isSwap
                       ? isTokenToToken
                         ? `Swap ${soldName} → ${boughtName}`
@@ -547,7 +553,7 @@ export default function DepositAccountPage() {
                           ? "Received money"
                           : "Sent money";
 
-                  // ✅ Updated rightTop logic to handle perps
+                  // ✅ Right amount logic
                   const rightTop = isPerp
                     ? tx.direction === "in"
                       ? `+${formatCurrency(localAbs, displayCurrency)}`
@@ -567,9 +573,9 @@ export default function DepositAccountPage() {
                         ? `+${formatCurrency(localAbs, displayCurrency)}`
                         : `-${formatCurrency(localAbs, displayCurrency)}`;
 
-                  // ✅ Updated detailLine logic to handle perps
+                  // ✅ Detail line (perps => Multiplier)
                   const detailLine = isPerp
-                    ? "Jupiter Perpetuals"
+                    ? "Multiplier"
                     : isSwap
                       ? isTokenToToken
                         ? `${soldName} → ${boughtName}`
@@ -601,7 +607,7 @@ export default function DepositAccountPage() {
                         )} ${tokenName}`
                       : "";
 
-                  // ✅ Updated leftIcon logic to handle perps
+                  // ✅ Left icon logic
                   const leftIcon = (() => {
                     if (isPerp) return <PerpAvatar />;
                     if (isSavings) return <SavingsAvatar />;
@@ -650,11 +656,24 @@ export default function DepositAccountPage() {
                         ) : null}
                       </div>
 
-                      {/* Right amount */}
+                      {/* Right amount + tx link */}
                       <div className="text-right shrink-0 pl-2">
                         <p className="text-sm font-semibold text-foreground tabular-nums">
                           {rightTop}
                         </p>
+
+                        {tx.signature ? (
+                          <a
+                            href={`https://orbmarkets.io/tx/${encodeURIComponent(
+                              tx.signature
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-1 inline-flex items-center justify-end text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                          >
+                            View
+                          </a>
+                        ) : null}
                       </div>
                     </div>
                   );

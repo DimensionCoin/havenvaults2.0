@@ -9,15 +9,15 @@ import {
   Zap, // Amplify
   Home, // Dashboard
   ArrowDownUp, // For You
-  User2Icon, // Swap
+  Layers, // Swap
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Home", Icon: Home },
-  { href: "/invest", label: "Invest", Icon: LineChart },
+  { href: "/invest", label: "Portfolio", Icon: LineChart },
   { href: "/exchange", label: "Markets", Icon: ArrowDownUp },
   { href: "/amplify", label: "Amplify", Icon: Zap },
-  { href: "/profile", label: "Profile", Icon: User2Icon },
+  { href: "/bundles", label: "Bundles", Icon: Layers},
 ];
 
 const Sidebar: React.FC = () => {

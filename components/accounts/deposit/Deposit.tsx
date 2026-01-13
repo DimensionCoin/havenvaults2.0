@@ -96,7 +96,7 @@ const Deposit: React.FC<DepositProps> = ({
                   className={[
                     "text-xs rounded-xl px-3 py-2 transition-colors",
                     "bg-transparent text-muted-foreground",
-                    "data-[state=active]:!bg-primary data-[state=active]:!text-primary-foreground",
+                    "data-[state=active]:!bg-primary data-[state=active]:!text-black",
                     "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
                   ].join(" ")}
                 >
@@ -108,7 +108,7 @@ const Deposit: React.FC<DepositProps> = ({
                   className={[
                     "text-xs rounded-xl px-3 py-2 transition-colors",
                     "bg-transparent text-muted-foreground",
-                    "data-[state=active]:!bg-primary data-[state=active]:!text-primary-foreground",
+                    "data-[state=active]:!bg-primary data-[state=active]:!text-black",
                     "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
                   ].join(" ")}
                 >

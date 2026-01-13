@@ -270,8 +270,8 @@
 
   /* Primary button */
   .haven-btn-primary {
-    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
-      bg-primary px-4 py-3 text-sm font-semibold text-black
+    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl text-black
+      bg-primary px-4 py-3 text-sm font-semibold 
       shadow-[0_12px_28px_rgba(41,198,104,0.18)]
       transition-colors hover:bg-primary/90 disabled:opacity-60;
   }
@@ -281,7 +281,7 @@
 
   /* Secondary button */
   .haven-btn-secondary {
-    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl
+    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl text-black
       border bg-transparent px-4 py-3 text-sm font-medium
       text-foreground transition-colors hover:bg-secondary;
   }
