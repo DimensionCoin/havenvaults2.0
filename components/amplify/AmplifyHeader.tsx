@@ -33,7 +33,7 @@ export default function AmplifyHeader({
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                   active
                     ? [
-                        "bg-primary text-primary-foreground",
+                        "bg-primary text-black",
                         "shadow-fintech-sm",
                         "ring-1 ring-primary/30",
                       ].join(" ")
