@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -28,13 +34,9 @@ import {
    CONSTANTS
 ========================= */
 
-// ✅ Flex savings vault address
 const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
-
-// Fallback avatar when we don't have a Haven user profile photo.
 const DEFAULT_AVATAR = "/logos/user.png";
 
-// Optional deterministic avatar for non-users
 const USE_DICEBEAR = true;
 const dicebearAvatar = (addr: string) =>
   `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(addr)}`;
@@ -45,7 +47,6 @@ const dicebearAvatar = (addr: string) =>
 
 type DrawerMode = "deposit" | "withdraw" | null;
 
-// ✅ Added "perp" kind for Jupiter Perpetuals
 type TxRow = {
   signature: string;
   blockTime: number | null;
@@ -54,16 +55,17 @@ type TxRow = {
   kind?: "transfer" | "swap" | "perp";
   direction?: "in" | "out" | "neutral";
 
-  // ✅ "buy" = spent USDC for token, "sell" = sold token for USDC
-  // token→token swaps will be null
   swapDirection?: "buy" | "sell" | null;
-
-  // USDC statement amount (will be 0 for token→token swaps)
   amountUsdc?: number | null;
 
+  // wallet (owner) for transfers; null for swaps/perps
   counterparty?: string | null;
-  counterpartyLabel?: string | null;
 
+  // ✅ owner wallet (same as counterparty for transfers in new API)
+  counterpartyOwner?: string | null;
+
+  // ✅ API now returns mapped values when available
+  counterpartyLabel?: string | null;
   counterpartyAvatarUrl?: string | null;
 
   swapSoldMint?: string | null;
@@ -76,11 +78,20 @@ type TxRow = {
 
 type FxPayload = { rate?: number };
 
+type TxResponse = {
+  ok?: boolean;
+  txs?: TxRow[];
+  nextBefore?: string | null;
+  exhausted?: boolean;
+  error?: string;
+};
+
 /* =========================
    HELPERS
 ========================= */
 
 const normAddr = (a?: string | null) => (a || "").trim();
+const normLower = (a?: string | null) => normAddr(a).toLowerCase();
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -89,7 +100,6 @@ const shortAddress = (addr?: string | null) => {
   return `${a.slice(0, 4)}…${a.slice(-4)}`;
 };
 
-// ✅ Friendlier "Robinhood-style" timestamp
 const formatDayTime = (unixSeconds?: number | null) => {
   if (!unixSeconds) return "—";
   const d = new Date(unixSeconds * 1000);
@@ -114,11 +124,9 @@ function formatCurrency(amount: number, currency: string) {
   }
 }
 
-// ✅ Names only (no tickers)
 const safeName = (meta?: { name: string } | null, fallback: string = "Asset") =>
   meta?.name?.trim() || fallback;
 
-// ✅ Compact token amount formatting (kept subtle)
 const fmtTokenAmt = (n?: number | null, decimals = 6) => {
   const v = Number(n ?? 0);
   if (!Number.isFinite(v) || v <= 0) return "";
@@ -126,13 +134,11 @@ const fmtTokenAmt = (n?: number | null, decimals = 6) => {
   return v.toFixed(max);
 };
 
-// ✅ Replace "Jupiter Perpetuals" wording anywhere it might show up
 const toMultiplierLabel = (s?: string | null) => {
   if (!s) return s;
   return s.replace(/jupiter\s*perp(etuals)?/gi, "Multiplier");
 };
 
-// ✅ Small round asset icon (token logo)
 function AssetIcon({ logo, alt }: { logo?: string | null; alt: string }) {
   const [broken, setBroken] = useState(false);
   const src = !logo || broken ? "/logos/sol.png" : logo;
@@ -148,7 +154,6 @@ function AssetIcon({ logo, alt }: { logo?: string | null; alt: string }) {
   );
 }
 
-// ✅ Generic user icon for transfers (keeps it "normie")
 function UserIconAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
@@ -157,7 +162,6 @@ function UserIconAvatar() {
   );
 }
 
-// ✅ PiggyBank avatar for savings deposits/withdrawals
 function SavingsAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
@@ -166,7 +170,6 @@ function SavingsAvatar() {
   );
 }
 
-// ✅ Perp position avatar (chart icon)
 function PerpAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
@@ -191,7 +194,6 @@ export default function DepositAccountPage() {
     return c === "USDC" ? "USD" : c;
   }, [user?.displayCurrency]);
 
-  // FX rate for txs only (NOT balance)
   const [rate, setRate] = useState<number>(1);
 
   const loadFx = useCallback(async () => {
@@ -223,7 +225,13 @@ export default function DepositAccountPage() {
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
 
-  // Case-insensitive mint index
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [exhausted, setExhausted] = useState(false);
+
+  // ✅ Frontend no longer needs extra resolve-wallets calls,
+  // because the API now returns counterpartyLabel + counterpartyAvatarUrl.
+  // Keeping these refs/state removed to avoid conflicting labels.
+
   const mintIndex = useMemo(() => {
     const map = new Map<string, TokenMeta>();
     const clusters: Cluster[] = ["mainnet", "devnet"];
@@ -259,52 +267,88 @@ export default function DepositAccountPage() {
     [mintIndex]
   );
 
-  const fetchTxs = useCallback(async () => {
-    if (!walletAddress) return;
+  const fetchTxsPage = useCallback(
+    async (reset = false) => {
+      if (!walletAddress) return;
 
-    try {
-      setTxLoading(true);
-      setTxError(null);
+      try {
+        setTxLoading(true);
+        setTxError(null);
 
-      const res = await fetch(`/api/user/wallet/transactions?limit=25`, {
-        method: "GET",
-        cache: "no-store",
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
+        const cursor =
+          !reset && nextBefore
+            ? `&before=${encodeURIComponent(nextBefore)}`
+            : "";
 
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        txs?: TxRow[];
-        error?: string;
-      };
+        const url = `/api/user/wallet/transactions?limit=25${cursor}`;
 
-      if (!res.ok || data?.ok === false) {
-        throw new Error(data?.error || `Failed (${res.status})`);
+        const res = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+
+        const data = (await res.json().catch(() => ({}))) as TxResponse;
+
+        if (!res.ok || data?.ok === false) {
+          throw new Error(data?.error || `Failed (${res.status})`);
+        }
+
+        const page = Array.isArray(data?.txs) ? data.txs : [];
+
+        setTxs((prev) => {
+          if (reset) return page;
+
+          const seen = new Set(prev.map((p) => p.signature));
+          const merged = [...prev];
+          for (const row of page) {
+            if (!seen.has(row.signature)) merged.push(row);
+          }
+          return merged;
+        });
+
+        const newCursor =
+          typeof data?.nextBefore === "string" && data.nextBefore.trim()
+            ? data.nextBefore.trim()
+            : null;
+
+        setNextBefore(newCursor);
+
+        if (
+          data?.exhausted === true ||
+          newCursor === null ||
+          page.length === 0
+        ) {
+          setExhausted(true);
+        }
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : "";
+        setTxError(message || "Failed to load activity");
+        if (reset) setTxs([]);
+        setNextBefore(null);
+        setExhausted(true);
+      } finally {
+        setTxLoading(false);
       }
-
-      setTxs(Array.isArray(data?.txs) ? data.txs : []);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "";
-      setTxError(message || "Failed to load activity");
-      setTxs([]);
-    } finally {
-      setTxLoading(false);
-    }
-  }, [walletAddress]);
+    },
+    [walletAddress, nextBefore]
+  );
 
   useEffect(() => {
     if (!user) return;
     loadFx();
-    fetchTxs();
-  }, [user, loadFx, fetchTxs]);
+    setTxs([]);
+    setNextBefore(null);
+    setExhausted(false);
+    fetchTxsPage(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, loadFx]);
 
-  // swaps only
   const swaps = useMemo(() => {
     return txs.filter((t) => {
       if (t.kind !== "swap") return false;
 
-      // ✅ token→token swap: no swapDirection, and both legs exist
       const tokenToToken =
         !t.swapDirection &&
         !!t.swapSoldMint &&
@@ -314,7 +358,6 @@ export default function DepositAccountPage() {
 
       if (tokenToToken) return true;
 
-      // ✅ USDC swaps (buy/sell)
       if (t.swapDirection === "buy") {
         return (
           !!t.swapBoughtMint &&
@@ -335,24 +378,22 @@ export default function DepositAccountPage() {
     });
   }, [txs]);
 
-  // transfers only
   const transfers = useMemo(() => {
     return txs.filter((t) => t.kind === "transfer" && (t.amountUsdc ?? 0) > 0);
   }, [txs]);
 
-  // ✅ perps only (filter out $0 position updates)
   const perps = useMemo(() => {
     return txs.filter((t) => t.kind === "perp" && (t.amountUsdc ?? 0) > 0);
   }, [txs]);
 
-  // combined activity (includes perps now)
   const activity = useMemo(() => {
     const rows = [...swaps, ...transfers, ...perps];
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-    return rows.slice(0, 25);
+    return rows;
   }, [swaps, transfers, perps]);
 
-  // Balance shown raw (NO FX)
+  const hasMore = !exhausted;
+
   const balanceDisplay = useMemo(() => {
     const base = Number.isFinite(usdcUsd) ? Number(usdcUsd) : 0;
     return formatCurrency(base, displayCurrency);
@@ -360,23 +401,35 @@ export default function DepositAccountPage() {
 
   const loading = userLoading || balanceLoading;
 
-  // classify transfer party (frontend-only)
   const resolveTransferParty = useCallback((tx: TxRow) => {
-    const cp = normAddr(tx.counterparty);
-    const isFlexSavings = cp === FLEX_SAVINGS_ADDR;
+    const cpRaw = normAddr(tx.counterparty);
+    const ownerRaw = normAddr(tx.counterpartyOwner);
 
-    const label = isFlexSavings
-      ? "Flex Savings Account"
-      : tx.counterpartyLabel || shortAddress(cp) || "—";
+    const isFlexSavings =
+      cpRaw === FLEX_SAVINGS_ADDR || ownerRaw === FLEX_SAVINGS_ADDR;
 
-    // keeping this for later if you want real avatars again
-    const avatarUrl = isFlexSavings
-      ? null
-      : tx.counterpartyAvatarUrl ||
-        (cp && USE_DICEBEAR ? dicebearAvatar(cp) : null) ||
-        DEFAULT_AVATAR;
+    if (isFlexSavings) {
+      return {
+        label: "Flex Savings Account",
+        avatarUrl: null,
+        isFlexSavings: true,
+      };
+    }
 
-    return { label, avatarUrl, isFlexSavings };
+    // ✅ Prefer mapped label/avatar from API; fallback to short address
+    const label =
+      (tx.counterpartyLabel && tx.counterpartyLabel.trim()) ||
+      shortAddress(ownerRaw || cpRaw) ||
+      "—";
+
+    const avatarUrl =
+      (tx.counterpartyAvatarUrl && tx.counterpartyAvatarUrl.trim()) ||
+      ((ownerRaw || cpRaw) && USE_DICEBEAR
+        ? dicebearAvatar(ownerRaw || cpRaw)
+        : null) ||
+      DEFAULT_AVATAR;
+
+    return { label, avatarUrl, isFlexSavings: false };
   }, []);
 
   if (!user && !userLoading) {
@@ -466,7 +519,12 @@ export default function DepositAccountPage() {
 
             <button
               type="button"
-              onClick={fetchTxs}
+              onClick={() => {
+                setTxs([]);
+                setNextBefore(null);
+                setExhausted(false);
+                fetchTxsPage(true);
+              }}
               className="haven-icon-btn"
               aria-label="Refresh"
             >
@@ -475,7 +533,7 @@ export default function DepositAccountPage() {
           </div>
 
           <div className="mt-3">
-            {txLoading ? (
+            {txLoading && txs.length === 0 ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : txError ? (
               <p className="text-sm text-muted-foreground">{txError}</p>
@@ -500,25 +558,21 @@ export default function DepositAccountPage() {
                     (tx.swapSoldAmountUi ?? 0) > 0 &&
                     (tx.swapBoughtAmountUi ?? 0) > 0;
 
-                  // Swap legs
                   const soldMint = tx.swapSoldMint;
                   const soldAmount = tx.swapSoldAmountUi;
 
                   const boughtMint = tx.swapBoughtMint;
                   const boughtAmount = tx.swapBoughtAmountUi;
 
-                  // For USDC swaps, pick the "asset" mint for title/meta
                   const tokenMint = isBuy ? boughtMint : soldMint;
                   const tokenAmount = isBuy ? boughtAmount : soldAmount;
 
                   const tokenMeta = isSwap ? resolveMeta(tokenMint) : null;
 
-                  // transfers (not swaps, not perps)
                   const party =
                     !isSwap && !isPerp ? resolveTransferParty(tx) : null;
                   const isSavings = !!party?.isFlexSavings;
 
-                  // Names/meta
                   const soldMeta = isTokenToToken
                     ? resolveMeta(soldMint)
                     : null;
@@ -530,10 +584,8 @@ export default function DepositAccountPage() {
                   const soldName = safeName(soldMeta, "Asset");
                   const boughtName = safeName(boughtMeta, "Asset");
 
-                  // FX for amounts shown on the right
                   const localAbs = (tx.amountUsdc ?? 0) * rate;
 
-                  // ✅ Title logic (perps => Multiplier)
                   const title = isPerp
                     ? toMultiplierLabel(tx.counterpartyLabel) || "Multiplier"
                     : isSwap
@@ -550,7 +602,6 @@ export default function DepositAccountPage() {
                           ? "Received money"
                           : "Sent money";
 
-                  // ✅ Right amount logic
                   const rightTop = isPerp
                     ? tx.direction === "in"
                       ? `+${formatCurrency(localAbs, displayCurrency)}`
@@ -570,7 +621,6 @@ export default function DepositAccountPage() {
                         ? `+${formatCurrency(localAbs, displayCurrency)}`
                         : `-${formatCurrency(localAbs, displayCurrency)}`;
 
-                  // ✅ Detail line (perps => Multiplier)
                   const detailLine = isPerp
                     ? "Multiplier"
                     : isSwap
@@ -604,7 +654,6 @@ export default function DepositAccountPage() {
                         )} ${tokenName}`
                       : "";
 
-                  // ✅ Left icon logic
                   const leftIcon = (() => {
                     if (isPerp) return <PerpAvatar />;
                     if (isSavings) return <SavingsAvatar />;
@@ -617,6 +666,22 @@ export default function DepositAccountPage() {
                       return <AssetIcon logo={logo} alt={alt} />;
                     }
 
+                    // ✅ Transfers: if API returned an avatar, show it; otherwise fallback icon
+                    if (party?.avatarUrl) {
+                      return (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={party.avatarUrl}
+                          alt={party.label || "User"}
+                          className="h-7 w-7 rounded-full border border-white/10 object-cover bg-white/[0.06]"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src =
+                              DEFAULT_AVATAR;
+                          }}
+                        />
+                      );
+                    }
+
                     return <UserIconAvatar />;
                   })();
 
@@ -625,10 +690,8 @@ export default function DepositAccountPage() {
                       key={tx.signature}
                       className="haven-row hover:bg-accent transition flex items-start gap-3"
                     >
-                      {/* Left icon */}
                       <div className="pt-0.5 shrink-0">{leftIcon}</div>
 
-                      {/* Main text */}
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold text-foreground truncate">
                           {title}
@@ -653,7 +716,6 @@ export default function DepositAccountPage() {
                         ) : null}
                       </div>
 
-                      {/* Right amount + tx link */}
                       <div className="text-right shrink-0 pl-2">
                         <p className="text-sm font-semibold text-foreground tabular-nums">
                           {rightTop}
@@ -676,6 +738,23 @@ export default function DepositAccountPage() {
                   );
                 })}
               </div>
+            )}
+
+            {hasMore && activity.length > 0 && (
+              <button
+                type="button"
+                onClick={() => fetchTxsPage(false)}
+                disabled={txLoading}
+                className="haven-btn-primary w-full mt-3 text-[#0b3204] disabled:opacity-60"
+              >
+                {txLoading ? "Loading…" : "Load more"}
+              </button>
+            )}
+
+            {exhausted && activity.length > 0 && (
+              <p className="mt-3 text-[11px] text-muted-foreground text-center">
+                You&apos;ve reached the end of the available history.
+              </p>
             )}
           </div>
         </div>

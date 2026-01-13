@@ -47,6 +47,14 @@ type ApyResponse = {
 
 type FxPayload = { rate?: number };
 
+type TxResponse = {
+  ok?: boolean;
+  txs?: TxRow[];
+  nextBefore?: string | null;
+  exhausted?: boolean;
+  error?: string;
+};
+
 /* =========================
    HELPERS
 ========================= */
@@ -58,7 +66,6 @@ const shortAddress = (addr?: string | null) => {
   return `${a.slice(0, 4)}…${a.slice(-4)}`;
 };
 
-// ✅ Friendlier timestamp (matches deposit page vibe)
 const formatDayTime = (unixSeconds?: number | null) => {
   if (!unixSeconds) return "—";
   const d = new Date(unixSeconds * 1000);
@@ -110,13 +117,11 @@ export default function FlexAccountPage() {
 
   const hasAccount = Boolean(linkedMarginfiPk);
 
-  // ✅ Display currency (same as deposit account)
   const displayCurrency = useMemo(() => {
     const c = (user?.displayCurrency || "USD").toUpperCase();
     return c === "USDC" ? "USD" : c;
   }, [user?.displayCurrency]);
 
-  // ✅ FX rate for transaction amounts
   const [rate, setRate] = useState<number>(1);
 
   const loadFx = useCallback(async () => {
@@ -235,7 +240,7 @@ export default function FlexAccountPage() {
   const [txs, setTxs] = useState<TxRow[]>([]);
 
   const [nextBefore, setNextBefore] = useState<string | null>(null);
-  const [reachedEnd, setReachedEnd] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
 
   const fetchTxsPage = useCallback(
     async (reset = false) => {
@@ -262,12 +267,7 @@ export default function FlexAccountPage() {
           headers: { Accept: "application/json" },
         });
 
-        const data = (await res.json().catch(() => ({}))) as {
-          ok?: boolean;
-          txs?: TxRow[];
-          nextBefore?: string | null;
-          error?: string;
-        };
+        const data = (await res.json().catch(() => ({}))) as TxResponse;
 
         if (!res.ok || data?.ok === false) {
           throw new Error(data?.error || `Failed (${res.status})`);
@@ -286,18 +286,23 @@ export default function FlexAccountPage() {
           return merged;
         });
 
+        // Use the cursor from the API
         const newCursor =
           typeof data?.nextBefore === "string" && data.nextBefore.trim()
             ? data.nextBefore.trim()
             : null;
 
         setNextBefore(newCursor);
-        if (newCursor === null) setReachedEnd(true);
+
+        // Only mark exhausted if the API explicitly says so
+        if (data?.exhausted === true) {
+          setExhausted(true);
+        }
       } catch (e) {
         setTxError(e instanceof Error ? e.message : "Failed to load activity");
         if (reset) setTxs([]);
         setNextBefore(null);
-        setReachedEnd(true);
+        setExhausted(true);
       } finally {
         setTxLoading(false);
       }
@@ -305,7 +310,7 @@ export default function FlexAccountPage() {
     [walletAddress, linkedMarginfiPk, nextBefore]
   );
 
-  // ✅ Load FX rate and transactions on mount
+  // Load FX rate and transactions on mount
   useEffect(() => {
     if (!user) return;
     if (!linkedMarginfiPk) return;
@@ -313,12 +318,12 @@ export default function FlexAccountPage() {
     loadFx();
     setTxs([]);
     setNextBefore(null);
-    setReachedEnd(false);
+    setExhausted(false);
     fetchTxsPage(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, linkedMarginfiPk]);
 
-  // ✅ ONLY Flex deposits/withdrawals (simple)
+  // Filter and sort activity
   const flexActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
@@ -329,7 +334,8 @@ export default function FlexAccountPage() {
     return rows;
   }, [txs]);
 
-  const hasMore = !reachedEnd && (nextBefore !== null || txs.length === 0);
+  // Show "Load more" if not exhausted
+  const hasMore = !exhausted;
 
   /* -------- Guards -------- */
 
@@ -460,7 +466,7 @@ export default function FlexAccountPage() {
               onClick={() => {
                 setTxs([]);
                 setNextBefore(null);
-                setReachedEnd(false);
+                setExhausted(false);
                 fetchTxsPage(true);
               }}
               className="haven-icon-btn"
@@ -482,9 +488,6 @@ export default function FlexAccountPage() {
             ) : (
               <div className="space-y-2">
                 {flexActivity.map((tx) => {
-                  // ✅ Keep it simple + consistent:
-                  // Deposit into Flex = "Flex deposit"
-                  // Withdrawal from Flex = "Flex withdrawal"
                   const isFlexDeposit = tx.direction === "out";
                   const title = isFlexDeposit
                     ? "Flex deposit"
@@ -542,7 +545,7 @@ export default function FlexAccountPage() {
               </button>
             )}
 
-            {reachedEnd && flexActivity.length > 0 && (
+            {exhausted && flexActivity.length > 0 && (
               <p className="mt-3 text-[11px] text-muted-foreground text-center">
                 You&apos;ve reached the end of the available history.
               </p>
