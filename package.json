@@ -10,6 +10,7 @@
     "pyth:worker": "tsx scripts/pyth-price-worker.ts"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.43.0",
     "@coral-xyz/anchor": "^0.32.1",
     "@privy-io/node": "^0.6.2",
     "@privy-io/react-auth": "^3.8.1",

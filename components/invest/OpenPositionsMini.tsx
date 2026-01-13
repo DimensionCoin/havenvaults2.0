@@ -155,10 +155,8 @@ const OpenPositionsMini: React.FC = () => {
     return sorted.slice(0, 3);
   }, [rows]);
 
-  // ✅ ONE place to control where this card goes
   const targetUrl = "/amplify?tab=multiplier";
 
-  // ✅ bulletproof click handler (prevents parent link/onClick overriding)
   const goToMultiplier = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -178,7 +176,6 @@ const OpenPositionsMini: React.FC = () => {
         </span>
       </div>
 
-      {/* ✅ Make BOTH states navigate correctly */}
       {!hasPositions ? (
         <button
           type="button"
@@ -205,7 +202,9 @@ const OpenPositionsMini: React.FC = () => {
           <div className="overflow-hidden rounded-2xl border border-border bg-background/40 transition hover:bg-accent">
             {/* take-home summary */}
             <div className="flex items-center justify-between px-4 py-3">
-              <p className="text-[12px] text-muted-foreground">Take-home</p>
+              <p className="text-[12px] text-muted-foreground">
+                Take home <span className="text-[8px]">(T/H)</span>
+              </p>
               <p className="text-[13px] font-semibold text-foreground">
                 {formatMoneyNoCode(takeHomeLocal, displayCurrency)}
               </p>
@@ -241,6 +240,8 @@ const OpenPositionsMini: React.FC = () => {
                     ? "text-destructive"
                     : "text-muted-foreground";
 
+              const rowTakeHomeLocal = collateralLocal + pnlLocal;
+
               return (
                 <div
                   key={safeStr(p.id, `${symbol}-${idx}`)}
@@ -259,29 +260,35 @@ const OpenPositionsMini: React.FC = () => {
                         height={22}
                         className="h-5 w-5 rounded-full border border-border bg-background/60"
                       />
-
                       <span className="text-[13px] font-semibold text-foreground">
                         {symbol}
                       </span>
+                    </div>
 
-                      <span className="text-[13px] font-semibold text-foreground">
+                    {/* (0.234) $70.30 */}
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <span className="text-[11px] text-muted-foreground">
+                        {sizeTokens > 0 ? `(${sizeTokens.toFixed(3)})` : "(—)"}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
                         {formatMoneyNoCode(positionValueLocal, displayCurrency)}
                       </span>
                     </div>
-
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {sizeTokens > 0
-                        ? `${sizeTokens.toFixed(6)} ${symbol}`
-                        : "—"}
-                    </p>
                   </div>
 
-                  {/* RIGHT */}
-                  <div className="shrink-0 text-right">
-                    <p className="text-[13px] font-semibold text-foreground">
-                      {formatMoneyNoCode(collateralLocal, displayCurrency)}
-                    </p>
+                  {/* RIGHT (stacked: T/H on top, P&L directly under) */}
+                  <div className="shrink-0 text-right flex flex-col items-end">
+                    {/* top line */}
+                    <div className="inline-flex items-baseline gap-2">
+                      <span className="text-[11px] text-muted-foreground">
+                        T/H
+                      </span>
+                      <span className="text-[13px] font-semibold text-foreground">
+                        {formatMoneyNoCode(rowTakeHomeLocal, displayCurrency)}
+                      </span>
+                    </div>
 
+                    {/* under it */}
                     <div className="mt-2 inline-flex items-baseline gap-2">
                       <span className="text-[11px] text-muted-foreground">
                         P&amp;L

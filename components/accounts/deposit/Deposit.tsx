@@ -1,7 +1,7 @@
 "use client";
 
 // components/accounts/deposit/Deposit.tsx
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 
 import {
@@ -12,6 +12,9 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+
+import Onramp from "@/components/accounts/deposit/Onramp";
+import { useUser } from "@/providers/UserProvider";
 
 type DepositProps = {
   open: boolean;
@@ -38,9 +41,12 @@ const Deposit: React.FC<DepositProps> = ({
   balanceUsd,
   onSuccess,
 }) => {
-  // ✅ Bank transfer first + default
+  const { user } = useUser();
+
   const [tab, setTab] = useState<"onramp" | "crypto">("onramp");
   const [copied, setCopied] = useState(false);
+
+  const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
   const handleCopy = async () => {
     try {
@@ -53,6 +59,18 @@ const Deposit: React.FC<DepositProps> = ({
     }
   };
 
+  // Handle successful onramp completion
+  const handleOnrampSuccess = useCallback(async () => {
+    // Trigger refresh/callback
+    if (onSuccess) {
+      await onSuccess();
+    }
+    // Close the modal after a brief delay
+    setTimeout(() => {
+      onOpenChange(false);
+    }, 500);
+  }, [onSuccess, onOpenChange]);
+
   const solanaAddressUri = `solana:${walletAddress}`;
 
   return (
@@ -60,21 +78,15 @@ const Deposit: React.FC<DepositProps> = ({
       <DialogContent
         className={[
           "p-0 overflow-hidden flex flex-col",
-          // Haven surfaces + border
           "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
-
-          // Desktop sizing
           "sm:w-[min(92vw,520px)] sm:max-w-[520px]",
           "sm:max-h-[90vh] sm:rounded-[28px]",
-
-          // Mobile fullscreen
           "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
           "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
           "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
         ].join(" ")}
       >
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* Scrollable body */}
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
             <DialogHeader className="pb-3">
               <DialogTitle className="text-base font-semibold">
@@ -89,7 +101,6 @@ const Deposit: React.FC<DepositProps> = ({
               value={tab}
               onValueChange={(val) => setTab(val as "onramp" | "crypto")}
             >
-              {/* ✅ Bank transfer FIRST */}
               <TabsList className="mb-3 grid w-full grid-cols-2 rounded-2xl border border-border bg-background/40 p-1">
                 <TabsTrigger
                   value="onramp"
@@ -100,7 +111,7 @@ const Deposit: React.FC<DepositProps> = ({
                     "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
                   ].join(" ")}
                 >
-                  Bank transfer
+                  Bank deposit
                 </TabsTrigger>
 
                 <TabsTrigger
@@ -116,41 +127,38 @@ const Deposit: React.FC<DepositProps> = ({
                 </TabsTrigger>
               </TabsList>
 
-              {/* ===== Bank transfer tab ===== */}
+              {/* ===== Bank deposit tab ===== */}
               <TabsContent value="onramp" className="mt-2 space-y-3">
-                <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
-                  <p className="font-medium text-foreground/90 mb-1">
-                    Bank transfer (coming soon)
-                  </p>
-                  <p className="text-muted-foreground">
-                    Soon you’ll be able to deposit USDC with a bank transfer and
-                    have it land directly in your Haven deposit account.
-                  </p>
+                <Onramp
+                  destinationAddress={walletAddress}
+                  displayCurrency={displayCurrency}
+                  defaultAmountDisplay="50"
+                  onSuccess={handleOnrampSuccess}
+                  onClose={() => onOpenChange(false)}
+                  // For production testing, explicitly set sandbox={false}
+                  sandbox={false}
+                />
 
-                  <div className="mt-3 rounded-2xl border border-border bg-background/40 px-3 py-2">
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-muted-foreground">
-                        Current balance
-                      </span>
-                      <span className="font-semibold text-primary">
-                        ${cleanNumber(balanceUsd).toFixed(2)}
-                      </span>
-                    </div>
+                <div className="rounded-2xl border border-border bg-background/40 px-3 py-2 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      Current balance
+                    </span>
+                    <span className="font-semibold text-primary">
+                      ${cleanNumber(balanceUsd).toFixed(2)}
+                    </span>
                   </div>
-
-                  <p className="mt-3 text-[10px] text-muted-foreground">
-                    Until then, use{" "}
-                    <span className="font-semibold text-foreground/90">
-                      Crypto deposit
-                    </span>{" "}
-                    to send USDC on Solana.
-                  </p>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Payment currency:{" "}
+                    <span className="text-foreground/80 font-medium">
+                      {displayCurrency}
+                    </span>
+                  </div>
                 </div>
               </TabsContent>
 
               {/* ===== Crypto deposit tab ===== */}
               <TabsContent value="crypto" className="mt-2 space-y-4">
-                {/* Helper card */}
                 <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
                   <p className="mb-2 font-medium text-foreground/90">
                     How to deposit USDC to Haven
@@ -195,9 +203,7 @@ const Deposit: React.FC<DepositProps> = ({
                   </div>
                 </div>
 
-                {/* Address + QR */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)]">
-                  {/* Address + copy */}
                   <div className="haven-card-soft px-3.5 py-3.5">
                     <p className="text-[11px] font-medium text-muted-foreground">
                       Your Haven deposit address
@@ -241,7 +247,6 @@ const Deposit: React.FC<DepositProps> = ({
                     </div>
                   </div>
 
-                  {/* QR */}
                   <div className="haven-card-soft flex flex-col items-center justify-center gap-2 px-3.5 py-3.5">
                     <p className="text-[11px] font-medium text-muted-foreground">
                       Scan to deposit
@@ -265,7 +270,6 @@ const Deposit: React.FC<DepositProps> = ({
             </Tabs>
           </div>
 
-          {/* Pinned footer (optional, matches Transfer feel) */}
           <div className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
             <button
               type="button"
