@@ -24,7 +24,7 @@ export default function BottomBar() {
       aria-label="Primary"
       className="fixed inset-x-0 z-50 md:hidden"
       style={{
-        bottom: "calc(env(safe-area-inset-bottom) + 8px)",
+        bottom: "calc(env(safe-area-inset-bottom) + 0px)",
       }}
     >
       <div className="mx-auto max-w-md px-3">
