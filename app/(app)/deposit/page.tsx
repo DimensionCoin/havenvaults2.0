@@ -19,7 +19,6 @@ import Withdraw from "@/components/accounts/deposit/Withdraw";
 
 import {
   TOKENS,
-  getCluster,
   WSOL_MINT,
   type Cluster,
   type TokenMeta,
@@ -223,8 +222,6 @@ export default function DepositAccountPage() {
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
-
-  const cluster = useMemo(() => getCluster(), []);
 
   // Case-insensitive mint index
   const mintIndex = useMemo(() => {

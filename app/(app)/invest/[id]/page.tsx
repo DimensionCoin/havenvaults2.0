@@ -39,7 +39,6 @@ import {
   useServerSponsoredUsdcSwap,
   type UsdcSwapStatus,
 } from "@/hooks/useServerSponsoredUsdcSwap";
-import ThemeToggle from "@/components/shared/ThemeToggle";
 
 const CLUSTER = getCluster();
 
@@ -243,8 +242,8 @@ function SleekLineChart({
         maxY: 0,
         min: 0,
         max: 1,
-        scaleX: (_i: number) => 0,
-        scaleY: (_y: number) => height,
+        scaleX: () => 0,
+        scaleY: () => height,
       };
     }
 
@@ -323,7 +322,7 @@ function SleekLineChart({
       priceText: formatMoneyNoCode(activePoint.y),
       timeText: formatTimeLabel(activePoint.t, timeframe),
     };
-  }, [activePoint, activeX, activeY, timeframe]);
+  }, [activePoint, activeX, activeY, timeframe, height]);
 
   return (
     <div ref={wrapRef} className="relative w-full select-none">
@@ -545,7 +544,6 @@ const CoinPage: React.FC = () => {
   const [lastEdited, setLastEdited] = useState<"cash" | "asset">("cash");
 
   const [isMaxSell, setIsMaxSell] = useState(false);
-  const [priceRefreshTick, setPriceRefreshTick] = useState(0);
   const [localErr, setLocalErr] = useState<string | null>(null);
 
   const [modal, setModal] = useState<ModalState>(null);
@@ -633,7 +631,7 @@ const CoinPage: React.FC = () => {
 
     loadSpotPrice();
     return () => controller.abort();
-  }, [coingeckoId, priceRefreshTick]);
+  }, [coingeckoId]);
 
   /* ───────── Fetch history ───────── */
 
@@ -682,7 +680,7 @@ const CoinPage: React.FC = () => {
 
     loadHistory();
     return () => controller.abort();
-  }, [coingeckoId, timeframe, priceRefreshTick]);
+  }, [coingeckoId, timeframe]);
 
   /* ───────── Derived values ───────── */
 

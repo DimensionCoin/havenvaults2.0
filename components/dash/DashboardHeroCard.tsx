@@ -57,11 +57,11 @@ function PillShell({
       aria-label={ariaLabel}
       className={[
         "flex items-center",
-        "gap-2.5",
+        "gap-1",
         "rounded-full border border-border",
         "bg-card/80 backdrop-blur-xl",
         "shadow-fintech-sm",
-        "px-2.5 py-2",
+        "px-1.5 py-1",
         className || "",
       ].join(" ")}
     >
@@ -72,7 +72,7 @@ function PillShell({
 
 function PillDivider({ className }: { className?: string }) {
   return (
-    <div className={["h-8 w-px bg-border/70", className || ""].join(" ")} />
+    <div className={["h-4 w-px bg-border/50", className || ""].join(" ")} />
   );
 }
 
@@ -91,11 +91,10 @@ function PillIconButton({
 }) {
   const base = [
     "flex items-center justify-center",
-    "h-10 w-10",
-    "rounded-full border border-border",
-    "bg-card/80 shadow-fintech-sm",
-    "text-foreground/80 hover:text-foreground",
-    "hover:bg-secondary transition",
+    "h-7 w-7",
+    "rounded-full",
+    "text-foreground/70 hover:text-foreground",
+    "hover:bg-secondary/80 transition",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
     className || "",
   ].join(" ");
@@ -256,15 +255,14 @@ function AccountDropdown() {
         onClick={() => setOpen((v) => !v)}
         className={[
           "flex items-center justify-center",
-          "h-10 w-10",
-          "rounded-full border border-border",
-          "bg-card/80 shadow-fintech-sm",
-          "text-foreground/80 hover:text-foreground",
-          "hover:bg-secondary transition",
+          "h-7 w-7",
+          "rounded-full",
+          "text-foreground/70 hover:text-foreground",
+          "hover:bg-secondary/80 transition",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         ].join(" ")}
       >
-        <MoreHorizontal className="h-4 w-4" />
+        <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
       {menu}
@@ -342,7 +340,7 @@ const DashboardHeroCard: React.FC = () => {
 
             <div className="flex flex-col leading-tight">
               <span className="text-[11px] md:text-[12px] font-semibold text-muted-foreground uppercase tracking-[0.22em]">
-                Welcome back
+                Welcome
               </span>
               <span className="text-[22px] md:text-4xl font-semibold tracking-tight text-foreground">
                 {displayName}

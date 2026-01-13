@@ -439,25 +439,7 @@ const ProfilePage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <Link
-                href="/settings"
-                className={[
-                  "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[11px]",
-                  "border bg-card/80 backdrop-blur-xl shadow-fintech-sm",
-                  "transition-colors hover:bg-secondary active:scale-[0.98]",
-                ].join(" ")}
-              >
-                <Settings className="h-4 w-4 text-foreground/70" />
-                <span className="hidden sm:inline text-foreground">
-                  Settings
-                </span>
-              </Link>
-
-              <div className="flex h-9 w-9 items-center justify-center rounded-full border bg-card/80 backdrop-blur-xl shadow-fintech-sm text-foreground">
-                <LogoutButton />
-              </div>
-            </div>
+           
           </div>
 
           {/* Content */}
