@@ -22,50 +22,58 @@ export default function BottomBar() {
     <nav
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-50 md:hidden"
-      style={{
-        paddingBottom: "env(safe-area-inset-bottom, 0px)",
-      }}
     >
-      {/* Subtle gradient fade behind the bar for polish */}
-      <div
-        className="absolute inset-x-0 bottom-0 h-24 pointer-events-none"
-        style={{
-          background:
-            "linear-gradient(to top, hsl(var(--background)) 0%, transparent 100%)",
-        }}
-      />
-
-      <div className="relative mx-auto max-w-md px-3 pb-1">
-        {/* Floating pill navigation */}
-        <div className="rounded-2xl border border-white/[0.08] bg-background/90 backdrop-blur-2xl shadow-xl shadow-black/25">
-          <div className="relative grid grid-cols-5 items-end px-1.5 py-1.5">
+      <div className="mx-auto max-w-md px-3">
+        {/* Clean, friendly pill */}
+        <div
+          className="rounded-3xl border border-white/10 bg-background/85 backdrop-blur-xl shadow-lg shadow-black/20"
+          style={{
+            marginBottom: "max(2px, env(safe-area-inset-bottom))",
+          }}
+        >
+          <div className="relative grid grid-cols-5 items-end px-2 py-2">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
                 href === "/dashboard"
                   ? pathname === href
                   : pathname.startsWith(href);
 
+              const slotCls = "flex flex-col items-center justify-end gap-1";
+
+              const labelCls = [
+                "text-[10px] font-medium leading-none",
+                isActive ? "text-foreground" : "text-muted-foreground",
+              ].join(" ");
+
+              const baseBtn =
+                "grid place-items-center rounded-2xl border transition-all active:scale-[0.98]";
+
+              const btnCls = center
+                ? [
+                    baseBtn,
+                    "h-11 w-11",
+                    isActive
+                      ? "border-primary/30 bg-primary/20"
+                      : "border-white/10 bg-white/[0.06]",
+                  ].join(" ")
+                : [
+                    baseBtn,
+                    "h-10 w-10",
+                    isActive
+                      ? "border-primary/25 bg-primary/15"
+                      : "border-white/10 bg-white/[0.06] hover:bg-white/[0.09]",
+                  ].join(" ");
+
               return (
                 <Link
                   key={href}
                   href={href}
-                  className="flex flex-col items-center justify-end gap-0.5 py-1"
+                  className={slotCls}
                   aria-current={isActive ? "page" : undefined}
                 >
-                  {/* Icon button */}
-                  <div
-                    className={[
-                      "grid place-items-center rounded-xl transition-all duration-200 active:scale-95",
-                      center ? "h-12 w-12 -mt-3" : "h-9 w-9",
-                      isActive
-                        ? center
-                          ? "bg-primary shadow-lg shadow-primary/30"
-                          : "bg-primary/15"
-                        : "bg-transparent hover:bg-white/[0.06]",
-                    ].join(" ")}
-                  >
+                  <div className={btnCls}>
                     {center ? (
-                      <div className="relative h-7 w-7 overflow-hidden rounded-xl">
+                      <div className="relative h-7 w-7 overflow-hidden rounded-[14px]">
                         <Image
                           src="/logo.jpg"
                           alt="Haven"
@@ -79,23 +87,24 @@ export default function BottomBar() {
                       Icon && (
                         <Icon
                           className={[
-                            "h-[18px] w-[18px] transition-colors duration-200",
-                            isActive ? "text-primary" : "text-muted-foreground",
+                            "h-[18px] w-[18px]",
+                            isActive
+                              ? "text-foreground"
+                              : "text-muted-foreground",
                           ].join(" ")}
                         />
                       )
                     )}
                   </div>
 
-                  {/* Label */}
+                  <span className={labelCls}>{label}</span>
+
                   <span
                     className={[
-                      "text-[10px] font-medium leading-none transition-colors duration-200",
-                      isActive ? "text-foreground" : "text-muted-foreground/70",
+                      "mt-0.5 h-[3px] w-6 rounded-full transition-opacity",
+                      isActive ? "opacity-100 bg-primary/80" : "opacity-0",
                     ].join(" ")}
-                  >
-                    {label}
-                  </span>
+                  />
                 </Link>
               );
             })}
