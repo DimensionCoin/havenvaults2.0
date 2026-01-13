@@ -16,7 +16,7 @@ const NotificationButton: React.FC = () => {
         onClick={() => setOpen(true)}
         className={[
           "inline-flex items-center justify-center",
-          "h-8 w-8 rounded-full",
+          "h-6 w-6 rounded-full",
           "border bg-card/80 backdrop-blur-xl",
           "shadow-fintech-sm",
           "transition-colors hover:bg-secondary",

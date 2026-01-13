@@ -8,7 +8,6 @@ import { usePathname } from "next/navigation";
 import { LineChart, Zap, ArrowDownUp, Layers } from "lucide-react";
 
 const navItems = [
-  // ✅ Order: Markets, Portfolio, Home, Bundles, Multiply
   { href: "/exchange", label: "Markets", Icon: ArrowDownUp, center: false },
   { href: "/invest", label: "Portfolio", Icon: LineChart, center: false },
   { href: "/dashboard", label: "Home", Icon: null, center: true },
@@ -22,14 +21,16 @@ export default function BottomBar() {
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 z-50 md:hidden"
-      style={{
-        bottom: "calc(env(safe-area-inset-bottom) + 0px)",
-      }}
+      className="fixed inset-x-0 bottom-0 z-50 md:hidden"
     >
       <div className="mx-auto max-w-md px-3">
         {/* Clean, friendly pill */}
-        <div className="rounded-3xl border border-white/10 bg-background/85 backdrop-blur-xl shadow-lg shadow-black/20">
+        <div
+          className="rounded-3xl border border-white/10 bg-background/85 backdrop-blur-xl shadow-lg shadow-black/20"
+          style={{
+            marginBottom: "max(8px, env(safe-area-inset-bottom))",
+          }}
+        >
           <div className="relative grid grid-cols-5 items-end px-2 py-2">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
@@ -37,7 +38,6 @@ export default function BottomBar() {
                   ? pathname === href
                   : pathname.startsWith(href);
 
-              // ✅ Keep everything aligned by giving every item the same "slot"
               const slotCls = "flex flex-col items-center justify-end gap-1";
 
               const labelCls = [
@@ -45,11 +45,9 @@ export default function BottomBar() {
                 isActive ? "text-foreground" : "text-muted-foreground",
               ].join(" ");
 
-              // ✅ Icon button styles
               const baseBtn =
                 "grid place-items-center rounded-2xl border transition-all active:scale-[0.98]";
 
-              // Center button is the same baseline (no translate) so it doesn't float above others.
               const btnCls = center
                 ? [
                     baseBtn,
@@ -101,7 +99,6 @@ export default function BottomBar() {
 
                   <span className={labelCls}>{label}</span>
 
-                  {/* ✅ Tiny active indicator keeps it feeling "app-like" */}
                   <span
                     className={[
                       "mt-0.5 h-[3px] w-6 rounded-full transition-opacity",

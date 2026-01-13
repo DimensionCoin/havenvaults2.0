@@ -81,13 +81,14 @@ export const BUNDLES: BundleDef[] = [
   },
   {
     id: "digital-gold",
-    name: "Digital Gold",
+    name: "Digital commodity",
     subtitle: "BTC-dominant store of value play",
     risk: "low",
     kind: "crypto",
     allocations: [
-      { symbol: "BTC", weight: 70 },
-      { symbol: "ETH", weight: 30 },
+      { symbol: "BTC", weight: 50 },
+      { symbol: "ETH", weight: 20 },
+      { symbol: "GLDX", weight: 30 },
     ],
   },
   {
