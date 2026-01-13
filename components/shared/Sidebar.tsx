@@ -28,7 +28,7 @@ const navItems: NavItem[] = [
   { href: "/exchange", label: "Markets", Icon: ArrowDownUp, isHome: false },
   { href: "/invest", label: "Portfolio", Icon: LineChart, isHome: false },
   { href: "/bundles", label: "Bundles", Icon: Layers, isHome: false },
-  { href: "/amplify", label: "Multiply", Icon: Zap, isHome: false },
+  { href: "/amplify", label: "Amplify", Icon: Zap, isHome: false },
 ];
 
 const Sidebar: React.FC = () => {

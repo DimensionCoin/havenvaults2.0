@@ -12,7 +12,7 @@ const navItems = [
   { href: "/invest", label: "Portfolio", Icon: LineChart, center: false },
   { href: "/dashboard", label: "Home", Icon: null, center: true },
   { href: "/bundles", label: "Bundles", Icon: Layers, center: false },
-  { href: "/amplify", label: "Multiply", Icon: Zap, center: false },
+  { href: "/amplify", label: "Amplify", Icon: Zap, center: false },
 ];
 
 export default function BottomBar() {
