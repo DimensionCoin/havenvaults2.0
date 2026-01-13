@@ -153,6 +153,8 @@ export const ingestInternal = internalMutation({
 export const pollPyth = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (process.env.PYTH_POLL_ENABLED !== "true") return;
+
     const hermes = new HermesClient("https://hermes.pyth.network", {
       timeout: 20_000,
     });

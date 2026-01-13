@@ -3,7 +3,10 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// ✅ Poll Pyth every 3 seconds
-crons.interval("poll pyth prices", { seconds: 6 }, internal.prices.pollPyth);
+const PYTH_POLL_ENABLED = process.env.PYTH_POLL_ENABLED === "true";
+
+if (PYTH_POLL_ENABLED) {
+  crons.interval("poll pyth prices", { seconds: 4 }, internal.prices.pollPyth);
+}
 
 export default crons;
