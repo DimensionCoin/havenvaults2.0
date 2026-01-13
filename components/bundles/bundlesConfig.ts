@@ -55,19 +55,6 @@ export const BUNDLES: BundleDef[] = [
     ],
   },
   {
-    id: "defensive-dividend",
-    name: "Defensive Dividend",
-    subtitle: "Blue chips that pay you to hold",
-    risk: "low",
-    kind: "stocks",
-    allocations: [
-      { symbol: "JNJ", weight: 25 },
-      { symbol: "PG", weight: 25 },
-      { symbol: "KO", weight: 25 },
-      { symbol: "WMT", weight: 25 },
-    ],
-  },
-  {
     id: "golden-anchor",
     name: "Golden Anchor",
     subtitle: "Gold-heavy hedge against uncertainty",

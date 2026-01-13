@@ -285,17 +285,6 @@ export const TOKENS: TokenMeta[] = [
     mints: { mainnet: "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci" },
   },
   {
-    name: "Coca-Cola",
-    symbol: "KO",
-    id: "coca-cola-xstock",
-    logo: "/logos/ko.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ" },
-  },
-  {
     name: "UnitedHealth",
     symbol: "UNH",
     id: "unitedhealth-xstock",
