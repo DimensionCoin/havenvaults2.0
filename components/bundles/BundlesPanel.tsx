@@ -22,15 +22,12 @@ import {
   Sliders,
   Lock,
   Unlock,
+  Minus,
+  Plus,
+  Check,
 } from "lucide-react";
 
-import {
-  BUNDLES,
-  type RiskLevel,
-  type TokenAllocation,
-  getBundleSymbols,
-  normalizeWeights,
-} from "./bundlesConfig";
+import { BUNDLES, type RiskLevel, type TokenAllocation } from "./bundlesConfig";
 import { findTokenBySymbol, requireMintBySymbol } from "@/lib/tokenConfig";
 import { useBalance } from "@/providers/BalanceProvider";
 import { useBundleSwap } from "@/hooks/useBundleSwap";
@@ -106,29 +103,24 @@ function redistributeWeights(
   const result = [...allocations];
   const clampedWeight = Math.max(0, Math.min(100, newWeight));
 
-  // Set the new weight
   result[changedIndex] = { ...result[changedIndex], weight: clampedWeight };
 
-  // Calculate how much we need to adjust
   const totalAfterChange = result.reduce((sum, a) => sum + a.weight, 0);
   const excess = totalAfterChange - 100;
 
   if (Math.abs(excess) < 0.01) return result;
 
-  // Find unlocked items (excluding the changed one)
   const unlocked = result
     .map((a, i) => ({ ...a, index: i }))
     .filter((a, i) => !a.locked && i !== changedIndex);
 
   if (unlocked.length === 0) {
-    // If all others are locked, just normalize
     return result.map((a) => ({
       ...a,
       weight: (a.weight / totalAfterChange) * 100,
     }));
   }
 
-  // Distribute the excess proportionally among unlocked items
   const unlockedTotal = unlocked.reduce((sum, a) => sum + a.weight, 0);
 
   unlocked.forEach((item) => {
@@ -139,7 +131,6 @@ function redistributeWeights(
     result[item.index] = { ...result[item.index], weight: newVal };
   });
 
-  // Final normalization to ensure exactly 100%
   const finalTotal = result.reduce((sum, a) => sum + a.weight, 0);
   if (Math.abs(finalTotal - 100) > 0.01) {
     return result.map((a) => ({
@@ -155,7 +146,6 @@ function redistributeWeights(
    STYLED COMPONENTS
 ═══════════════════════════════════════════════════════════════════════════ */
 
-// Risk badge using Haven theme
 function RiskBadge({ risk }: { risk: RiskLevel }) {
   const styles = {
     low: "bg-primary/10 text-primary border-primary/20",
@@ -176,7 +166,6 @@ function RiskBadge({ risk }: { risk: RiskLevel }) {
   );
 }
 
-// Token stack for bundle cards
 function TokenStack({
   allocations,
   size = "md",
@@ -227,8 +216,11 @@ function TokenStack({
   );
 }
 
-// Weight editor row
-function WeightEditorRow({
+/* ═══════════════════════════════════════════════════════════════════════════
+   MOBILE-FIRST WEIGHT EDITOR ROW
+═══════════════════════════════════════════════════════════════════════════ */
+
+function MobileWeightEditorRow({
   allocation,
   index,
   totalAmount,
@@ -247,107 +239,153 @@ function WeightEditorRow({
 }) {
   const meta = findTokenBySymbol(allocation.symbol);
   const amount = (totalAmount * allocation.weight) / 100;
+  const weight = Math.round(allocation.weight);
+
+  // Increment/decrement by 5% for easier mobile use
+  const increment = () => {
+    if (!allocation.locked) {
+      onWeightChange(index, Math.min(100, allocation.weight + 5));
+    }
+  };
+
+  const decrement = () => {
+    if (!allocation.locked) {
+      onWeightChange(index, Math.max(0, allocation.weight - 5));
+    }
+  };
 
   return (
     <div
       className={`
-        flex items-center gap-3 py-3 px-3 rounded-xl transition-all duration-200
-        ${isEditing ? "bg-secondary/50" : ""}
-        border-b border-border last:border-0
+        rounded-2xl border transition-all duration-200 overflow-hidden
+        ${
+          isEditing
+            ? allocation.locked
+              ? "bg-secondary/30 border-border"
+              : "bg-card border-primary/20"
+            : "bg-card border-border"
+        }
       `}
     >
-      {/* Token info */}
-      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-secondary ring-1 ring-border">
-        <Image
-          src={meta?.logo || "/placeholder.svg"}
-          alt={allocation.symbol}
-          fill
-          className="object-cover"
-        />
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-sm font-medium text-foreground truncate">
-            {allocation.symbol}
-          </p>
-          <div className="flex items-center gap-2">
-            {isEditing && (
-              <button
-                type="button"
-                onClick={() => onLockToggle(index)}
-                className={`
-                  p-1 rounded-md transition-colors
-                  ${
-                    allocation.locked
-                      ? "text-primary bg-primary/10"
-                      : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-                  }
-                `}
-                title={allocation.locked ? "Unlock weight" : "Lock weight"}
-              >
-                {allocation.locked ? (
-                  <Lock className="h-3.5 w-3.5" />
-                ) : (
-                  <Unlock className="h-3.5 w-3.5" />
-                )}
-              </button>
-            )}
-            <span className="text-sm font-semibold text-foreground tabular-nums w-12 text-right">
-              {allocation.weight.toFixed(0)}%
-            </span>
-          </div>
+      <div className="flex items-center gap-3 p-3">
+        {/* Token icon */}
+        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full bg-secondary ring-2 ring-border">
+          <Image
+            src={meta?.logo || "/placeholder.svg"}
+            alt={allocation.symbol}
+            fill
+            className="object-cover"
+          />
         </div>
 
-        {/* Weight slider */}
+        {/* Token info */}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">
+            {allocation.symbol}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {formatMoney(amount, currency)}
+          </p>
+        </div>
+
+        {/* Weight display / controls */}
         {isEditing ? (
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={allocation.weight}
-              onChange={(e) => onWeightChange(index, Number(e.target.value))}
-              disabled={allocation.locked}
+          <div className="flex items-center gap-1">
+            {/* Lock button */}
+            <button
+              type="button"
+              onClick={() => onLockToggle(index)}
               className={`
-                flex-1 h-1.5 rounded-full appearance-none cursor-pointer
-                bg-border accent-primary
-                [&::-webkit-slider-thumb]:appearance-none
-                [&::-webkit-slider-thumb]:h-4
-                [&::-webkit-slider-thumb]:w-4
-                [&::-webkit-slider-thumb]:rounded-full
-                [&::-webkit-slider-thumb]:bg-primary
-                [&::-webkit-slider-thumb]:shadow-sm
-                [&::-webkit-slider-thumb]:cursor-pointer
-                [&::-webkit-slider-thumb]:transition-transform
-                [&::-webkit-slider-thumb]:hover:scale-110
-                ${allocation.locked ? "opacity-50 cursor-not-allowed" : ""}
+                h-10 w-10 flex items-center justify-center rounded-xl
+                transition-all duration-200 active:scale-95
+                ${
+                  allocation.locked
+                    ? "bg-primary/15 text-primary"
+                    : "bg-secondary text-muted-foreground"
+                }
               `}
-            />
-            <span className="text-xs text-muted-foreground tabular-nums w-16 text-right">
-              {formatMoney(amount, currency)}
-            </span>
+            >
+              {allocation.locked ? (
+                <Lock className="h-4 w-4" />
+              ) : (
+                <Unlock className="h-4 w-4" />
+              )}
+            </button>
+
+            {/* Stepper controls */}
+            <div
+              className={`
+              flex items-center rounded-xl border overflow-hidden
+              ${allocation.locked ? "opacity-50" : ""}
+              ${allocation.locked ? "border-border" : "border-primary/30 bg-primary/5"}
+            `}
+            >
+              <button
+                type="button"
+                onClick={decrement}
+                disabled={allocation.locked || weight <= 0}
+                className={`
+                  h-10 w-10 flex items-center justify-center
+                  transition-all duration-150 active:scale-90 active:bg-primary/20
+                  ${
+                    allocation.locked || weight <= 0
+                      ? "text-muted-foreground/40 cursor-not-allowed"
+                      : "text-foreground hover:bg-primary/10"
+                  }
+                `}
+              >
+                <Minus className="h-4 w-4" />
+              </button>
+
+              <span className="w-12 text-center text-sm font-bold tabular-nums text-foreground">
+                {weight}%
+              </span>
+
+              <button
+                type="button"
+                onClick={increment}
+                disabled={allocation.locked || weight >= 100}
+                className={`
+                  h-10 w-10 flex items-center justify-center
+                  transition-all duration-150 active:scale-90 active:bg-primary/20
+                  ${
+                    allocation.locked || weight >= 100
+                      ? "text-muted-foreground/40 cursor-not-allowed"
+                      : "text-foreground hover:bg-primary/10"
+                  }
+                `}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
-              <div
-                className="h-full bg-primary/60 rounded-full transition-all duration-300"
-                style={{ width: `${allocation.weight}%` }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground tabular-nums ml-3">
-              {formatMoney(amount, currency)}
-            </span>
+          <div className="text-right">
+            <p className="text-base font-bold tabular-nums text-foreground">
+              {weight}%
+            </p>
           </div>
         )}
+      </div>
+
+      {/* Progress bar - always visible */}
+      <div className="h-1.5 w-full bg-secondary/50">
+        <div
+          className={`
+            h-full transition-all duration-300 rounded-r-full
+            ${allocation.locked ? "bg-muted-foreground/40" : "bg-primary"}
+          `}
+          style={{ width: `${allocation.weight}%` }}
+        />
       </div>
     </div>
   );
 }
 
-// Execution step indicator
+/* ═══════════════════════════════════════════════════════════════════════════
+   EXECUTION STEP
+═══════════════════════════════════════════════════════════════════════════ */
+
 function ExecutionStep({
   item,
   isActive,
@@ -571,7 +609,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
     const totalUsd = amountNumber / (fxRate || 1);
 
-    // Use custom allocations with weights
     const swaps = customAllocations.map((allocation) => ({
       symbol: allocation.symbol,
       outputMint: requireMintBySymbol(allocation.symbol),
@@ -601,60 +638,62 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     return () => window.removeEventListener("keydown", handleEsc);
   }, [open, closeModal]);
 
-  // Quick amount presets
   const presets = [25, 50, 100, 250];
+
+  const totalWeight = customAllocations.reduce((s, a) => s + a.weight, 0);
+  const isWeightValid = Math.abs(totalWeight - 100) < 0.5;
 
   return (
     <>
       {/* ═══════════════ Header Section ═══════════════ */}
-      <div className="haven-glass p-6">
+      <div className="haven-glass p-4 sm:p-6">
         <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 glow-mint">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 glow-mint">
               <Layers className="h-5 w-5 text-primary" />
             </div>
             <div>
               <p className="haven-kicker">Bundles</p>
-              <h2 className="text-lg font-semibold text-foreground tracking-tight">
+              <h2 className="text-base sm:text-lg font-semibold text-foreground tracking-tight">
                 1-Click Portfolios
               </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Smart weighted portfolios, fully customizable
+              <p className="text-[11px] sm:text-xs text-muted-foreground mt-0.5">
+                Smart weighted, fully customizable
               </p>
             </div>
           </div>
 
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
               Available
             </p>
-            <p className="text-base font-semibold text-foreground tabular-nums">
+            <p className="text-sm sm:text-base font-semibold text-foreground tabular-nums">
               {formatMoney(availableBalance, displayCurrency)}
             </p>
           </div>
         </div>
 
         {/* Search Bar */}
-        <div className="relative mt-5">
+        <div className="relative mt-4 sm:mt-5">
           <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search portfolios or tokens..."
+            placeholder="Search portfolios..."
             className="haven-input pl-11"
           />
         </div>
 
-        {/* Risk Filters */}
-        <div className="flex gap-2 mt-4 overflow-x-auto pb-1">
+        {/* Risk Filters - horizontal scroll on mobile */}
+        <div className="flex gap-2 mt-3 sm:mt-4 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 no-scrollbar">
           {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
             <button
               key={risk}
               type="button"
               onClick={() => setSelectedRiskFilter(risk)}
               className={`
-                shrink-0 px-4 py-2 rounded-full text-xs font-medium transition-all duration-200 border
+                shrink-0 px-3 sm:px-4 py-2 rounded-full text-xs font-medium transition-all duration-200 border
                 ${
                   selectedRiskFilter === risk
                     ? "bg-primary/15 text-primary border-primary/25"
@@ -663,7 +702,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
               `}
             >
               {risk === "all"
-                ? "All Portfolios"
+                ? "All"
                 : risk.charAt(0).toUpperCase() + risk.slice(1)}
             </button>
           ))}
@@ -671,7 +710,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
       </div>
 
       {/* ═══════════════ Bundle Cards ═══════════════ */}
-      <div className="mt-4 grid gap-3">
+      <div className="mt-3 sm:mt-4 grid gap-3">
         {filteredBundles.length === 0 ? (
           <div className="haven-card p-8 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary mx-auto mb-3">
@@ -687,7 +726,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
         ) : (
           filteredBundles.map((b) => {
             const Icon = getRiskIcon(b.risk);
-            // Show top 3 weights as preview
             const topWeights = [...b.allocations]
               .sort((a, b) => b.weight - a.weight)
               .slice(0, 3);
@@ -698,17 +736,18 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 type="button"
                 onClick={() => openBundle(b.id)}
                 className="
-                  haven-row group w-full text-left p-4
+                  haven-row group w-full text-left p-3 sm:p-4
                   transition-all duration-300 
                   hover:shadow-fintech-md hover:border-primary/20
+                  active:scale-[0.99]
                 "
               >
-                <div className="flex items-start justify-between gap-4 w-full">
+                <div className="flex items-start justify-between gap-3 sm:gap-4 w-full">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-3">
+                    <div className="flex items-center gap-2.5 sm:gap-3 mb-2 sm:mb-3">
                       <div
                         className={`
-                        flex h-10 w-10 items-center justify-center rounded-2xl border
+                        flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl sm:rounded-2xl border
                         ${
                           b.risk === "low"
                             ? "bg-primary/10 border-primary/20"
@@ -734,22 +773,22 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                         `}
                         />
                       </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors truncate">
                           {b.name}
                         </h3>
-                        <p className="text-xs text-muted-foreground">
-                          {b.allocations.length} assets • Smart weighted
+                        <p className="text-[11px] text-muted-foreground">
+                          {b.allocations.length} assets
                         </p>
                       </div>
                     </div>
 
-                    <p className="text-xs text-muted-foreground mb-3 line-clamp-2">
+                    <p className="text-xs text-muted-foreground mb-2.5 sm:mb-3 line-clamp-2">
                       {b.subtitle}
                     </p>
 
                     {/* Weight preview badges */}
-                    <div className="flex flex-wrap gap-1.5 mb-3">
+                    <div className="flex flex-wrap gap-1.5 mb-2.5 sm:mb-3">
                       {topWeights.map((a) => (
                         <span
                           key={a.symbol}
@@ -761,7 +800,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       ))}
                       {b.allocations.length > 3 && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-secondary/80 text-[10px] text-muted-foreground">
-                          +{b.allocations.length - 3} more
+                          +{b.allocations.length - 3}
                         </span>
                       )}
                     </div>
@@ -772,7 +811,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     </div>
                   </div>
 
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-all duration-300">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-all duration-300 shrink-0">
                     <ChevronRight className="h-4 w-4" />
                   </div>
                 </div>
@@ -796,6 +835,11 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none
             max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0
           "
+          style={{
+            // Prevent horizontal scroll
+            overflowX: "hidden",
+            touchAction: "pan-y pinch-zoom",
+          }}
         >
           {/* Progress bar */}
           {bundle.state.items.length > 0 && (
@@ -807,15 +851,15 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             </div>
           )}
 
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Modal Header */}
-            <div className="shrink-0 px-5 pt-5 pb-4 border-b border-border">
+            <div className="shrink-0 px-4 sm:px-5 pt-4 sm:pt-5 pb-3 sm:pb-4 border-b border-border">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   {selected && (
                     <div
                       className={`
-                      flex h-11 w-11 items-center justify-center rounded-2xl border
+                      flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl sm:rounded-2xl border
                       ${
                         selected.risk === "low"
                           ? "bg-primary/10 border-primary/20"
@@ -828,7 +872,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     `}
                     >
                       {React.createElement(getRiskIcon(selected.risk), {
-                        className: `h-5 w-5 ${
+                        className: `h-4 w-4 sm:h-5 sm:w-5 ${
                           selected.risk === "low"
                             ? "text-primary"
                             : selected.risk === "medium"
@@ -844,11 +888,11 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     <DialogTitle className="text-base font-semibold text-foreground">
                       {selected?.name ?? "Portfolio"}
                     </DialogTitle>
-                    <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    <DialogDescription className="text-[11px] sm:text-xs text-muted-foreground mt-0.5">
                       {selected?.allocations.length ?? 0} assets •{" "}
                       {riskLabel(selected?.risk as RiskLevel)}
                       {hasCustomWeights && (
-                        <span className="ml-2 text-primary">• Customized</span>
+                        <span className="ml-1.5 text-primary">• Custom</span>
                       )}
                     </DialogDescription>
                   </div>
@@ -857,7 +901,13 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             </div>
 
             {/* Scrollable Content */}
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4">
+            <div
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-5 py-4"
+              style={{
+                overflowX: "hidden",
+                touchAction: "pan-y",
+              }}
+            >
               {/* Amount Input - shown in idle phase */}
               {bundle.state.phase === "idle" && (
                 <div className="haven-card-soft p-4 mb-4">
@@ -866,7 +916,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                   </label>
 
                   <div className="flex items-baseline gap-2 mb-4">
-                    <span className="text-lg font-medium text-muted-foreground">
+                    <span className="text-base sm:text-lg font-medium text-muted-foreground">
                       {displayCurrency}
                     </span>
                     <input
@@ -878,24 +928,25 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       }
                       placeholder="0.00"
                       className="
-                        flex-1 bg-transparent text-3xl font-semibold text-foreground 
+                        flex-1 bg-transparent text-2xl sm:text-3xl font-semibold text-foreground 
                         outline-none placeholder:text-muted-foreground/40 tabular-nums
+                        min-w-0
                       "
                     />
                   </div>
 
-                  {/* Quick Presets */}
-                  <div className="flex gap-2 mb-4">
+                  {/* Quick Presets - grid on mobile */}
+                  <div className="grid grid-cols-5 gap-2 mb-4">
                     {presets.map((preset) => (
                       <button
                         key={preset}
                         type="button"
                         onClick={() => setAmountDisplay(preset.toString())}
                         className="
-                          flex-1 py-2 rounded-xl text-xs font-medium
+                          py-2.5 rounded-xl text-xs font-medium
                           bg-secondary border border-border text-muted-foreground
                           hover:bg-accent hover:text-foreground hover:border-primary/20
-                          transition-all duration-200
+                          active:scale-95 transition-all duration-200
                         "
                       >
                         ${preset}
@@ -906,7 +957,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       onClick={() =>
                         setAmountDisplay(availableBalance.toFixed(2))
                       }
-                      className="haven-pill haven-pill-positive hover:bg-primary/15 transition-all duration-200"
+                      className="haven-pill haven-pill-positive hover:bg-primary/15 active:scale-95 transition-all duration-200 py-2.5"
                     >
                       Max
                     </button>
@@ -923,30 +974,45 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 </div>
               )}
 
-              {/* Weight Editor */}
+              {/* Weight Editor - Mobile First */}
               {bundle.state.phase === "idle" &&
                 customAllocations.length > 0 && (
                   <div className="haven-card-soft p-4">
+                    {/* Header with toggle */}
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <PieChart className="h-4 w-4 text-muted-foreground" />
                         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Portfolio Weights
+                          Weights
+                        </span>
+                        {/* Total indicator */}
+                        <span
+                          className={`
+                          text-xs font-semibold tabular-nums px-2 py-0.5 rounded-full
+                          ${
+                            isWeightValid
+                              ? "bg-primary/10 text-primary"
+                              : "bg-destructive/10 text-destructive"
+                          }
+                        `}
+                        >
+                          {Math.round(totalWeight)}%
                         </span>
                       </div>
+
                       <div className="flex items-center gap-2">
                         {hasCustomWeights && (
                           <button
                             type="button"
                             onClick={resetToDefaults}
                             className="
-                            inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
+                            h-9 px-3 rounded-xl flex items-center gap-1.5
                             text-xs font-medium text-muted-foreground
-                            hover:bg-secondary hover:text-foreground
+                            hover:bg-secondary active:scale-95
                             transition-all duration-200
                           "
                           >
-                            <RotateCcw className="h-3 w-3" />
+                            <RotateCcw className="h-3.5 w-3.5" />
                             Reset
                           </button>
                         )}
@@ -954,37 +1020,46 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                           type="button"
                           onClick={() => setIsEditingWeights(!isEditingWeights)}
                           className={`
-                          inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                          text-xs font-medium transition-all duration-200
+                          h-9 px-3 rounded-xl flex items-center gap-1.5
+                          text-xs font-medium transition-all duration-200 active:scale-95
                           ${
                             isEditingWeights
-                              ? "bg-primary/15 text-primary border border-primary/25"
-                              : "bg-secondary text-muted-foreground hover:text-foreground border border-border"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-secondary text-muted-foreground border border-border"
                           }
                         `}
                         >
-                          <Sliders className="h-3 w-3" />
-                          {isEditingWeights ? "Done" : "Customize"}
+                          {isEditingWeights ? (
+                            <>
+                              <Check className="h-3.5 w-3.5" />
+                              Done
+                            </>
+                          ) : (
+                            <>
+                              <Sliders className="h-3.5 w-3.5" />
+                              Edit
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>
 
+                    {/* Editing tip */}
                     {isEditingWeights && (
-                      <div className="mb-3 p-3 rounded-xl bg-primary/5 border border-primary/10">
+                      <div className="mb-4 p-3 rounded-xl bg-primary/5 border border-primary/10">
                         <p className="text-xs text-muted-foreground">
-                          <span className="font-medium text-foreground">
-                            Tip:
-                          </span>{" "}
-                          Drag sliders to adjust weights. Lock{" "}
-                          <Lock className="inline h-3 w-3 mx-0.5" /> allocations
-                          you want to keep fixed.
+                          Use <Plus className="inline h-3 w-3 mx-0.5" /> /{" "}
+                          <Minus className="inline h-3 w-3 mx-0.5" /> to adjust
+                          by 5%. Tap <Lock className="inline h-3 w-3 mx-0.5" />{" "}
+                          to lock weights.
                         </p>
                       </div>
                     )}
 
-                    <div className="space-y-0">
+                    {/* Allocation rows */}
+                    <div className="space-y-2">
                       {customAllocations.map((allocation, index) => (
-                        <WeightEditorRow
+                        <MobileWeightEditorRow
                           key={allocation.symbol}
                           allocation={allocation}
                           index={index}
@@ -995,33 +1070,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                           isEditing={isEditingWeights}
                         />
                       ))}
-                    </div>
-
-                    {/* Total verification */}
-                    <div className="mt-4 pt-3 border-t border-border flex items-center justify-between">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Total Allocation
-                      </span>
-                      <span
-                        className={`
-                        text-sm font-semibold tabular-nums
-                        ${
-                          Math.abs(
-                            customAllocations.reduce(
-                              (s, a) => s + a.weight,
-                              0
-                            ) - 100
-                          ) < 0.1
-                            ? "text-primary"
-                            : "text-destructive"
-                        }
-                      `}
-                      >
-                        {customAllocations
-                          .reduce((s, a) => s + a.weight, 0)
-                          .toFixed(0)}
-                        %
-                      </span>
                     </div>
                   </div>
                 )}
@@ -1068,16 +1116,16 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                             purchases failed
                           </p>
                           <p className="text-xs text-amber-600/70 dark:text-amber-400/70 mt-1">
-                            You can retry the failed transactions below
+                            You can retry the failed transactions
                           </p>
                           <button
                             type="button"
                             onClick={handleRetry}
                             className="
-                              mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl
+                              mt-3 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
                               bg-amber-500/10 border border-amber-500/20
                               text-sm font-medium text-amber-600 dark:text-amber-400
-                              hover:bg-amber-500/20 hover:border-amber-500/30
+                              hover:bg-amber-500/20 active:scale-95
                               transition-all duration-200
                             "
                           >
@@ -1093,11 +1141,11 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             </div>
 
             {/* Footer CTA */}
-            <DialogFooter className="shrink-0 border-t border-border bg-card px-5 py-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+            <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-5 py-4 pb-[max(env(safe-area-inset-bottom),16px)]">
               {bundle.state.phase === "idle" && (
-                <p className="text-xs text-muted-foreground text-center mb-3">
+                <p className="text-[11px] text-muted-foreground text-center mb-3">
                   {hasCustomWeights ? "Custom weights" : "Smart weighted"} •
-                  Sequential execution • Network fees apply
+                  Sequential execution
                 </p>
               )}
 
