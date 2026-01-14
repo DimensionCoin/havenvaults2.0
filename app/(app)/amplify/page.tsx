@@ -238,8 +238,8 @@ export default function AmplifyPage() {
                   </div>
 
                   <div className="flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2">
-                    <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                    <span className="text-xs font-semibold text-amber-200">
+                    <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                    <span className="text-xs font-semibold text-foreground">
                       In Development
                     </span>
                   </div>
