@@ -427,32 +427,40 @@ const USDCAccountsCarousel: React.FC = () => {
         </div>
       </section>
 
-      {/* DESKTOP */}
-      <section className="hidden w-full gap-3 lg:flex">
-        <DepositAccountCard
-          loading={loading}
-          walletAddress={mainWallet}
-          balanceOverride={cashBalanceDisplay}
-          onDeposit={() => handleDepositClick("deposit")}
-          onWithdraw={() => handleWithdrawClick("deposit")}
-          onTransfer={() => handleTransferClick("deposit")}
-        />
-        <FlexSavingsAccountCard
-          account={flexAccount}
-          loading={loading}
-          displayCurrency={displayCurrency}
-          onDeposit={() => handleDepositClick("flex")}
-          onWithdraw={() => handleWithdrawClick("flex")}
-          onOpenAccount={() => handleOpenAccountClick("flex")}
-        />
-        <PlusSavingsAccountCard
-          account={plusAccount}
-          loading={loading}
-          displayCurrency={displayCurrency}
-          onDeposit={() => handleDepositClick("plus")}
-          onWithdraw={() => handleWithdrawClick("plus")}
-          onOpenAccount={() => handleOpenAccountClick("plus")}
-        />
+      {/* DESKTOP (equal width + equal height) */}
+      <section className="hidden w-full gap-3 lg:flex lg:items-stretch">
+        <div className="flex-1 min-w-0 h-full">
+          <DepositAccountCard
+            loading={loading}
+            walletAddress={mainWallet}
+            balanceOverride={cashBalanceDisplay}
+            onDeposit={() => handleDepositClick("deposit")}
+            onWithdraw={() => handleWithdrawClick("deposit")}
+            onTransfer={() => handleTransferClick("deposit")}
+          />
+        </div>
+
+        <div className="flex-1 min-w-0 h-full">
+          <FlexSavingsAccountCard
+            account={flexAccount}
+            loading={loading}
+            displayCurrency={displayCurrency}
+            onDeposit={() => handleDepositClick("flex")}
+            onWithdraw={() => handleWithdrawClick("flex")}
+            onOpenAccount={() => handleOpenAccountClick("flex")}
+          />
+        </div>
+
+        <div className="flex-1 min-w-0 h-full">
+          <PlusSavingsAccountCard
+            account={plusAccount}
+            loading={loading}
+            displayCurrency={displayCurrency}
+            onDeposit={() => handleDepositClick("plus")}
+            onWithdraw={() => handleWithdrawClick("plus")}
+            onOpenAccount={() => handleOpenAccountClick("plus")}
+          />
+        </div>
       </section>
     </>
   );

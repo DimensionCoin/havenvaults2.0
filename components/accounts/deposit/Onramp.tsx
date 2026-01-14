@@ -32,7 +32,6 @@ type Props = {
 };
 
 // Supported fiat currencies by Coinbase Onramp
-// https://docs.cdp.coinbase.com/onramp-&-offramp/onramp-apis/countries-&-currencies
 const SUPPORTED_FIAT_CURRENCIES = [
   "USD",
   "EUR",
@@ -44,7 +43,6 @@ const SUPPORTED_FIAT_CURRENCIES = [
   "SGD",
   "BRL",
   "MXN",
-  // Add more as needed
 ];
 
 function sanitizeAmount(input: string) {
@@ -68,9 +66,6 @@ function isProbablySolanaAddress(addr: string) {
   return /^[1-9A-HJ-NP-Za-km-z]+$/.test(a);
 }
 
-/**
- * Detect if user is on mobile device
- */
 function isMobileDevice(): boolean {
   if (typeof window === "undefined") return false;
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
@@ -78,24 +73,17 @@ function isMobileDevice(): boolean {
   );
 }
 
-/**
- * Open checkout URL with optimal UX per platform
- */
 function openCheckout(
   url: string,
-  options: {
-    onPopupClosed?: () => void;
-  }
+  options: { onPopupClosed?: () => void }
 ): { type: "popup" | "redirect" | "iframe"; cleanup?: () => void } {
   const mobile = isMobileDevice();
 
-  // Mobile: Always redirect in same tab (popups don't work well)
   if (mobile) {
     window.location.assign(url);
     return { type: "redirect" };
   }
 
-  // Desktop: Try to open a centered popup window
   const width = 500;
   const height = 700;
   const left = Math.max(0, (window.screen.width - width) / 2);
@@ -108,7 +96,6 @@ function openCheckout(
   );
 
   if (popup) {
-    // Poll to detect when popup is closed
     const pollInterval = setInterval(() => {
       if (popup.closed) {
         clearInterval(pollInterval);
@@ -116,7 +103,6 @@ function openCheckout(
       }
     }, 500);
 
-    // Focus the popup
     popup.focus();
 
     return {
@@ -128,14 +114,10 @@ function openCheckout(
     };
   }
 
-  // Popup blocked - fallback to same tab redirect
   window.location.assign(url);
   return { type: "redirect" };
 }
 
-/**
- * Format currency symbol for display
- */
 function getCurrencySymbol(currency: string): string {
   const symbols: Record<string, string> = {
     USD: "$",
@@ -152,12 +134,53 @@ function getCurrencySymbol(currency: string): string {
   return symbols[currency] || currency;
 }
 
-/** Hide full address (UI only) */
+/** UI-only: hide full address */
 function maskAccountId(id?: string) {
   const a = (id || "").trim();
   if (!a) return "Primary account";
   if (a.length <= 10) return a;
   return `${a.slice(0, 4)}••••${a.slice(-4)}`;
+}
+
+/**
+ * Robust country normalization:
+ * - Accepts "CA", "Canada", "canada", etc.
+ * - Returns ISO2 (e.g., "CA") or undefined (omit country param)
+ */
+function normalizeCountryISO2(input?: string | null): string | undefined {
+  const raw = (input || "").trim();
+  if (!raw) return undefined;
+
+  const upper = raw.toUpperCase();
+
+  // Already ISO2
+  if (/^[A-Z]{2}$/.test(upper)) return upper;
+
+  // Common names → ISO2
+  const map: Record<string, string> = {
+    CANADA: "CA",
+    "UNITED STATES": "US",
+    USA: "US",
+    "UNITED KINGDOM": "GB",
+    UK: "GB",
+    ENGLAND: "GB",
+    FRANCE: "FR",
+    GERMANY: "DE",
+    SPAIN: "ES",
+    ITALY: "IT",
+    NETHERLANDS: "NL",
+    AUSTRALIA: "AU",
+    JAPAN: "JP",
+    SINGAPORE: "SG",
+    SWITZERLAND: "CH",
+    MEXICO: "MX",
+    BRAZIL: "BR",
+  };
+
+  if (map[upper]) return map[upper];
+
+  // Unknown format → omit param (most robust)
+  return undefined;
 }
 
 export default function Onramp({
@@ -178,7 +201,6 @@ export default function Onramp({
     return (destinationAddress || user?.walletAddress || "").trim();
   }, [destinationAddress, user?.walletAddress]);
 
-  // Determine the payment currency - use user's displayCurrency if supported, else USD
   const paymentCurrency = useMemo(() => {
     const userCurrency = (
       displayCurrency ||
@@ -186,9 +208,7 @@ export default function Onramp({
       "USD"
     ).toUpperCase();
 
-    if (SUPPORTED_FIAT_CURRENCIES.includes(userCurrency)) {
-      return userCurrency;
-    }
+    if (SUPPORTED_FIAT_CURRENCIES.includes(userCurrency)) return userCurrency;
 
     console.warn(
       `[Onramp] Currency ${userCurrency} not supported by Coinbase, falling back to USD`
@@ -212,7 +232,6 @@ export default function Onramp({
     return to2(n);
   }, [amountDisplay]);
 
-  // Sandbox mode: explicitly set or default based on environment
   const isSandbox = sandbox ?? process.env.NODE_ENV !== "production";
 
   const canSubmit = useMemo(() => {
@@ -224,7 +243,6 @@ export default function Onramp({
 
   const getRedirectUrl = useCallback(() => {
     if (redirectUrl) return redirectUrl;
-
     if (typeof window === "undefined") return undefined;
 
     const url = new URL(window.location.href);
@@ -268,6 +286,10 @@ export default function Onramp({
     if (!approved) return setErr("Please approve to continue.");
 
     setLoading(true);
+
+    // ✅ robust: send ISO2 country if we can, otherwise omit entirely
+    const countryISO2 = normalizeCountryISO2(user?.country);
+
     try {
       const res = await fetch("/api/onramp/session", {
         method: "POST",
@@ -282,7 +304,9 @@ export default function Onramp({
           redirectUrl: getRedirectUrl(),
           partnerUserRef: user?.id ? `user-${user.id}` : "user-unknown",
           sandbox: isSandbox,
-          country: user?.country || undefined,
+
+          // ✅ IMPORTANT: "CA" not "Canada" (or omit if unknown)
+          ...(countryISO2 ? { country: countryISO2 } : {}),
         }),
       });
 
@@ -290,9 +314,7 @@ export default function Onramp({
         error?: string;
         onrampUrl?: string;
         sandbox?: boolean;
-        sessionToken?: string;
         sent?: unknown;
-        quote?: unknown;
         coinbase?: { errorMessage?: string };
       };
 
@@ -311,26 +333,16 @@ export default function Onramp({
         console.log("[Onramp] Sandbox:", data?.sandbox);
         console.log("[Onramp] Payment currency:", paymentCurrency);
         console.log("[Onramp] Payment amount:", paymentAmountStr);
-        console.log("[Onramp] sessionToken:", data?.sessionToken);
+        console.log("[Onramp] countryISO2:", countryISO2 || "(omitted)");
         console.log("[Onramp] sent payload:", data?.sent);
         console.log("[Onramp] checkout url:", url);
-        console.log("[Onramp] redirect url:", getRedirectUrl());
-        if (data?.quote) {
-          console.log("[Onramp] Quote:", data.quote);
-        }
       }
 
-      const result = openCheckout(url, {
-        onPopupClosed: handlePopupClosed,
-      });
-
+      const result = openCheckout(url, { onPopupClosed: handlePopupClosed });
       checkoutRef.current = result;
 
-      if (result.type === "popup") {
-        setCheckoutOpen(true);
-      } else {
-        setLoading(false);
-      }
+      if (result.type === "popup") setCheckoutOpen(true);
+      else setLoading(false);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "";
       setErr(message || "Failed to start checkout.");
@@ -404,7 +416,7 @@ export default function Onramp({
         </div>
       </div>
 
-      {/* Simple “bank-like” card */}
+      {/* Bank-like “card payment” box */}
       <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
         <div className="text-xs font-medium text-white/60">
           Deposit to account
@@ -412,7 +424,8 @@ export default function Onramp({
         <div className="mt-1 text-sm text-white/85">
           {maskAccountId(toAddress)}
         </div>
-        <div className="mt-2 h-px bg-white/10" />
+
+        <div className="mt-3 h-px bg-white/10" />
 
         <div className="mt-3">
           <div className="text-xs font-medium text-white/60">Amount</div>
@@ -449,7 +462,7 @@ export default function Onramp({
         </div>
       </div>
 
-      {/* Consent (no crypto language, no “converted”, no currency emphasis) */}
+      {/* Consent */}
       <label className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-4">
         <input
           type="checkbox"
@@ -491,12 +504,43 @@ export default function Onramp({
         {loading ? "Opening checkout…" : "Continue"}
       </button>
 
-      {/* Small, bank-y footnote */}
       <div className="mt-3 text-[11px] text-white/45">
         Secure checkout. You’ll be redirected to complete your payment.
       </div>
 
-      
+      {/* Dev-only preview unchanged, but shows normalized country */}
+      {process.env.NODE_ENV !== "production" && (
+        <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3 text-[11px] text-white/60">
+          <div className="font-semibold text-white/75 mb-1">
+            Dev: params preview
+          </div>
+          <div>destinationAddress: {toAddress || "—"}</div>
+          <div>destinationNetwork: solana</div>
+          <div>purchaseCurrency: USDC</div>
+          <div>
+            paymentCurrency:{" "}
+            <span className="text-emerald-300">{paymentCurrency}</span>
+          </div>
+          <div>paymentAmount: {paymentAmountStr || "—"}</div>
+          <div>
+            country: {normalizeCountryISO2(user?.country) || "(omitted)"}
+          </div>
+          <div>
+            partnerUserRef: {user?.id ? `user-${user.id}` : "user-unknown"}{" "}
+            {isSandbox ? "(sandbox- prefixed server-side)" : ""}
+          </div>
+          <div className="break-all">
+            redirectUrl: {getRedirectUrl() || "—"}
+          </div>
+          <div>platform: {isMobileDevice() ? "mobile" : "desktop"}</div>
+          <div>
+            mode:{" "}
+            <span className={isSandbox ? "text-amber-300" : "text-emerald-300"}>
+              {isSandbox ? "SANDBOX" : "PRODUCTION"}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

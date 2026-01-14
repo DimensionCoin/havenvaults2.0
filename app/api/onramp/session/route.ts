@@ -5,17 +5,17 @@ import { generateJwt } from "@coinbase/cdp-sdk/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CDP_BASE = "https://api.cdp.coinbase.com/platform";
+// Create Onramp Session API - returns URL with params baked in
+const ONRAMP_SESSION_URL =
+  "https://api.cdp.coinbase.com/platform/v2/onramp/sessions";
+
 const API_KEY_ID = process.env.COINBASE_API_KEY_ID!;
 const API_KEY_SECRET = process.env.COINBASE_API_SECRET!;
 
-function json(status: number, body: unknown, headers?: Record<string, string>) {
+function json(status: number, body: unknown) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: {
-      "Content-Type": "application/json",
-      ...(headers ?? {}),
-    },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -36,24 +36,15 @@ function isProbablySolanaAddress(addr: string) {
   return /^[1-9A-HJ-NP-Za-km-z]+$/.test(a);
 }
 
-function isMoneyString(s: string) {
-  return /^[0-9]+(\.[0-9]{2})$/.test(s);
-}
-
-function extractSessionToken(onrampUrl: string): string | null {
+function toSandboxUrl(onrampUrl: string): string {
   try {
     const u = new URL(onrampUrl);
-    return u.searchParams.get("sessionToken");
+    u.host = "pay-sandbox.coinbase.com";
+    u.protocol = "https:";
+    return u.toString();
   } catch {
-    return null;
+    return onrampUrl;
   }
-}
-
-function toSandboxUrl(onrampUrl: string): string {
-  const u = new URL(onrampUrl);
-  u.host = "pay-sandbox.coinbase.com";
-  u.protocol = "https:";
-  return u.toString();
 }
 
 /**
@@ -61,24 +52,16 @@ function toSandboxUrl(onrampUrl: string): string {
  */
 function isPrivateIp(ip: string): boolean {
   if (!ip) return true;
-
-  // Localhost
   if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
 
-  // Private IPv4 ranges
   const parts = ip.split(".").map(Number);
   if (parts.length === 4) {
-    // 10.x.x.x
     if (parts[0] === 10) return true;
-    // 172.16.x.x - 172.31.x.x
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    // 192.168.x.x
     if (parts[0] === 192 && parts[1] === 168) return true;
-    // 169.254.x.x (link-local)
     if (parts[0] === 169 && parts[1] === 254) return true;
   }
 
-  // IPv6 private ranges (simplified check)
   if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80"))
     return true;
 
@@ -94,13 +77,6 @@ type Body = {
   redirectUrl?: string;
   partnerUserRef?: string;
   sandbox?: boolean;
-  paymentMethod?:
-    | "CARD"
-    | "ACH"
-    | "APPLE_PAY"
-    | "PAYPAL"
-    | "FIAT_WALLET"
-    | "CRYPTO_WALLET";
   country?: string;
   subdivision?: string;
 };
@@ -118,8 +94,8 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as Partial<Body>;
 
     const destinationAddress = (body.destinationAddress || "").trim();
-    const purchaseCurrency = (body.purchaseCurrency || "").trim();
-    const destinationNetwork = (body.destinationNetwork || "").trim();
+    const purchaseCurrency = (body.purchaseCurrency || "USDC").trim();
+    const destinationNetwork = (body.destinationNetwork || "solana").trim();
 
     const paymentCurrency = (body.paymentCurrency || "USD").trim();
     const paymentAmount = body.paymentAmount
@@ -140,6 +116,9 @@ export async function POST(req: NextRequest) {
         : `sandbox-${rawRef}`
       : rawRef;
 
+    // Country - default to CA for Canada, or use provided
+    const country = body.country || "CA";
+
     // --- validation ---
     if (!destinationAddress)
       return json(400, { error: "Missing destinationAddress" });
@@ -153,126 +132,130 @@ export async function POST(req: NextRequest) {
     }
     if (!purchaseCurrency)
       return json(400, { error: "Missing purchaseCurrency" });
-    if (!destinationNetwork)
-      return json(400, { error: "Missing destinationNetwork" });
+    if (!paymentAmount) return json(400, { error: "Missing paymentAmount" });
 
-    if (paymentAmount !== undefined) {
-      if (!isMoneyString(paymentAmount)) {
-        return json(400, {
-          error: 'Invalid paymentAmount. Must be a string like "100.00".',
-        });
-      }
-      const n = Number(paymentAmount);
-      if (!Number.isFinite(n) || n <= 0) {
-        return json(400, { error: "Invalid paymentAmount. Must be > 0." });
-      }
+    const amountNum = Number(paymentAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      return json(400, { error: "Invalid paymentAmount. Must be > 0." });
     }
 
-    // Build Coinbase payload
-    const payload: {
-      destinationAddress: string;
-      purchaseCurrency: string;
-      destinationNetwork: string;
-      partnerUserRef: string;
-      paymentCurrency?: string;
-      paymentAmount?: string;
-      redirectUrl?: string;
-      paymentMethod?: Body["paymentMethod"];
-      country?: string;
-      subdivision?: string;
-      clientIp?: string;
-    } = {
-      destinationAddress,
-      purchaseCurrency,
-      destinationNetwork,
-      partnerUserRef,
-    };
+    // Format amount
+    const formattedAmount = amountNum.toFixed(2);
 
-    if (paymentAmount !== undefined) {
-      payload.paymentCurrency = paymentCurrency || "USD";
-      payload.paymentAmount = paymentAmount;
-    }
-
-    if (redirectUrl) payload.redirectUrl = redirectUrl;
-
-    if (body.paymentMethod) payload.paymentMethod = body.paymentMethod;
-    if (body.country) payload.country = body.country;
-    if (body.subdivision) payload.subdivision = body.subdivision;
-
-    // Get client IP for the request (Coinbase recommends this for production)
-    // Only include if it's a valid public IP - private IPs are rejected
+    // Get client IP for the request
     const forwardedFor = req.headers
       .get("x-forwarded-for")
       ?.split(",")[0]
       ?.trim();
     const realIp = req.headers.get("x-real-ip");
     const clientIp = forwardedFor || realIp;
+    const safeClientIp =
+      clientIp && !isPrivateIp(clientIp) ? clientIp : undefined;
 
-    // Only add clientIp if it exists and is not a private/local IP
-    if (clientIp && !isPrivateIp(clientIp)) {
-      payload.clientIp = clientIp;
+    // Build the session payload for Create Onramp Session API
+    // This API returns a URL with all params baked in!
+    const sessionPayload: Record<string, unknown> = {
+      purchaseCurrency,
+      destinationNetwork,
+      destinationAddress,
+      paymentAmount: formattedAmount,
+      paymentCurrency,
+      paymentMethod: "CARD", // Force card payment
+      country,
+      partnerUserRef,
+    };
+
+    // Add optional fields
+    if (redirectUrl) {
+      sessionPayload.redirectUrl = redirectUrl;
+    }
+    if (safeClientIp) {
+      sessionPayload.clientIp = safeClientIp;
+    }
+    // Subdivision only required for US
+    if (country === "US" && body.subdivision) {
+      sessionPayload.subdivision = body.subdivision;
     }
 
-    // Generate JWT for authentication using the official CDP SDK
-    const requestPath = "/platform/v2/onramp/sessions";
+    // Generate JWT for the Create Onramp Session API
     const jwt = await generateJwt({
       apiKeyId: API_KEY_ID,
       apiKeySecret: API_KEY_SECRET,
       requestMethod: "POST",
       requestHost: "api.cdp.coinbase.com",
-      requestPath: requestPath,
+      requestPath: "/platform/v2/onramp/sessions",
       expiresIn: 120,
     });
 
-    const r = await fetch(`${CDP_BASE}/v2/onramp/sessions`, {
+    console.log(
+      "[Onramp] Calling Create Onramp Session API with:",
+      sessionPayload
+    );
+
+    const res = await fetch(ONRAMP_SESSION_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(sessionPayload),
       cache: "no-store",
     });
 
-    const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+    const responseText = await res.text();
+    let responseJson: Record<string, unknown>;
 
-    if (!r.ok) {
-      console.error("[Onramp] Coinbase API error:", j);
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch {
+      console.error("[Onramp] Failed to parse response:", responseText);
+      return json(500, {
+        error: "Invalid response from Coinbase API",
+        raw: responseText.slice(0, 500),
+      });
+    }
+
+    if (!res.ok) {
+      console.error("[Onramp] Create Onramp Session API error:", responseJson);
       const errorMessage =
-        getStringField(j, "errorMessage") ||
-        getStringField(j, "message") ||
-        "Coinbase session failed";
-      return json(r.status === 401 ? 401 : 400, {
+        getStringField(responseJson, "message") ||
+        getStringField(responseJson, "error") ||
+        "Failed to create onramp session";
+      return json(res.status === 401 ? 401 : 400, {
         error: errorMessage,
-        coinbase: j,
-        sent: process.env.NODE_ENV === "development" ? payload : undefined,
+        coinbase: responseJson,
+        sent:
+          process.env.NODE_ENV === "development" ? sessionPayload : undefined,
       });
     }
 
-    const session =
-      j.session && typeof j.session === "object"
-        ? (j.session as Record<string, unknown>)
-        : null;
-    const onrampUrl =
-      session && typeof session.onrampUrl === "string"
-        ? session.onrampUrl
-        : undefined;
+    // Extract the onramp URL from the response
+    // Response format: { session: { onrampUrl: "..." }, quote?: { ... } }
+    const session = responseJson.session as Record<string, unknown> | undefined;
+    const onrampUrl = getStringField(session || {}, "onrampUrl");
+
     if (!onrampUrl) {
+      console.error("[Onramp] No onrampUrl in response:", responseJson);
       return json(400, {
-        error: "Missing session.onrampUrl in Coinbase response",
-        coinbase: j,
+        error: "Missing onramp URL in Coinbase response",
+        coinbase: responseJson,
       });
     }
 
+    // Apply sandbox URL transformation if needed
     const finalUrl = sandbox ? toSandboxUrl(onrampUrl) : onrampUrl;
-    const sessionToken = extractSessionToken(onrampUrl);
+
+    console.log("[Onramp] Success! URL:", finalUrl);
+
+    // Also return quote info if available
+    const quote = responseJson.quote as Record<string, unknown> | undefined;
 
     return json(200, {
       onrampUrl: finalUrl,
-      sessionToken,
       sandbox,
-      quote: j.quote,
-      sent: process.env.NODE_ENV === "development" ? payload : undefined,
+      quote: quote || undefined,
+      // Debug info in development
+      sent: process.env.NODE_ENV === "development" ? sessionPayload : undefined,
     });
   } catch (e: unknown) {
     console.error("[Onramp] Server error:", e);
