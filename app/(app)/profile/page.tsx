@@ -5,7 +5,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
-import { LogoutButton } from "@/components/shared/LogoutButton";
 import ThemeToggle from "@/components/shared/ThemeToggle"; // ✅ add your existing ThemeToggle
 import {
   ArrowLeft,
@@ -16,7 +15,6 @@ import {
   Copy,
   Check,
   UserRound,
-  Settings,
   Link2,
   MailPlus,
   MoonStar,

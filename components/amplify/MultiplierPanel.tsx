@@ -9,7 +9,6 @@ import React, {
   useRef,
 } from "react";
 import {
-  ArrowUpRight,
   Loader2,
   CheckCircle2,
   XCircle,

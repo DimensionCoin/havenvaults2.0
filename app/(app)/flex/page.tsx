@@ -2,13 +2,15 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, RefreshCw, PiggyBank } from "lucide-react";
+import { ArrowLeft, ExternalLink, RefreshCw, PiggyBank } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 
 import DepositFlex from "@/components/accounts/flex/Deposit";
 import WithdrawFlex from "@/components/accounts/flex/Withdraw";
+
+import { useFlexInterestFromBalance } from "@/hooks/useFlexInterest";
 
 /* =========================
    CONSTANTS
@@ -17,27 +19,23 @@ import WithdrawFlex from "@/components/accounts/flex/Withdraw";
 const APY_URL = "/api/savings/flex/apy";
 const ACTIVITY_URL = "/api/savings/flex/activity";
 
+const EXPLORER_TX_BASE = "https://orbmarkets.io/tx/";
+const EXPLORER_ACCOUNT_BASE = "https://orbmarkets.io/address/";
+
 /* =========================
    TYPES
 ========================= */
 
 type DrawerMode = "deposit" | "withdraw" | null;
 
-// Keep the same TxRow shape used by the UI
 type TxRow = {
   signature: string;
   blockTime: number | null;
   status: "success" | "failed";
-
-  kind?: "transfer" | "swap";
-  direction?: "in" | "out" | "neutral";
-
+  kind?: "transfer";
+  direction?: "out" | "in";
   amountUsdc?: number | null;
-
-  counterparty?: string | null;
-  counterpartyLabel?: string | null;
-
-  source?: string | null;
+  source?: "onchain";
 };
 
 type ApyResponse = {
@@ -49,23 +47,19 @@ type ApyResponse = {
 
 type FxPayload = { rate?: number };
 
-// New DB-backed activity response
-type LedgerTx = {
+type OnchainTx = {
   id: string;
   signature: string;
   direction: "deposit" | "withdraw";
-  amountUsdc: number;
-  principalPart: number;
-  interestPart: number;
-  feeUsdc: number;
-  createdAt: string;
-  blockTime: number;
+  amountUsdc: number; // UI units
+  blockTime: number | null;
+  status: "success" | "failed";
 };
 
-type LedgerTxResponse = {
+type OnchainTxResponse = {
   ok?: boolean;
-  txs?: LedgerTx[];
-  nextCursor?: string | null;
+  txs?: OnchainTx[];
+  nextCursor?: string | null; // signature cursor
   exhausted?: boolean;
   error?: string;
 };
@@ -105,6 +99,10 @@ function formatCurrency(amount: number, currency: string) {
   }
 }
 
+function clamp0(n: number): number {
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 function SavingsAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center shrink-0">
@@ -114,23 +112,20 @@ function SavingsAvatar() {
 }
 
 /**
- * Map SavingsLedger row -> the existing TxRow the page already renders.
- * We keep kind="transfer" and direction "out" for deposit / "in" for withdraw
- * so your existing title logic stays identical.
+ * On-chain tx -> UI row
+ * deposit => direction "out"
+ * withdraw => direction "in"
  */
-function ledgerToTxRow(row: LedgerTx): TxRow {
+function onchainToTxRow(row: OnchainTx): TxRow {
   const isDeposit = row.direction === "deposit";
-
   return {
     signature: row.signature,
     blockTime: typeof row.blockTime === "number" ? row.blockTime : null,
-    status: "success",
+    status: row.status,
     kind: "transfer",
     direction: isDeposit ? "out" : "in",
     amountUsdc: row.amountUsdc ?? 0,
-    source: "ledger",
-    counterparty: null,
-    counterpartyLabel: null,
+    source: "onchain",
   };
 }
 
@@ -141,7 +136,12 @@ function ledgerToTxRow(row: LedgerTx): TxRow {
 export default function FlexAccountPage() {
   const router = useRouter();
   const { user, loading: userLoading, savingsFlex } = useUser();
-  const { loading: balanceLoading, savingsFlexUsd } = useBalance();
+
+  const {
+    loading: balanceLoading,
+    savingsFlexUsd, // already converted to display currency by provider
+    savingsFlexAmount, // on-chain USDC balance (UI)
+  } = useBalance();
 
   const walletAddress = user?.walletAddress || "";
 
@@ -249,7 +249,7 @@ export default function FlexAccountPage() {
     };
   }, [hasAccount]);
 
-  /* -------- Balance -------- */
+  /* -------- Balance (display currency) -------- */
   const effectiveBalance = useMemo(() => {
     const n = Number(savingsFlexUsd);
     return Number.isFinite(n) ? n : 0;
@@ -261,27 +261,39 @@ export default function FlexAccountPage() {
 
   const loading = userLoading || balanceLoading;
 
-  /* -------- Drawer (Deposit/Withdraw) -------- */
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
+  /* -------- On-chain balance in USDC (from provider, no API hit) -------- */
+  const onchainFlexUsdc = useMemo(() => {
+    const n = Number(savingsFlexAmount);
+    return Number.isFinite(n) ? n : 0;
+  }, [savingsFlexAmount]);
 
-  const openDrawer = (mode: Exclude<DrawerMode, null>) => {
-    setDrawerMode(mode);
-    setDrawerOpen(true);
-  };
+  /* -------- ✅ Interest (DB principal + provider onchain balance) -------- */
+  const {
+    loading: interestLoading,
+    principalNet,
+    unrealizedInterest,
+    // lifetimeInterestEarned,
+    // interestWithdrawn,
+    error: interestError,
+  } = useFlexInterestFromBalance({
+    enabled: hasAccount,
+    onchainBalanceUsdc: onchainFlexUsdc,
+  });
 
-  /* -------- Activity (paginate) -------- */
+  const interestEarnedDisplay = useMemo(() => {
+    // unrealizedInterest is USDC; convert to display currency with FX rate
+    return formatCurrency(unrealizedInterest * rate, displayCurrency);
+  }, [unrealizedInterest, rate, displayCurrency]);
+
+  /* -------- Activity (paginate) - ONCHAIN ONLY -------- */
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
-
-  // New cursor field from DB API
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
 
   const fetchTxsPage = useCallback(
     async (reset = false) => {
-      // keep the same guards/layout behavior
       if (!walletAddress) return;
       if (!linkedMarginfiPk) return;
 
@@ -294,7 +306,9 @@ export default function FlexAccountPage() {
             ? `&cursor=${encodeURIComponent(nextCursor)}`
             : "";
 
-        const url = `${ACTIVITY_URL}?limit=30${cursor}`;
+        const url = `${ACTIVITY_URL}?account=${encodeURIComponent(
+          linkedMarginfiPk
+        )}&limit=30${cursor}`;
 
         const res = await fetch(url, {
           method: "GET",
@@ -303,18 +317,17 @@ export default function FlexAccountPage() {
           headers: { Accept: "application/json" },
         });
 
-        const data = (await res.json().catch(() => ({}))) as LedgerTxResponse;
+        const data = (await res.json().catch(() => ({}))) as OnchainTxResponse;
 
         if (!res.ok || data?.ok === false) {
           throw new Error(data?.error || `Failed (${res.status})`);
         }
 
-        const pageLedger = Array.isArray(data?.txs) ? data.txs : [];
-        const page = pageLedger.map(ledgerToTxRow);
+        const pageOnchain = Array.isArray(data?.txs) ? data.txs : [];
+        const page = pageOnchain.map(onchainToTxRow);
 
         setTxs((prev) => {
           if (reset) return page;
-
           const seen = new Set(prev.map((p) => p.signature));
           const merged = [...prev];
           for (const row of page) {
@@ -329,10 +342,7 @@ export default function FlexAccountPage() {
             : null;
 
         setNextCursor(newCursor);
-
-        if (data?.exhausted === true || !newCursor) {
-          setExhausted(true);
-        }
+        if (data?.exhausted === true || !newCursor) setExhausted(true);
       } catch (e) {
         setTxError(e instanceof Error ? e.message : "Failed to load activity");
         if (reset) setTxs([]);
@@ -345,7 +355,7 @@ export default function FlexAccountPage() {
     [walletAddress, linkedMarginfiPk, nextCursor]
   );
 
-  // Load FX rate and transactions on mount
+  // Load FX + first activity page
   useEffect(() => {
     if (!user) return;
     if (!linkedMarginfiPk) return;
@@ -358,7 +368,6 @@ export default function FlexAccountPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, linkedMarginfiPk]);
 
-  // Filter and sort activity
   const flexActivity = useMemo(() => {
     const rows = txs
       .filter((t) => t.kind === "transfer")
@@ -369,8 +378,32 @@ export default function FlexAccountPage() {
     return rows;
   }, [txs]);
 
-  // Show "Load more" if not exhausted
   const hasMore = !exhausted;
+
+  /* -------- Drawer (Deposit/Withdraw) -------- */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
+
+  const openDrawer = (mode: Exclude<DrawerMode, null>) => {
+    setDrawerMode(mode);
+    setDrawerOpen(true);
+  };
+
+  const openExplorerTx = useCallback((sig: string) => {
+    window.open(
+      `${EXPLORER_TX_BASE}${encodeURIComponent(sig)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
+
+  const openExplorerAccount = useCallback((address: string) => {
+    window.open(
+      `${EXPLORER_ACCOUNT_BASE}${encodeURIComponent(address)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
 
   /* -------- Guards -------- */
 
@@ -456,15 +489,45 @@ export default function FlexAccountPage() {
               </p>
             </div>
 
-            <span className="haven-pill">
-              {apyLoading ? (
-                "APY …"
-              ) : apyPctLive == null ? (
-                "APY —"
-              ) : (
-                <>APY {apyPctLive.toFixed(2)}%</>
-              )}
-            </span>
+            <div className="flex flex-col items-end gap-1">
+              <span className="haven-pill">
+                {apyLoading ? (
+                  "APY …"
+                ) : apyPctLive == null ? (
+                  "APY —"
+                ) : (
+                  <>APY {apyPctLive.toFixed(2)}%</>
+                )}
+              </span>
+
+              <p className="text-[11px] text-muted-foreground">
+                {loading || interestLoading
+                  ? "Interest earned —"
+                  : `Interest earned ${interestEarnedDisplay}`}
+              </p>
+
+              {/* Optional: tiny debug line (remove later) */}
+              {/* <p className="text-[10px] text-muted-foreground">
+                Principal {principalNet.toFixed(6)} • On-chain {onchainFlexUsdc.toFixed(6)}
+              </p> */}
+
+              {interestError ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Interest unavailable
+                </p>
+              ) : null}
+
+              <button
+                type="button"
+                disabled={!linkedMarginfiPk}
+                onClick={() =>
+                  linkedMarginfiPk && openExplorerAccount(linkedMarginfiPk)
+                }
+                className="mt-1 inline-flex items-center gap-1 text-[11px] text-foreground/80 hover:text-foreground disabled:opacity-40"
+              >
+                View account <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
           <div className="mt-5 flex gap-2">
@@ -492,7 +555,7 @@ export default function FlexAccountPage() {
             <div className="flex flex-col">
               <p className="haven-kicker">Activity</p>
               <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Flex deposits & withdrawals
+                Flex deposits & withdrawals (on-chain)
               </p>
             </div>
 
@@ -523,7 +586,6 @@ export default function FlexAccountPage() {
             ) : (
               <div className="space-y-2">
                 {flexActivity.map((tx) => {
-                  // ✅ same layout + same existing logic
                   const isFlexDeposit = tx.direction === "out";
                   const title = isFlexDeposit
                     ? "Flex deposit"
@@ -541,12 +603,10 @@ export default function FlexAccountPage() {
                       key={tx.signature}
                       className="haven-row hover:bg-accent transition flex items-start gap-3"
                     >
-                      {/* Left icon */}
                       <div className="pt-0.5">
                         <SavingsAvatar />
                       </div>
 
-                      {/* Main text */}
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold text-foreground truncate">
                           {title}
@@ -555,9 +615,16 @@ export default function FlexAccountPage() {
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {formatDayTime(tx.blockTime)}
                         </p>
+
+                        <button
+                          type="button"
+                          onClick={() => openExplorerTx(tx.signature)}
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] text-foreground/70 hover:text-foreground"
+                        >
+                          View tx <ExternalLink className="h-3.5 w-3.5" />
+                        </button>
                       </div>
 
-                      {/* Right amount */}
                       <div className="text-right shrink-0 pl-2">
                         <p className="text-sm font-semibold text-foreground tabular-nums">
                           {rightTop}
@@ -569,7 +636,6 @@ export default function FlexAccountPage() {
               </div>
             )}
 
-            {/* Load more */}
             {hasMore && flexActivity.length > 0 && (
               <button
                 type="button"
