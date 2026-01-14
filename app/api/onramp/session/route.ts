@@ -1,25 +1,16 @@
 // app/api/onramp/session/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
-import { getSessionFromCookies } from "@/lib/auth"; // <- use your existing auth
-import { connect } from "@/lib/db";
-import User from "@/models/User";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Create Onramp Session API - returns URL with params baked in
 const ONRAMP_SESSION_URL =
   "https://api.cdp.coinbase.com/platform/v2/onramp/sessions";
 
 const API_KEY_ID = process.env.COINBASE_API_KEY_ID!;
 const API_KEY_SECRET = process.env.COINBASE_API_SECRET!;
-
-const ONRAMP_ENABLED =
-  (process.env.ONRAMP_ENABLED || "false").toLowerCase() === "true";
-const ADMIN_EMAILS = (process.env.ONRAMP_ADMIN_EMAILS || "")
-  .split(",")
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
 
 function json(status: number, body: unknown) {
   return new NextResponse(JSON.stringify(body), {
@@ -56,6 +47,9 @@ function toSandboxUrl(onrampUrl: string): string {
   }
 }
 
+/**
+ * Check if an IP address is private/local (not allowed by Coinbase)
+ */
 function isPrivateIp(ip: string): boolean {
   if (!ip) return true;
   if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
@@ -67,46 +61,37 @@ function isPrivateIp(ip: string): boolean {
     if (parts[0] === 192 && parts[1] === 168) return true;
     if (parts[0] === 169 && parts[1] === 254) return true;
   }
+
   if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80"))
     return true;
+
   return false;
 }
 
 type Body = {
   destinationAddress: string;
+
+  // what the user is buying (keep default USDC)
   purchaseCurrency?: string;
+
+  // where it goes (keep default solana)
   destinationNetwork?: string;
+
+  // user's selected display currency (USD/CAD/etc)
   paymentCurrency?: string;
+
   redirectUrl?: string;
   partnerUserRef?: string;
+
   sandbox?: boolean;
+
+  // CA/US/etc (Coinbase eligibility routing)
   country?: string;
-  subdivision?: string;
+  subdivision?: string; // required only for US in some cases
 };
 
 export async function POST(req: NextRequest) {
   try {
-    // ✅ Auth + admin gating
-    const session = await getSessionFromCookies();
-    if (!session?.userId) return json(401, { error: "Unauthorized" });
-
-    await connect();
-    const me = await User.findById(session.userId).lean();
-    const email = String(me?.email || "")
-      .trim()
-      .toLowerCase();
-
-    const isAdmin = email && ADMIN_EMAILS.includes(email);
-
-    // ✅ KILL SWITCH: only admins can use onramp while disabled
-    if (!ONRAMP_ENABLED && !isAdmin) {
-      return json(403, {
-        error:
-          "Onramp is temporarily disabled while we complete provider approval.",
-        code: "ONRAMP_DISABLED",
-      });
-    }
-
     if (!API_KEY_ID || !API_KEY_SECRET) {
       return json(500, {
         error:
@@ -119,6 +104,8 @@ export async function POST(req: NextRequest) {
     const destinationAddress = (body.destinationAddress || "").trim();
     const purchaseCurrency = (body.purchaseCurrency || "USDC").trim();
     const destinationNetwork = (body.destinationNetwork || "solana").trim();
+
+    // ✅ user payment/display currency (no amount)
     const paymentCurrency = (body.paymentCurrency || "USD").trim();
 
     const redirectUrl = body.redirectUrl
@@ -128,17 +115,20 @@ export async function POST(req: NextRequest) {
     const sandbox = !!body.sandbox;
     const rawRef = body.partnerUserRef
       ? String(body.partnerUserRef).trim()
-      : `user-${session.userId}`;
+      : "user-unknown";
     const partnerUserRef = sandbox
       ? rawRef.startsWith("sandbox-")
         ? rawRef
         : `sandbox-${rawRef}`
       : rawRef;
 
+    // Default to CA unless you pass otherwise
     const country = (body.country || "CA").toUpperCase();
 
-    if (!destinationAddress)
+    // --- validation ---
+    if (!destinationAddress) {
       return json(400, { error: "Missing destinationAddress" });
+    }
     if (
       destinationNetwork.toLowerCase() === "solana" &&
       !isProbablySolanaAddress(destinationAddress)
@@ -147,7 +137,14 @@ export async function POST(req: NextRequest) {
         error: "Destination address is not a valid Solana address.",
       });
     }
+    if (!purchaseCurrency) {
+      return json(400, { error: "Missing purchaseCurrency" });
+    }
+    if (!paymentCurrency) {
+      return json(400, { error: "Missing paymentCurrency" });
+    }
 
+    // Get client IP for the request (Coinbase may use it for risk/eligibility)
     const forwardedFor = req.headers
       .get("x-forwarded-for")
       ?.split(",")[0]
@@ -157,20 +154,33 @@ export async function POST(req: NextRequest) {
     const safeClientIp =
       clientIp && !isPrivateIp(clientIp) ? clientIp : undefined;
 
-    // ✅ No amount + no paymentMethod (Coinbase chooses)
+    /**
+     * ✅ No paymentAmount
+     * ✅ No paymentMethod
+     *
+     * Let Coinbase handle:
+     * - amount entry
+     * - payment method selection (card/bank/etc)
+     */
     const sessionPayload: Record<string, unknown> = {
       purchaseCurrency,
       destinationNetwork,
       destinationAddress,
+
+      // user-selected display currency (USD/CAD/etc)
       paymentCurrency,
+
       country,
       partnerUserRef,
     };
 
     if (redirectUrl) sessionPayload.redirectUrl = redirectUrl;
     if (safeClientIp) sessionPayload.clientIp = safeClientIp;
-    if (country === "US" && body.subdivision)
+
+    // Subdivision only required for US (if you have it)
+    if (country === "US" && body.subdivision) {
       sessionPayload.subdivision = body.subdivision;
+    }
 
     const jwt = await generateJwt({
       apiKeyId: API_KEY_ID,
@@ -180,6 +190,8 @@ export async function POST(req: NextRequest) {
       requestPath: "/platform/v2/onramp/sessions",
       expiresIn: 120,
     });
+
+    console.log("[Onramp] Create session payload:", sessionPayload);
 
     const res = await fetch(ONRAMP_SESSION_URL, {
       method: "POST",
@@ -193,13 +205,19 @@ export async function POST(req: NextRequest) {
 
     const responseText = await res.text();
     let responseJson: Record<string, unknown>;
+
     try {
       responseJson = JSON.parse(responseText);
     } catch {
-      return json(500, { error: "Invalid response from Coinbase API" });
+      console.error("[Onramp] Failed to parse response:", responseText);
+      return json(500, {
+        error: "Invalid response from Coinbase API",
+        raw: responseText.slice(0, 500),
+      });
     }
 
     if (!res.ok) {
+      console.error("[Onramp] Coinbase error:", responseJson);
       const errorMessage =
         getStringField(responseJson, "message") ||
         getStringField(responseJson, "error") ||
@@ -207,20 +225,32 @@ export async function POST(req: NextRequest) {
       return json(res.status === 401 ? 401 : 400, {
         error: errorMessage,
         coinbase: responseJson,
+        sent:
+          process.env.NODE_ENV === "development" ? sessionPayload : undefined,
       });
     }
 
-    const sessionObj = responseJson.session as
-      | Record<string, unknown>
-      | undefined;
-    const onrampUrl = getStringField(sessionObj || {}, "onrampUrl");
-    if (!onrampUrl)
-      return json(400, { error: "Missing onramp URL in Coinbase response" });
+    // Response format: { session: { onrampUrl: "..." }, ... }
+    const session = responseJson.session as Record<string, unknown> | undefined;
+    const onrampUrl = getStringField(session || {}, "onrampUrl");
+
+    if (!onrampUrl) {
+      console.error("[Onramp] No onrampUrl in response:", responseJson);
+      return json(400, {
+        error: "Missing onramp URL in Coinbase response",
+        coinbase: responseJson,
+      });
+    }
 
     const finalUrl = sandbox ? toSandboxUrl(onrampUrl) : onrampUrl;
 
-    return json(200, { url: finalUrl, sandbox });
+    return json(200, {
+      url: finalUrl, // ✅ return a simple url field for the frontend
+      sandbox,
+      sent: process.env.NODE_ENV === "development" ? sessionPayload : undefined,
+    });
   } catch (e: unknown) {
+    console.error("[Onramp] Server error:", e);
     return json(500, { error: getErrorMessage(e) || "Server error" });
   }
 }
