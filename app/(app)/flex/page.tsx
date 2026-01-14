@@ -15,6 +15,7 @@ import WithdrawFlex from "@/components/accounts/flex/Withdraw";
 ========================= */
 
 const APY_URL = "/api/savings/flex/apy";
+const ACTIVITY_URL = "/api/savings/flex/activity";
 
 /* =========================
    TYPES
@@ -22,6 +23,7 @@ const APY_URL = "/api/savings/flex/apy";
 
 type DrawerMode = "deposit" | "withdraw" | null;
 
+// Keep the same TxRow shape used by the UI
 type TxRow = {
   signature: string;
   blockTime: number | null;
@@ -47,10 +49,23 @@ type ApyResponse = {
 
 type FxPayload = { rate?: number };
 
-type TxResponse = {
+// New DB-backed activity response
+type LedgerTx = {
+  id: string;
+  signature: string;
+  direction: "deposit" | "withdraw";
+  amountUsdc: number;
+  principalPart: number;
+  interestPart: number;
+  feeUsdc: number;
+  createdAt: string;
+  blockTime: number;
+};
+
+type LedgerTxResponse = {
   ok?: boolean;
-  txs?: TxRow[];
-  nextBefore?: string | null;
+  txs?: LedgerTx[];
+  nextCursor?: string | null;
   exhausted?: boolean;
   error?: string;
 };
@@ -96,6 +111,27 @@ function SavingsAvatar() {
       <PiggyBank className="h-4 w-4 text-foreground/80" />
     </span>
   );
+}
+
+/**
+ * Map SavingsLedger row -> the existing TxRow the page already renders.
+ * We keep kind="transfer" and direction "out" for deposit / "in" for withdraw
+ * so your existing title logic stays identical.
+ */
+function ledgerToTxRow(row: LedgerTx): TxRow {
+  const isDeposit = row.direction === "deposit";
+
+  return {
+    signature: row.signature,
+    blockTime: typeof row.blockTime === "number" ? row.blockTime : null,
+    status: "success",
+    kind: "transfer",
+    direction: isDeposit ? "out" : "in",
+    amountUsdc: row.amountUsdc ?? 0,
+    source: "ledger",
+    counterparty: null,
+    counterpartyLabel: null,
+  };
 }
 
 /* =========================
@@ -239,11 +275,13 @@ export default function FlexAccountPage() {
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
 
-  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  // New cursor field from DB API
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
 
   const fetchTxsPage = useCallback(
     async (reset = false) => {
+      // keep the same guards/layout behavior
       if (!walletAddress) return;
       if (!linkedMarginfiPk) return;
 
@@ -252,13 +290,11 @@ export default function FlexAccountPage() {
         setTxError(null);
 
         const cursor =
-          !reset && nextBefore
-            ? `&before=${encodeURIComponent(nextBefore)}`
+          !reset && nextCursor
+            ? `&cursor=${encodeURIComponent(nextCursor)}`
             : "";
 
-        const involve = `&involve=${encodeURIComponent(linkedMarginfiPk)}`;
-
-        const url = `/api/user/wallet/transactions?mode=flex&limit=30${cursor}${involve}`;
+        const url = `${ACTIVITY_URL}?limit=30${cursor}`;
 
         const res = await fetch(url, {
           method: "GET",
@@ -267,13 +303,14 @@ export default function FlexAccountPage() {
           headers: { Accept: "application/json" },
         });
 
-        const data = (await res.json().catch(() => ({}))) as TxResponse;
+        const data = (await res.json().catch(() => ({}))) as LedgerTxResponse;
 
         if (!res.ok || data?.ok === false) {
           throw new Error(data?.error || `Failed (${res.status})`);
         }
 
-        const page = Array.isArray(data?.txs) ? data.txs : [];
+        const pageLedger = Array.isArray(data?.txs) ? data.txs : [];
+        const page = pageLedger.map(ledgerToTxRow);
 
         setTxs((prev) => {
           if (reset) return page;
@@ -286,28 +323,26 @@ export default function FlexAccountPage() {
           return merged;
         });
 
-        // Use the cursor from the API
         const newCursor =
-          typeof data?.nextBefore === "string" && data.nextBefore.trim()
-            ? data.nextBefore.trim()
+          typeof data?.nextCursor === "string" && data.nextCursor.trim()
+            ? data.nextCursor.trim()
             : null;
 
-        setNextBefore(newCursor);
+        setNextCursor(newCursor);
 
-        // Only mark exhausted if the API explicitly says so
-        if (data?.exhausted === true) {
+        if (data?.exhausted === true || !newCursor) {
           setExhausted(true);
         }
       } catch (e) {
         setTxError(e instanceof Error ? e.message : "Failed to load activity");
         if (reset) setTxs([]);
-        setNextBefore(null);
+        setNextCursor(null);
         setExhausted(true);
       } finally {
         setTxLoading(false);
       }
     },
-    [walletAddress, linkedMarginfiPk, nextBefore]
+    [walletAddress, linkedMarginfiPk, nextCursor]
   );
 
   // Load FX rate and transactions on mount
@@ -317,7 +352,7 @@ export default function FlexAccountPage() {
 
     loadFx();
     setTxs([]);
-    setNextBefore(null);
+    setNextCursor(null);
     setExhausted(false);
     fetchTxsPage(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -465,7 +500,7 @@ export default function FlexAccountPage() {
               type="button"
               onClick={() => {
                 setTxs([]);
-                setNextBefore(null);
+                setNextCursor(null);
                 setExhausted(false);
                 fetchTxsPage(true);
               }}
@@ -488,6 +523,7 @@ export default function FlexAccountPage() {
             ) : (
               <div className="space-y-2">
                 {flexActivity.map((tx) => {
+                  // ✅ same layout + same existing logic
                   const isFlexDeposit = tx.direction === "out";
                   const title = isFlexDeposit
                     ? "Flex deposit"

@@ -148,7 +148,7 @@ export default function AmplifyPage() {
               className={[
                 "flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition border",
                 activeTab === "multiplier"
-                  ? "bg-primary text-primary-foreground border-primary shadow-[0_0_18px_rgba(16,185,129,0.25)]"
+                  ? "bg-primary text-black border-primary shadow-[0_0_18px_rgba(16,185,129,0.25)]"
                   : "bg-transparent text-muted-foreground border-transparent hover:text-foreground hover:bg-card/60",
               ].join(" ")}
             >
@@ -159,7 +159,7 @@ export default function AmplifyPage() {
               className={[
                 "flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition border relative",
                 activeTab === "predict"
-                  ? "bg-primary text-primary-foreground border-primary shadow-[0_0_18px_rgba(16,185,129,0.25)]"
+                  ? "bg-primary text-black border-primary shadow-[0_0_18px_rgba(16,185,129,0.25)]"
                   : "bg-transparent text-muted-foreground border-transparent hover:text-foreground hover:bg-card/60",
               ].join(" ")}
             >
