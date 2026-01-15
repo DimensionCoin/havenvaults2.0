@@ -1,15 +1,10 @@
 // components/accounts/deposit/Withdraw.tsx
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 
 import { useSponsoredUsdcTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -31,18 +26,22 @@ type WithdrawProps = {
 
 const sanitizeAmountInput = (s: string) => s.replace(/[^\d.]/g, "");
 
-const Withdraw: React.FC<WithdrawProps> = ({
+export default function Withdraw({
   open,
   onOpenChange,
   walletAddress,
   balanceUsd,
   onSuccess,
-}) => {
+}: WithdrawProps) {
   const [tab, setTab] = useState<"crypto" | "offramp">("crypto");
   const [toAddress, setToAddress] = useState("");
   const [amountInput, setAmountInput] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Portal mount guard (prevents hydration mismatch)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // 🔹 wallet balances (has refresh())
   const { refresh: refreshBalances, displayCurrency, fxRate } = useBalance();
@@ -171,206 +170,268 @@ const Withdraw: React.FC<WithdrawProps> = ({
     }
   };
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={[
-          "p-0 overflow-hidden flex flex-col",
-          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
-          "sm:w-[min(92vw,520px)] sm:max-w-[520px]",
-          "sm:max-h-[90vh] sm:rounded-[28px]",
-          "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-          "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-          "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-        ].join(" ")}
+  /* ───────── Lock background scroll when open (Flex-style) ───────── */
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+    };
+  }, [open]);
+
+  /* ───────── Reset when closed ───────── */
+  useEffect(() => {
+    if (open) return;
+
+    setTab("crypto");
+    setToAddress("");
+    setAmountInput("");
+    setErrorMsg(null);
+    setSuccessMsg(null);
+  }, [open]);
+
+  const canClose = !sending;
+
+  // ✅ Fix: close on pointer-down backdrop (prevents "mouseup on backdrop" after layout shift)
+  const shouldCloseOnPointerUpRef = useRef(false);
+
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+      onPointerDown={(e) => {
+        if (!canClose) return;
+        // Only consider closing if the pointer DOWN started on the backdrop
+        shouldCloseOnPointerUpRef.current = e.target === e.currentTarget;
+      }}
+      onPointerUp={() => {
+        if (!canClose) return;
+        if (shouldCloseOnPointerUpRef.current) onOpenChange(false);
+        shouldCloseOnPointerUpRef.current = false;
+      }}
+      onPointerCancel={() => {
+        shouldCloseOnPointerUpRef.current = false;
+      }}
+    >
+      <div
+        className="w-full max-w-md haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex min-h-0 flex-1 flex-col">
-          {/* Scrollable body */}
-          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
-            <DialogHeader className="pb-3">
-              <DialogTitle className="text-base font-semibold">
-                Withdraw funds
-              </DialogTitle>
-              <DialogDescription className="mt-0.5 text-[11px] text-muted-foreground">
-                Withdraw from your Deposit Account to another wallet. Network
-                fees are covered.
-              </DialogDescription>
-            </DialogHeader>
-
-            <Tabs
-              value={tab}
-              onValueChange={(val) => setTab(val as "crypto" | "offramp")}
-            >
-              <TabsList className="mb-3 grid w-full grid-cols-2 rounded-2xl border border-border bg-background/40 p-1">
-                <TabsTrigger
-                  value="crypto"
-                  className={[
-                    "text-xs rounded-xl px-3 py-2 transition-colors",
-                    "bg-transparent text-muted-foreground",
-                    "data-[state=active]:!bg-primary data-[state=active]:!text-black",
-                    "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
-                  ].join(" ")}
-                >
-                  Crypto withdraw
-                </TabsTrigger>
-
-                <TabsTrigger
-                  value="offramp"
-                  className={[
-                    "text-xs rounded-xl px-3 py-2 transition-colors",
-                    "bg-transparent text-muted-foreground",
-                    "data-[state=active]:!bg-primary data-[state=active]:!text-black",
-                    "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
-                  ].join(" ")}
-                >
-                  Off-ramp
-                </TabsTrigger>
-              </TabsList>
-
-              {/* Crypto withdraw tab */}
-              <TabsContent value="crypto" className="mt-2 space-y-3">
-                <div className="haven-card-soft px-3.5 py-3.5">
-                  <label className="text-[11px] text-muted-foreground">
-                    Recipient wallet address
-                  </label>
-                  <input
-                    className="haven-input mt-1 px-3 py-2 text-[12px]"
-                    placeholder="Enter Solana wallet address"
-                    value={toAddress}
-                    onChange={(e) => setToAddress(e.target.value)}
-                  />
-                </div>
-
-                <div className="haven-card-soft px-3.5 py-3.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[11px] text-muted-foreground">
-                      Amount ({normalizedDisplayCurrency})
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const maxDisplay = Math.max(
-                          0,
-                          laneBalanceDisplay - feeDisplay
-                        );
-                        const safe =
-                          maxDisplay > 0
-                            ? Math.floor(maxDisplay * 100) / 100
-                            : 0;
-                        setAmountInput(safe > 0 ? String(safe) : "");
-                      }}
-                      className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40"
-                      disabled={laneBalanceDisplay <= feeDisplay}
-                    >
-                      Max
-                    </button>
-                  </div>
-
-                  <input
-                    className="mt-2 w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
-                    placeholder="0.00"
-                    inputMode="decimal"
-                    value={amountInput}
-                    onChange={(e) => {
-                      const next = sanitizeAmountInput(e.target.value);
-                      const [, dec = ""] = next.split(".");
-                      if (dec.length > 2) return;
-                      setAmountInput(next);
-                    }}
-                  />
-
-                  <p className="mt-2 text-[10px] text-muted-foreground">
-                    Available:{" "}
-                    <span className="text-foreground/90">
-                      {formatDisplayAmount(laneBalanceDisplay)}
-                    </span>
-                  </p>
-                </div>
-
-                {/* Breakdown (DISPLAY currency only) */}
-                <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">You withdraw</span>
-                    <span className="text-foreground/90">
-                      {formatDisplayAmount(amountDisplay)}
-                    </span>
-                  </div>
-
-                  <div className="mt-1 flex justify-between">
-                    <span className="text-muted-foreground">
-                      Processing fee
-                    </span>
-                    <span className="text-foreground/90">
-                      {formatDisplayAmount(amountDisplay > 0 ? feeDisplay : 0)}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 flex justify-between rounded-2xl border border-border bg-background/40 px-3 py-2">
-                    <span className="text-muted-foreground">Total debited</span>
-                    <span className="font-semibold text-primary">
-                      {formatDisplayAmount(
-                        amountDisplay > 0 ? totalDebitedDisplay : 0
-                      )}
-                    </span>
-                  </div>
-
-                  {!hasEnoughBalance && amountDisplay > 0 && (
-                    <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                      Insufficient balance for amount + fee.
-                    </div>
-                  )}
-
-                  {(errorMsg || transferError) && (
-                    <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                      {errorMsg || transferError}
-                    </div>
-                  )}
-
-                  {successMsg && (
-                    <div className="mt-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2 text-[11px] text-foreground">
-                      {successMsg}
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* Off-ramp tab (placeholder for now) */}
-              <TabsContent value="offramp" className="mt-2">
-                <div className="haven-card-soft px-3.5 py-3.5 text-[11px] text-muted-foreground">
-                  Off-ramp withdrawals are coming soon. You’ll be able to
-                  withdraw to your bank account directly from here.
-                </div>
-              </TabsContent>
-            </Tabs>
-          </div>
-
-          {/* Pinned footer */}
-          <div className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                disabled={sending}
-                className="w-full rounded-2xl border border-border bg-background/40 py-3 text-[12px] font-semibold text-foreground/90 hover:bg-secondary disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={handleCryptoWithdraw}
-                disabled={sendDisabled}
-                className="haven-btn-primary w-full text-black"
-              >
-                {sending ? "Sending..." : "Send"}
-              </button>
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-foreground/90">
+              Withdraw funds
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Withdraw from your Deposit Account to another wallet. Network fees
+              are covered.
             </div>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-};
 
-export default Withdraw;
+          <button
+            type="button"
+            onClick={() => (canClose ? onOpenChange(false) : undefined)}
+            disabled={!canClose}
+            className="haven-pill hover:bg-accent disabled:opacity-50"
+            aria-label="Close"
+            title={!canClose ? "Please wait…" : "Close"}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div
+          className="mt-4 max-h-[70vh] overflow-y-scroll no-scrollbar overscroll-contain"
+          style={{ scrollbarGutter: "stable" } as React.CSSProperties}
+        >
+          <Tabs
+            value={tab}
+            onValueChange={(val) => setTab(val as "crypto" | "offramp")}
+          >
+            <TabsList className="mb-3 grid w-full grid-cols-2 rounded-2xl border border-border bg-background/40 p-1">
+              <TabsTrigger
+                value="crypto"
+                className={[
+                  "text-xs rounded-xl px-3 py-2 transition-colors",
+                  "bg-transparent text-muted-foreground",
+                  "data-[state=active]:!bg-primary data-[state=active]:!text-black",
+                  "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
+                ].join(" ")}
+              >
+                Crypto withdraw
+              </TabsTrigger>
+
+              <TabsTrigger
+                value="offramp"
+                className={[
+                  "text-xs rounded-xl px-3 py-2 transition-colors",
+                  "bg-transparent text-muted-foreground",
+                  "data-[state=active]:!bg-primary data-[state=active]:!text-black",
+                  "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
+                ].join(" ")}
+              >
+                Off-ramp
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent
+              value="crypto"
+              forceMount
+              className={[
+                "mt-2 space-y-3",
+                tab === "crypto" ? "block" : "hidden",
+              ].join(" ")}
+            >
+              <div className="haven-card-soft px-3.5 py-3.5">
+                <label className="text-[11px] text-muted-foreground">
+                  Recipient wallet address
+                </label>
+                <input
+                  className="haven-input mt-1 px-3 py-2 text-[12px]"
+                  placeholder="Enter Solana wallet address"
+                  value={toAddress}
+                  onChange={(e) => setToAddress(e.target.value)}
+                  disabled={sending}
+                />
+              </div>
+
+              <div className="haven-card-soft px-3.5 py-3.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] text-muted-foreground">
+                    Amount ({normalizedDisplayCurrency})
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const maxDisplay = Math.max(
+                        0,
+                        laneBalanceDisplay - feeDisplay
+                      );
+                      const safe =
+                        maxDisplay > 0 ? Math.floor(maxDisplay * 100) / 100 : 0;
+                      setAmountInput(safe > 0 ? String(safe) : "");
+                    }}
+                    className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40"
+                    disabled={sending || laneBalanceDisplay <= feeDisplay}
+                  >
+                    Max
+                  </button>
+                </div>
+
+                <input
+                  className="mt-2 w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  value={amountInput}
+                  disabled={sending}
+                  onChange={(e) => {
+                    const next = sanitizeAmountInput(e.target.value);
+                    const [, dec = ""] = next.split(".");
+                    if (dec.length > 2) return;
+                    setAmountInput(next);
+                  }}
+                />
+
+                <p className="mt-2 text-[10px] text-muted-foreground">
+                  Available:{" "}
+                  <span className="text-foreground/90">
+                    {formatDisplayAmount(laneBalanceDisplay)}
+                  </span>
+                </p>
+              </div>
+
+              <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">You withdraw</span>
+                  <span className="text-foreground/90">
+                    {formatDisplayAmount(amountDisplay)}
+                  </span>
+                </div>
+
+                <div className="mt-1 flex justify-between">
+                  <span className="text-muted-foreground">Processing fee</span>
+                  <span className="text-foreground/90">
+                    {formatDisplayAmount(amountDisplay > 0 ? feeDisplay : 0)}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex justify-between rounded-2xl border border-border bg-background/40 px-3 py-2">
+                  <span className="text-muted-foreground">Total debited</span>
+                  <span className="font-semibold text-primary">
+                    {formatDisplayAmount(
+                      amountDisplay > 0 ? totalDebitedDisplay : 0
+                    )}
+                  </span>
+                </div>
+
+                {!hasEnoughBalance && amountDisplay > 0 && (
+                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    Insufficient balance for amount + fee.
+                  </div>
+                )}
+
+                {(errorMsg || transferError) && (
+                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    {errorMsg || transferError}
+                  </div>
+                )}
+
+                {successMsg && (
+                  <div className="mt-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2 text-[11px] text-foreground">
+                    {successMsg}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent
+              value="offramp"
+              forceMount
+              className={["mt-2", tab === "offramp" ? "block" : "hidden"].join(
+                " "
+              )}
+            >
+              <div className="haven-card-soft px-3.5 py-3.5 text-[11px] text-muted-foreground">
+                Off-ramp withdrawals are coming soon. You&apos;ll be able to
+                withdraw to your bank account directly from here.
+              </div>
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            disabled={sending}
+            className="w-full rounded-2xl border border-border bg-background/50 py-3 text-[12px] font-semibold text-foreground/90 hover:bg-accent transition disabled:opacity-50"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCryptoWithdraw}
+            disabled={tab !== "crypto" || sendDisabled}
+            className={[
+              "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
+              tab === "crypto" && !sendDisabled
+                ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
+                : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
+            ].join(" ")}
+          >
+            {sending ? "Sending..." : "Send"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}

@@ -1,7 +1,7 @@
 // components/accounts/PlusSavingsAccountCard.tsx
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 
 type SavingsAccountShape = {
   walletAddress: string;
@@ -55,8 +55,29 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     [displayCurrency]
   );
 
-  // Mock for now
-  const apyFinal = 7.0;
+  // Fetch real APY from API
+  const [apyFinal, setApyFinal] = useState<number>(7.0); // Default fallback
+  const [apyLoading, setApyLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    async function fetchAPY() {
+      try {
+        const response = await fetch("/api/savings/plus/apy");
+        if (!response.ok) throw new Error("Failed to fetch APY");
+
+        const data = await response.json();
+        setApyFinal(parseFloat(data.apyPercentage));
+      } catch (error) {
+        console.error("Error fetching Plus APY:", error);
+        // Keep default 7.0 on error
+      } finally {
+        setApyLoading(false);
+      }
+    }
+
+    fetchAPY();
+  }, []);
+
   const mockBalance = 0;
 
   // show something stable in the subtitle (same shape as Flex)
@@ -65,7 +86,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     : "—";
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full min-h-[240px] w-full">
       {/* BASE CARD (matches Flex open state layout) */}
       <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
         <div>
@@ -78,7 +99,9 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
             </div>
 
             {/* APY pill (same shape) */}
-            <span className="haven-pill">APY {apyFinal.toFixed(2)}%</span>
+            <span className="haven-pill">
+              {apyLoading ? "APY ..." : `APY ${apyFinal.toFixed(2)}%`}
+            </span>
           </div>
 
           <div className="mt-4">
@@ -113,9 +136,11 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
       </div>
 
       {/* OVERLAY (absolute → does NOT change size) */}
-      <div className="absolute inset-0 z-10 rounded-3xl border border-border bg-background/75 backdrop-blur-[4px]">
+      <div className="absolute inset-0 z-10 rounded-3xl border border-border bg-background/75 backdrop-blur-[2px]">
         <div className="flex h-full w-full flex-col items-center justify-center px-5 text-center">
-          <span className="haven-pill">APY {apyFinal.toFixed(2)}%</span>
+          <span className="haven-pill">
+            {apyLoading ? "APY ..." : `APY ${apyFinal.toFixed(2)}%`}
+          </span>
 
           <div className="mt-3 text-xl font-semibold tracking-tight text-foreground">
             Coming soon
@@ -132,8 +157,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
           >
             Coming soon!
           </button>
-
-          
         </div>
       </div>
     </div>

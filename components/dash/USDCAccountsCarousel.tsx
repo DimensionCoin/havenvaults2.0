@@ -14,11 +14,13 @@ import { useBalance } from "@/providers/BalanceProvider";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import DepositAccountCard from "@/components/accounts/DepositAccountCard";
+import SpendingAccountCard from "@/components/accounts/SpendingAccountCard";
 import FlexSavingsAccountCard from "@/components/accounts/FlexSavingsAccountCard";
 import PlusSavingsAccountCard from "@/components/accounts/PlusSavingsAccountCard";
 import DepositFlex from "@/components/accounts/flex/Deposit";
+import DevEmailGate from "../shared/DevEmailGate";
 
-type SlideKey = "deposit" | "flex" | "plus";
+type SlideKey = "deposit" | "flex" | "plus" | "spending";
 type FxPayload = { base?: string; target?: string; rate?: number };
 
 function d128ToNumber(v: unknown): number {
@@ -182,19 +184,39 @@ const USDCAccountsCarousel: React.FC = () => {
     el.classList.remove("is-dragging");
   };
 
-  // Set card width to show peeks
+  // ✅ Set card width: mobile shows 1 card, desktop shows 2 cards
   useLayoutEffect(() => {
     const el = trackRef.current;
     if (!el) return;
 
-    const safePeek = Math.max(0, Math.min(0.2, PEEK_FRACTION));
-
     const compute = () => {
       const cards = getCards();
       if (!cards.length) return;
-      const cardWidth = el.clientWidth * (1 - 2 * safePeek);
+
+      const w = el.clientWidth;
+
+      // Tailwind lg breakpoint (approx)
+      const isDesktop = w >= 1024;
+
+      // Slightly smaller peek on desktop so 2-up looks clean
+      const peek = isDesktop ? 0.04 : PEEK_FRACTION;
+      const safePeek = Math.max(0, Math.min(0.2, peek));
+
+      // How many cards visible at once
+      const visible = isDesktop ? 2 : 1;
+
+      // Track uses gap-2 => 8px
+      const GAP_PX = 8;
+      const gapsTotal = (visible - 1) * GAP_PX;
+
+      // Available width after peeks + gaps
+      const available = w * (1 - 2 * safePeek) - gapsTotal;
+
+      // Card width
+      const cardWidth = available / visible;
+
       cards.forEach((c) => (c.style.width = `${cardWidth}px`));
-      el.style.scrollPaddingInline = `${el.clientWidth * safePeek}px`;
+      el.style.scrollPaddingInline = `${w * safePeek}px`;
     };
 
     compute();
@@ -264,6 +286,7 @@ const USDCAccountsCarousel: React.FC = () => {
     { key: "deposit", label: "Deposit", index: 0 },
     { key: "flex", label: "Flex", index: 1 },
     { key: "plus", label: "Plus", index: 2 },
+    { key: "spending", label: "Spending", index: 3 },
   ];
 
   const goPrev = () =>
@@ -306,6 +329,12 @@ const USDCAccountsCarousel: React.FC = () => {
   const handleTransferClick = (type: SlideKey) =>
     type === "flex" && setFlexDepositOpen(true);
 
+  // Spending card placeholder data
+  const spendingBalance = 0;
+  const spendingLast4 = "••••";
+  const spendingHolder = "Haven User";
+  const spendingExpires = "••/••";
+
   return (
     <>
       <DepositFlex
@@ -314,8 +343,8 @@ const USDCAccountsCarousel: React.FC = () => {
         hasAccount={flexOpened}
       />
 
-      {/* MOBILE / TABLET */}
-      <section className="w-full space-y-2 lg:hidden">
+      {/* CAROUSEL (ALL SIZES) */}
+      <section className="w-full space-y-2">
         <div className="flex items-center justify-between gap-3">
           {/* Tabs */}
           <div className="flex gap-1.5">
@@ -361,7 +390,7 @@ const USDCAccountsCarousel: React.FC = () => {
           </div>
         </div>
 
-        <div className="-mx-2 px-2">
+        <div className="-mx-2 px-2 lg:-mx-3 lg:px-3">
           <div
             ref={trackRef}
             onPointerDown={onPointerDown}
@@ -375,9 +404,7 @@ const USDCAccountsCarousel: React.FC = () => {
               "relative flex gap-2 overflow-x-auto snap-x snap-mandatory",
               "scrollbar-hide",
               "[-webkit-overflow-scrolling:touch]",
-              // ✅ better tap/click behavior inside horizontal scroller
               "[touch-action:pan-x]",
-              // ✅ horizontal overscroll contained; vertical passes to page
               "[overscroll-behavior-x:contain] [overscroll-behavior-y:auto]",
             ].join(" ")}
             style={{ scrollSnapType: "x mandatory" }}
@@ -423,43 +450,33 @@ const USDCAccountsCarousel: React.FC = () => {
                 onOpenAccount={() => handleOpenAccountClick("plus")}
               />
             </div>
+
+            <div
+              data-carousel-card
+              className="snap-center shrink-0 [scroll-snap-stop:always]"
+            >
+              <div
+                data-carousel-card
+                className="snap-center shrink-0 [scroll-snap-stop:always]"
+              >
+                <DevEmailGate
+                  allowEmails={["nick.vassallo97@gmail.com", "test@yourdomain.com"]}
+                  title="Spending is temporarily restricted"
+                  message="We’re currently in approval/testing. This feature will be enabled for everyone soon."
+                >
+                  <SpendingAccountCard
+                    loading={loading}
+                    balance={spendingBalance}
+                    last4={spendingLast4}
+                    holderName={spendingHolder}
+                    expires={spendingExpires}
+                    onDeposit={() => handleDepositClick("spending")}
+                    onWithdraw={() => handleWithdrawClick("spending")}
+                  />
+                </DevEmailGate>
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
-
-      {/* DESKTOP (equal width + equal height) */}
-      <section className="hidden w-full gap-3 lg:flex lg:items-stretch">
-        <div className="flex-1 min-w-0 h-full">
-          <DepositAccountCard
-            loading={loading}
-            walletAddress={mainWallet}
-            balanceOverride={cashBalanceDisplay}
-            onDeposit={() => handleDepositClick("deposit")}
-            onWithdraw={() => handleWithdrawClick("deposit")}
-            onTransfer={() => handleTransferClick("deposit")}
-          />
-        </div>
-
-        <div className="flex-1 min-w-0 h-full">
-          <FlexSavingsAccountCard
-            account={flexAccount}
-            loading={loading}
-            displayCurrency={displayCurrency}
-            onDeposit={() => handleDepositClick("flex")}
-            onWithdraw={() => handleWithdrawClick("flex")}
-            onOpenAccount={() => handleOpenAccountClick("flex")}
-          />
-        </div>
-
-        <div className="flex-1 min-w-0 h-full">
-          <PlusSavingsAccountCard
-            account={plusAccount}
-            loading={loading}
-            displayCurrency={displayCurrency}
-            onDeposit={() => handleDepositClick("plus")}
-            onWithdraw={() => handleWithdrawClick("plus")}
-            onOpenAccount={() => handleOpenAccountClick("plus")}
-          />
         </div>
       </section>
     </>

@@ -2,20 +2,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Mail, User as UserIcon } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Mail, User as UserIcon, X } from "lucide-react";
 
 import { useSponsoredUsdcTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 import { useBalance } from "@/providers/BalanceProvider";
-
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 
 type TransferProps = {
   open: boolean;
@@ -68,13 +59,13 @@ const getInitials = (nameOrEmail?: string | null) => {
   return (first + second).toUpperCase() || first.toUpperCase();
 };
 
-const Transfer: React.FC<TransferProps> = ({
+export default function Transfer({
   open,
   onOpenChange,
   walletAddress,
   balanceUsd,
   onSuccess,
-}) => {
+}: TransferProps) {
   const { refresh: refreshBalances, displayCurrency, fxRate } = useBalance();
 
   const normalizedDisplayCurrency =
@@ -105,6 +96,10 @@ const Transfer: React.FC<TransferProps> = ({
       return `${n.toFixed(2)} ${normalizedDisplayCurrency}`;
     }
   };
+
+  // Portal mount guard (prevents hydration mismatch)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   /* ───────────────── Step state ───────────────── */
   const [step, setStep] = useState<1 | 2>(1);
@@ -180,7 +175,7 @@ const Transfer: React.FC<TransferProps> = ({
     if (!isEmail(email)) return;
 
     let cancelled = false;
-    const timeout = setTimeout(async () => {
+    const timeout = window.setTimeout(async () => {
       setResolveState("checking");
       try {
         const url = `/api/user/contacts/resolve?email=${encodeURIComponent(
@@ -239,7 +234,7 @@ const Transfer: React.FC<TransferProps> = ({
 
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
+      window.clearTimeout(timeout);
     };
   }, [open, recipientInput]);
 
@@ -377,7 +372,9 @@ const Transfer: React.FC<TransferProps> = ({
       const shortSig =
         sig && sig.length > 12 ? `${sig.slice(0, 6)}…${sig.slice(-6)}` : sig;
 
-      setSuccessMsg(sig ? `transfer sent. Tx: ${shortSig}` : "transfer failed.");
+      setSuccessMsg(
+        sig ? `transfer sent. Tx: ${shortSig}` : "transfer failed."
+      );
 
       try {
         await new Promise((r) => setTimeout(r, 1200));
@@ -426,367 +423,398 @@ const Transfer: React.FC<TransferProps> = ({
     setShowAllContacts(false);
   }, [open]);
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={[
-          "p-0 overflow-hidden flex flex-col",
-          // Haven surfaces + border
-          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
+  /* ───────────────── Lock background scroll like Flex ───────────────── */
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+    };
+  }, [open]);
 
-          // Desktop sizing
-          "sm:w-[min(92vw,440px)] sm:max-w-[440px]",
-          "sm:max-h-[90vh] sm:rounded-[28px]",
+  const canClose = !sending; // keep simple: don’t close while sending
 
-          // Mobile fullscreen
-          "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-          "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-          "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-        ].join(" ")}
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+      onClick={(e) => {
+        if (!canClose) return;
+        if (e.target === e.currentTarget) onOpenChange(false);
+      }}
+    >
+      <div
+        className="w-full max-w-md haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+        onClick={(e) => e.stopPropagation()}
       >
-        {/* min-h-0 REQUIRED for scroll */}
-        <div className="flex min-h-0 flex-1 flex-col">
-          {/* Scrollable body */}
-          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
-            {/* Header */}
-            <DialogHeader className="pb-3 text-foreground">
-              <div className="flex items-start justify-between gap-2 pr-10">
-                <div className="text-foreground">
-                  <DialogTitle className="text-base font-semibold text-foreground">
-                    Transfer USDC
-                  </DialogTitle>
-                  <DialogDescription className="mt-0.5 text-[11px] text-muted-foreground">
-                    Send USDC to a Haven user by email (gas covered).
-                  </DialogDescription>
-                </div>
-
-                <span className="haven-pill">Step {step} of 2</span>
-              </div>
-            </DialogHeader>
-
-            <div className="flex flex-col gap-3 text-xs">
-              {/* STEP 1 */}
-              {step === 1 && (
-                <div className="haven-card-soft px-3.5 py-3.5">
-                  <div className="mb-2 text-[11px]">
-                    <p className="font-medium text-foreground/90">
-                      Who are you sending to?
-                    </p>
-                    <p className="text-muted-foreground">
-                      Enter a Haven email (must be an existing Haven account).
-                    </p>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] text-muted-foreground">
-                      Recipient
-                    </label>
-
-                    <div className="relative">
-                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
-                      <input
-                        value={recipientInput}
-                        onChange={(e) => setRecipientInput(e.target.value)}
-                        placeholder="friend@example.com"
-                        className={[
-                          "haven-input pl-9 pr-3 py-2 text-[12px] text-foreground",
-                          resolveState === "error" ||
-                          resolveState === "not_found"
-                            ? "border-destructive/40 focus-visible:ring-destructive/30 "
-                            : "",
-                        ].join(" ")}
-                      />
-                    </div>
-
-                    <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
-                      <span className="text-muted-foreground">
-                        {resolveState === "checking" && "Looking up recipient…"}
-                        {resolveState === "resolved" &&
-                          resolvedRecipient &&
-                          `Sending to ${resolvedRecipient.name || resolvedRecipient.email}`}
-                        {resolveState === "not_found" &&
-                          "No Haven account found for this email yet."}
-                        {resolveState === "idle" &&
-                          "We’ll verify Haven accounts when you enter an email."}
-                        {resolveState === "error" &&
-                          (resolveError || "Lookup failed.")}
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={handleAddContact}
-                        disabled={addingContact || !isEmail(recipientInput)}
-                        className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground/90 hover:bg-secondary disabled:opacity-40"
-                      >
-                        {addingContact ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-
-                    {addError && (
-                      <p className="text-[10px] text-destructive">{addError}</p>
-                    )}
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between">
-                    <p className="text-[11px] text-muted-foreground">
-                      Available
-                    </p>
-                    <span className="haven-pill">
-                      {formatDisplayAmount(laneBalanceDisplay)}
-                    </span>
-                  </div>
-
-                  {/* Contacts */}
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] text-muted-foreground">
-                        Your contacts
-                      </p>
-                      {contactsLoading && (
-                        <span className="text-[10px] text-muted-foreground">
-                          Loading…
-                        </span>
-                      )}
-                    </div>
-
-                    {contactsError && (
-                      <p className="mt-1 text-[10px] text-destructive">
-                        {contactsError}
-                      </p>
-                    )}
-
-                    {contacts.length > 0 ? (
-                      <>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {visibleContacts.map((c, idx) => (
-                            <button
-                              key={c.id ?? c.email ?? idx}
-                              type="button"
-                              onClick={() => handlePickContact(c)}
-                              className="haven-pill hover:bg-accent"
-                            >
-                              {c.name || c.email || "Contact"}
-                            </button>
-                          ))}
-                        </div>
-
-                        {hasMoreContacts && (
-                          <button
-                            type="button"
-                            onClick={() => setShowAllContacts((v) => !v)}
-                            className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
-                          >
-                            {showAllContacts
-                              ? "Show fewer"
-                              : `Show all ${contacts.length} contacts`}
-                          </button>
-                        )}
-                      </>
-                    ) : !contactsLoading ? (
-                      <p className="mt-2 text-[10px] text-muted-foreground">
-                        You don&apos;t have any contacts yet.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 2 */}
-              {step === 2 && resolvedRecipient && (
-                <div className="haven-card-soft overflow-hidden">
-                  {/* Summary header */}
-                  <div className="px-3.5 py-3 border-b border-border">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/60 text-[10px] font-semibold">
-                          {recipientInitials ? (
-                            recipientInitials
-                          ) : (
-                            <UserIcon className="h-4 w-4 text-foreground/80" />
-                          )}
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] text-muted-foreground">
-                            Sending to
-                          </p>
-                          <p className="text-[11px] font-semibold text-primary">
-                            {recipientLabel}
-                          </p>
-                          <p className="text-[10px] text-muted-foreground">
-                            Haven recipient • {resolvedRecipient.email}
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setStep(1)}
-                        className="haven-pill hover:bg-accent"
-                      >
-                        Change
-                      </button>
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-end">
-                      <div className="text-right text-[10px] text-muted-foreground">
-                        Available:{" "}
-                        <span className="text-foreground/90">
-                          {formatDisplayAmount(laneBalanceDisplay)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Amount area */}
-                  <div className="px-3.5 py-3.5">
-                    <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="text-muted-foreground">
-                        Amount ({normalizedDisplayCurrency})
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const maxDisplay = Math.max(
-                            0,
-                            laneBalanceDisplay - effectiveFeeUsdc * effectiveFx
-                          );
-                          const safe =
-                            maxDisplay > 0
-                              ? Math.floor(maxDisplay * 100) / 100
-                              : 0;
-                          setAmountInput(safe > 0 ? String(safe) : "");
-                        }}
-                        className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40 text-primary"
-                        disabled={
-                          laneBalanceDisplay <= effectiveFeeUsdc * effectiveFx
-                        }
-                      >
-                        Max
-                      </button>
-                    </div>
-
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={amountInput}
-                      onChange={(e) => {
-                        const next = sanitizeAmountInput(e.target.value);
-                        const [, dec = ""] = next.split(".");
-                        if (dec.length > 2) return;
-                        setAmountInput(next);
-                      }}
-                      placeholder="0.00"
-                      className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
-                    />
-
-                    <p className="mt-2 text-[10px] text-muted-foreground">
-                      You pay (incl. fee):{" "}
-                      <span className="text-foreground/90">
-                        {formatDisplayAmount(
-                          amountDisplay > 0 ? totalDebitedDisplay : 0
-                        )}
-                      </span>
-                    </p>
-
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      They receive:{" "}
-                      <span className="text-foreground/90">
-                        {formatDisplayAmount(amountDisplay || 0)}
-                      </span>
-                    </p>
-
-                    {amountDisplay > 0 && !hasEnoughBalance && (
-                      <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                        Not enough balance to cover amount + fee.
-                      </div>
-                    )}
-
-                    {(sendError ||
-                      (resolveState === "error" && resolveError)) && (
-                      <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                        {sendError || resolveError}
-                      </div>
-                    )}
-
-                    {successMsg && (
-                      <div className="mt-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2 text-[11px] text-foreground">
-                        {successMsg}
-                      </div>
-                    )}
-
-                    {/* Keypad */}
-                    <div className="mt-3">
-                      <div className="grid grid-cols-3 gap-2 text-foreground">
-                        {[
-                          "1",
-                          "2",
-                          "3",
-                          "4",
-                          "5",
-                          "6",
-                          "7",
-                          "8",
-                          "9",
-                          ".",
-                          "0",
-                          "DEL",
-                        ].map((k) => (
-                          <button
-                            key={k}
-                            type="button"
-                            onClick={() => pressKey(k)}
-                            className={[
-                              "rounded-2xl border py-3 text-base font-semibold transition",
-                              "border-border bg-background/40 hover:bg-secondary",
-                            ].join(" ")}
-                          >
-                            {k === "DEL" ? "⌫" : k}
-                          </button>
-                        ))}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => pressKey("CLR")}
-                        className="mt-2 w-full rounded-2xl border border-border bg-background/40 py-2 text-[11px] text-muted-foreground hover:bg-secondary"
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+        {/* Top bar */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-foreground/90">
+              Transfer USDC
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Send USDC to a Haven user by email (gas covered).
             </div>
           </div>
 
-          {/* Pinned footer */}
-          <DialogFooter className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
-            {step === 1 ? (
-              <button
-                type="button"
-                className="haven-btn-primary text-[#032c0c]"
-                disabled={!canContinueToAmount}
-                onClick={handleContinueToAmount}
-              >
-                Continue
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="haven-btn-primary"
-                disabled={sendDisabled}
-                onClick={handleSend}
-              >
-                {sending ? "Sending..." : "Send"}
-              </button>
-            )}
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-};
+          <div className="flex items-center gap-2">
+            <span className="haven-pill">Step {step} of 2</span>
 
-export default Transfer;
+            <button
+              type="button"
+              onClick={() => (canClose ? onOpenChange(false) : undefined)}
+              disabled={!canClose}
+              className="haven-pill hover:bg-accent disabled:opacity-50"
+              aria-label="Close"
+              title={!canClose ? "Please wait…" : "Close"}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="mt-4 space-y-3 max-h-[70vh] overflow-y-auto no-scrollbar overscroll-contain">
+          {/* STEP 1 */}
+          {step === 1 && (
+            <div className="haven-card-soft px-3.5 py-3.5">
+              <div className="mb-2 text-[11px]">
+                <p className="font-medium text-foreground/90">
+                  Who are you sending to?
+                </p>
+                <p className="text-muted-foreground">
+                  Enter a Haven email (must be an existing Haven account).
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">
+                  Recipient
+                </label>
+
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
+                  <input
+                    value={recipientInput}
+                    onChange={(e) => setRecipientInput(e.target.value)}
+                    placeholder="friend@example.com"
+                    className={[
+                      "haven-input pl-9 pr-3 py-2 text-[12px] text-foreground",
+                      resolveState === "error" || resolveState === "not_found"
+                        ? "border-destructive/40 focus-visible:ring-destructive/30"
+                        : "",
+                    ].join(" ")}
+                  />
+                </div>
+
+                <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
+                  <span className="text-muted-foreground">
+                    {resolveState === "checking" && "Looking up recipient…"}
+                    {resolveState === "resolved" &&
+                      resolvedRecipient &&
+                      `Sending to ${resolvedRecipient.name || resolvedRecipient.email}`}
+                    {resolveState === "not_found" &&
+                      "No Haven account found for this email yet."}
+                    {resolveState === "idle" &&
+                      "We’ll verify Haven accounts when you enter an email."}
+                    {resolveState === "error" &&
+                      (resolveError || "Lookup failed.")}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleAddContact}
+                    disabled={addingContact || !isEmail(recipientInput)}
+                    className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground/90 hover:bg-secondary disabled:opacity-40"
+                  >
+                    {addingContact ? "Saving…" : "Save"}
+                  </button>
+                </div>
+
+                {addError && (
+                  <p className="text-[10px] text-destructive">{addError}</p>
+                )}
+              </div>
+
+              <div className="mt-3 flex items-center justify-between">
+                <p className="text-[11px] text-muted-foreground">Available</p>
+                <span className="haven-pill">
+                  {formatDisplayAmount(laneBalanceDisplay)}
+                </span>
+              </div>
+
+              {/* Contacts */}
+              <div className="mt-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] text-muted-foreground">
+                    Your contacts
+                  </p>
+                  {contactsLoading && (
+                    <span className="text-[10px] text-muted-foreground">
+                      Loading…
+                    </span>
+                  )}
+                </div>
+
+                {contactsError && (
+                  <p className="mt-1 text-[10px] text-destructive">
+                    {contactsError}
+                  </p>
+                )}
+
+                {contacts.length > 0 ? (
+                  <>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {visibleContacts.map((c, idx) => (
+                        <button
+                          key={c.id ?? c.email ?? idx}
+                          type="button"
+                          onClick={() => handlePickContact(c)}
+                          className="haven-pill hover:bg-accent"
+                        >
+                          {c.name || c.email || "Contact"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {hasMoreContacts && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllContacts((v) => !v)}
+                        className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                      >
+                        {showAllContacts
+                          ? "Show fewer"
+                          : `Show all ${contacts.length} contacts`}
+                      </button>
+                    )}
+                  </>
+                ) : !contactsLoading ? (
+                  <p className="mt-2 text-[10px] text-muted-foreground">
+                    You don&apos;t have any contacts yet.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2 */}
+          {step === 2 && resolvedRecipient && (
+            <div className="haven-card-soft overflow-hidden">
+              {/* Summary header */}
+              <div className="px-3.5 py-3 border-b border-border">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/60 text-[10px] font-semibold">
+                      {recipientInitials ? (
+                        recipientInitials
+                      ) : (
+                        <UserIcon className="h-4 w-4 text-foreground/80" />
+                      )}
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Sending to
+                      </p>
+                      <p className="text-[11px] font-semibold text-primary">
+                        {recipientLabel}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Haven recipient • {resolvedRecipient.email}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="haven-pill hover:bg-accent"
+                    disabled={sending}
+                  >
+                    Change
+                  </button>
+                </div>
+
+                <div className="mt-3 flex items-center justify-end">
+                  <div className="text-right text-[10px] text-muted-foreground">
+                    Available:{" "}
+                    <span className="text-foreground/90">
+                      {formatDisplayAmount(laneBalanceDisplay)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Amount area */}
+              <div className="px-3.5 py-3.5">
+                <div className="mb-2 flex items-center justify-between text-[11px]">
+                  <span className="text-muted-foreground">
+                    Amount ({normalizedDisplayCurrency})
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const maxDisplay = Math.max(
+                        0,
+                        laneBalanceDisplay - effectiveFeeUsdc * effectiveFx
+                      );
+                      const safe =
+                        maxDisplay > 0 ? Math.floor(maxDisplay * 100) / 100 : 0;
+                      setAmountInput(safe > 0 ? String(safe) : "");
+                    }}
+                    className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40 text-primary"
+                    disabled={
+                      laneBalanceDisplay <= effectiveFeeUsdc * effectiveFx
+                    }
+                  >
+                    Max
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={amountInput}
+                  onChange={(e) => {
+                    const next = sanitizeAmountInput(e.target.value);
+                    const [, dec = ""] = next.split(".");
+                    if (dec.length > 2) return;
+                    setAmountInput(next);
+                  }}
+                  placeholder="0.00"
+                  className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
+                />
+
+                <p className="mt-2 text-[10px] text-muted-foreground">
+                  You pay (incl. fee):{" "}
+                  <span className="text-foreground/90">
+                    {formatDisplayAmount(
+                      amountDisplay > 0 ? totalDebitedDisplay : 0
+                    )}
+                  </span>
+                </p>
+
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  They receive:{" "}
+                  <span className="text-foreground/90">
+                    {formatDisplayAmount(amountDisplay || 0)}
+                  </span>
+                </p>
+
+                {amountDisplay > 0 && !hasEnoughBalance && (
+                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    Not enough balance to cover amount + fee.
+                  </div>
+                )}
+
+                {(sendError || (resolveState === "error" && resolveError)) && (
+                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    {sendError || resolveError}
+                  </div>
+                )}
+
+                {successMsg && (
+                  <div className="mt-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2 text-[11px] text-foreground">
+                    {successMsg}
+                  </div>
+                )}
+
+                {/* Keypad */}
+                <div className="mt-3">
+                  <div className="grid grid-cols-3 gap-2 text-foreground">
+                    {[
+                      "1",
+                      "2",
+                      "3",
+                      "4",
+                      "5",
+                      "6",
+                      "7",
+                      "8",
+                      "9",
+                      ".",
+                      "0",
+                      "DEL",
+                    ].map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => pressKey(k)}
+                        disabled={sending}
+                        className={[
+                          "rounded-2xl border py-3 text-base font-semibold transition",
+                          "border-border bg-background/40 hover:bg-secondary",
+                          "disabled:opacity-50 disabled:cursor-not-allowed",
+                        ].join(" ")}
+                      >
+                        {k === "DEL" ? "⌫" : k}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => pressKey("CLR")}
+                    disabled={sending}
+                    className="mt-2 w-full rounded-2xl border border-border bg-background/40 py-2 text-[11px] text-muted-foreground hover:bg-secondary disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer (pinned like Flex style) */}
+        <div className="mt-4">
+          {step === 1 ? (
+            <button
+              type="button"
+              className={[
+                "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
+                canContinueToAmount
+                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
+                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
+              ].join(" ")}
+              disabled={!canContinueToAmount}
+              onClick={handleContinueToAmount}
+            >
+              Continue
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={[
+                "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
+                !sendDisabled
+                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
+                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
+              ].join(" ")}
+              disabled={sendDisabled}
+              onClick={handleSend}
+            >
+              {sending ? "Sending..." : "Send"}
+            </button>
+          )}
+
+          {/* Optional secondary close */}
+          <button
+            type="button"
+            disabled={!canClose}
+            onClick={() => onOpenChange(false)}
+            className="mt-3 w-full rounded-2xl border border-border bg-background/50 px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-accent transition disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}

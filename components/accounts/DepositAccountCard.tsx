@@ -116,7 +116,7 @@ export default function DepositAccountCard({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6"
+        className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6"
       >
         {/* Header */}
         <div>

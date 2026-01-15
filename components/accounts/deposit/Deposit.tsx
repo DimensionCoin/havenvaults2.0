@@ -8,26 +8,27 @@ import React, {
   useRef,
   useMemo,
 } from "react";
+import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
-
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+  X,
+  ExternalLink,
+  Copy,
+  CheckCircle2,
+  CreditCard,
+  Wallet,
+  Lock,
+} from "lucide-react";
 
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useUser } from "@/providers/UserProvider";
+import DevEmailGate from "@/components/shared/DevEmailGate";
 
 type DepositProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-
   walletAddress: string;
   balanceUsd: number;
-
   onSuccess?: () => void | Promise<void>;
 };
 
@@ -40,6 +41,7 @@ const shortAddress = (addr?: string | null) => {
 const cleanNumber = (n: number) => (Number.isFinite(n) ? n : 0);
 
 type OnrampSessionResponse = {
+  onrampUrl?: string;
   url?: string;
   one_click_buy_url?: string;
   redirectUrl?: string;
@@ -54,26 +56,31 @@ function isMobileDevice(): boolean {
   );
 }
 
+type WindowWithDualScreen = Window & {
+  screenLeft?: number;
+  screenTop?: number;
+};
+
 function openCoinbasePopup(
   url: string,
   opts?: { onClosed?: () => void }
 ): { type: "popup" | "redirect"; cleanup?: () => void } {
   const mobile = isMobileDevice();
 
-  // Mobile: popups are unreliable → do a normal redirect
   if (mobile) {
     window.location.assign(url);
     return { type: "redirect" };
   }
 
-  // Desktop popup
   const width = 460;
   const height = 720;
 
+  const w = window as WindowWithDualScreen;
+
   const dualScreenLeft =
-    window.screenLeft !== undefined ? window.screenLeft : window.screenX;
+    typeof w.screenLeft === "number" ? w.screenLeft : window.screenX;
   const dualScreenTop =
-    window.screenTop !== undefined ? window.screenTop : window.screenY;
+    typeof w.screenTop === "number" ? w.screenTop : window.screenY;
 
   const screenWidth = window.innerWidth || document.documentElement.clientWidth;
   const screenHeight =
@@ -99,7 +106,6 @@ function openCoinbasePopup(
     ].join(",")
   );
 
-  // Popup blocked → fallback to redirect
   if (!popup) {
     window.location.assign(url);
     return { type: "redirect" };
@@ -125,6 +131,28 @@ function openCoinbasePopup(
   };
 }
 
+/* -------------------- ENV GATING (CLIENT) -------------------- */
+/**
+ * Client components can only read env vars prefixed with NEXT_PUBLIC_.
+ *
+ * ✅ Add these to your .env:
+ *   NEXT_PUBLIC_ONRAMP_ENABLED=false
+ *   NEXT_PUBLIC_ONRAMP_ADMIN_EMAILS=nick.vassallo97@gmail.com
+ *
+ * Keep the server-only ones too if you want:
+ *   ONRAMP_ENABLED=false
+ *   ONRAMP_ADMIN_EMAILS=...
+ */
+const ONRAMP_ENABLED =
+  String(process.env.NEXT_PUBLIC_ONRAMP_ENABLED || "false")
+    .trim()
+    .toLowerCase() === "true";
+
+const ONRAMP_ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ONRAMP_ADMIN_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
 const Deposit: React.FC<DepositProps> = ({
   open,
   onOpenChange,
@@ -134,39 +162,56 @@ const Deposit: React.FC<DepositProps> = ({
 }) => {
   const { user } = useUser();
 
-  const [tab, setTab] = useState<"onramp" | "crypto">("onramp");
+  const [tab, setTab] = useState<"onramp" | "crypto">("crypto");
   const [copied, setCopied] = useState(false);
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  // ✅ Onramp consent + popup
   const [coinbaseConsent, setCoinbaseConsent] = useState(false);
   const [coinbaseLaunching, setCoinbaseLaunching] = useState(false);
   const [coinbaseError, setCoinbaseError] = useState<string | null>(null);
 
   const popupRef = useRef<{ cleanup?: () => void } | null>(null);
 
-  // ✅ UI admin gating (server already blocks too)
-  const myEmail = "nick.vassallo97@gmail.com";
   const userEmail = String(user?.email || "")
     .trim()
     .toLowerCase();
-  const isAdmin = userEmail === myEmail;
 
-  // If non-admin, force them onto crypto tab and keep them there
-  useEffect(() => {
-    if (!isAdmin && tab === "onramp") setTab("crypto");
-    // also clear consent state so nothing weird persists
-    if (!isAdmin) setCoinbaseConsent(false);
-  }, [isAdmin, tab]);
+  const isDev = useMemo(() => {
+    return ONRAMP_ADMIN_EMAILS.includes(userEmail);
+  }, [userEmail]);
 
+  // ✅ “Use” gating: enabled for everyone OR allowlisted
+  const canUseOnramp = ONRAMP_ENABLED || isDev;
+
+  // ✅ Mask (preview-only) when user can't use it
+  const showMask = !canUseOnramp;
+
+  // If not allowed, prevent consent being on
   useEffect(() => {
-    // cleanup popup on unmount
+    if (!canUseOnramp) setCoinbaseConsent(false);
+  }, [canUseOnramp]);
+
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Cleanup popup on unmount
+  useEffect(() => {
     return () => {
       popupRef.current?.cleanup?.();
       popupRef.current = null;
     };
   }, []);
+
+  // Lock body scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+    };
+  }, [open]);
 
   const handleCopy = async () => {
     try {
@@ -185,9 +230,8 @@ const Deposit: React.FC<DepositProps> = ({
   }, [onSuccess, onOpenChange]);
 
   const launchCoinbase = useCallback(async () => {
-    // ✅ hard UI stop (server will also stop)
-    if (!isAdmin) {
-      setCoinbaseError("Onramp is temporarily disabled.");
+    if (!canUseOnramp) {
+      setCoinbaseError("Bank deposits are not enabled yet.");
       return;
     }
     if (!coinbaseConsent) return;
@@ -199,11 +243,7 @@ const Deposit: React.FC<DepositProps> = ({
       const res = await fetch("/api/onramp/session", {
         method: "POST",
         credentials: "include",
-        cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           destinationAddress: walletAddress,
           purchaseCurrency: "USDC",
@@ -214,51 +254,43 @@ const Deposit: React.FC<DepositProps> = ({
         }),
       });
 
-      const text = await res.text().catch(() => "");
-      let data: OnrampSessionResponse = {};
-      try {
-        data = text ? (JSON.parse(text) as OnrampSessionResponse) : {};
-      } catch {}
+      const data: OnrampSessionResponse = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        // Show server’s disable message nicely
-        const serverMsg =
-          data?.error ||
-          (text && text.length < 180 ? text : "") ||
-          `Failed to create Coinbase session (HTTP ${res.status})`;
-        throw new Error(serverMsg);
+        throw new Error(
+          data?.error || `Failed to create session (HTTP ${res.status})`
+        );
       }
 
-      const url = data.url || data.one_click_buy_url || data.redirectUrl || "";
-      if (!url) throw new Error("Missing Coinbase redirect URL");
+      const url =
+        data.onrampUrl ||
+        data.url ||
+        data.one_click_buy_url ||
+        data.redirectUrl;
 
-      // Close any previous popup before opening a new one
+      if (!url) {
+        console.error("[Deposit] No URL in response:", data);
+        throw new Error("Missing Coinbase redirect URL");
+      }
+
       popupRef.current?.cleanup?.();
       popupRef.current = null;
 
-      const result = openCoinbasePopup(url, {
-        onClosed: async () => {
-          await handleOnrampSuccess();
-        },
-      });
-
+      const result = openCoinbasePopup(url, { onClosed: handleOnrampSuccess });
       popupRef.current = result;
 
-      // If redirect (mobile or popup blocked), stop spinner (navigation happens anyway)
       if (result.type === "redirect") {
         setCoinbaseLaunching(false);
       }
-    } catch (e: unknown) {
+    } catch (e) {
       console.error("[Deposit] Coinbase launch failed:", e);
       setCoinbaseError(
-        e instanceof Error
-          ? e.message
-          : "Couldn’t open Coinbase right now."
+        e instanceof Error ? e.message : "Couldn't open Coinbase right now."
       );
       setCoinbaseLaunching(false);
     }
   }, [
-    isAdmin,
+    canUseOnramp,
     coinbaseConsent,
     displayCurrency,
     walletAddress,
@@ -267,59 +299,100 @@ const Deposit: React.FC<DepositProps> = ({
 
   const solanaAddressUri = `solana:${walletAddress}`;
 
-  // Optional: a nicer, consistent label when blocked
-  const onrampBlockedMessage = useMemo(() => {
-    return (
-      <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-200">
-        Onramp is temporarily disabled while we complete Coinbase approval.
-        Crypto deposits are still available.
-      </div>
-    );
-  }, []);
+  const close = () => {
+    if (coinbaseLaunching) return;
+    onOpenChange(false);
+  };
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={[
-          "p-0 overflow-hidden flex flex-col",
-          "border border-border bg-card text-card-foreground text-foreground shadow-fintech-lg",
-          "sm:w-[min(92vw,520px)] sm:max-w-[520px]",
-          "sm:max-h-[90vh] sm:rounded-[28px]",
-          "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-          "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-          "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-        ].join(" ")}
-      >
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] sm:px-5 sm:pb-5 sm:pt-5">
-            <DialogHeader className="pb-3">
-              <DialogTitle className="text-base font-semibold">
-                Deposit funds
-              </DialogTitle>
-              <DialogDescription className="mt-0.5 text-[11px] text-muted-foreground">
+  if (!open || !mounted) return null;
+
+  const envMisconfigured =
+    process.env.NODE_ENV !== "production" &&
+    !ONRAMP_ENABLED &&
+    ONRAMP_ADMIN_EMAILS.length === 0;
+
+  // ✅ UPDATED MODAL SHELL:
+  // - backdrop is visual-only (pointer-events-none)
+  // - separate click-catcher closes the modal
+  // - card is above everything and stops propagation
+  return createPortal(
+    <div className="fixed inset-0 z-[80]">
+      {/* Backdrop visual ONLY */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm pointer-events-none" />
+
+      {/* Click-catcher (only outside-card clicks close) */}
+      <button
+        type="button"
+        aria-label="Close deposit modal"
+        className="absolute inset-0 cursor-default"
+        onClick={() => {
+          if (!coinbaseLaunching) close();
+        }}
+      />
+
+      {/* Centered card */}
+      <div className="absolute inset-0 flex items-center justify-center px-4">
+        <div
+          className="relative z-10 w-full max-w-md haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4 text-primary" />
+                <div className="text-sm font-semibold text-foreground/90">
+                  Deposit funds
+                </div>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
                 Move USDC into your Haven deposit account.
-              </DialogDescription>
-            </DialogHeader>
+              </div>
+            </div>
 
+            <div className="flex items-center gap-2">
+              <div className="text-right text-xs text-muted-foreground">
+                Balance
+                <div className="mt-0.5 font-semibold text-foreground/90">
+                  ${cleanNumber(balanceUsd).toFixed(2)}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={close}
+                disabled={coinbaseLaunching}
+                className="haven-pill hover:bg-accent disabled:opacity-50"
+                aria-label="Close"
+                title={coinbaseLaunching ? "Please wait…" : "Close"}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="mt-4">
             <Tabs
               value={tab}
               onValueChange={(val) => setTab(val as "onramp" | "crypto")}
             >
-              <TabsList className="mb-3 grid w-full grid-cols-2 rounded-2xl border border-border bg-background/40 p-1">
+              <TabsList className="mb-3 grid w-full grid-cols-2 rounded-2xl border border-border bg-background/50 p-1">
                 <TabsTrigger
                   value="onramp"
-                  // ✅ block the tab for everyone except you
-                  disabled={!isAdmin}
                   className={[
                     "text-xs rounded-xl px-3 py-2 transition-colors",
                     "bg-transparent text-muted-foreground",
                     "data-[state=active]:!bg-primary data-[state=active]:!text-black",
                     "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
-                    !isAdmin ? "opacity-50 cursor-not-allowed" : "",
                   ].join(" ")}
-                  title={!isAdmin ? "Onramp temporarily disabled" : undefined}
+                  title={showMask ? "Coming soon" : undefined}
                 >
-                  Bank deposit
+                  <span className="inline-flex items-center gap-2">
+                    <CreditCard className="h-4 w-4" />
+                    Bank deposit
+                  </span>
                 </TabsTrigger>
 
                 <TabsTrigger
@@ -331,68 +404,90 @@ const Deposit: React.FC<DepositProps> = ({
                     "data-[state=active]:shadow-[0_0_18px_rgba(16,185,129,0.25)]",
                   ].join(" ")}
                 >
-                  Crypto deposit
+                  <span className="inline-flex items-center gap-2">
+                    <Wallet className="h-4 w-4" />
+                    Crypto deposit
+                  </span>
                 </TabsTrigger>
               </TabsList>
 
-              {/* ===== Bank deposit tab ===== */}
+              {/* Bank deposit tab */}
               <TabsContent value="onramp" className="mt-2 space-y-3">
-                {/* ✅ Even if somehow shown, keep it blocked */}
-                {!isAdmin ? (
-                  <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
-                    <p className="font-medium text-foreground/90">
-                      Bank deposits temporarily unavailable
-                    </p>
-                    <p className="mt-1 text-muted-foreground leading-relaxed">
-                      We’re completing Coinbase approval. Please use Crypto
-                      deposit for now.
-                    </p>
-                    <div className="mt-3">{onrampBlockedMessage}</div>
+                {envMisconfigured ? (
+                  <div className="rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    Env misconfigured: NEXT_PUBLIC_ONRAMP_ADMIN_EMAILS is empty,
+                    so DevEmailGate will block everyone. Add it and restart dev
+                    server.
                   </div>
-                ) : (
-                  <>
-                    <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
-                      <p className="font-medium text-foreground/90">
-                        Buy USDC with Coinbase
-                      </p>
+                ) : null}
 
-                      <p className="mt-1 text-muted-foreground leading-relaxed">
-                        Haven will open Coinbase in a secure checkout window.
-                        Coinbase is the provider that facilitates the payment
-                        and purchase of USDC. Haven never stores your card or
-                        bank details.
-                      </p>
-
-                      <div className="mt-3 rounded-2xl border border-border bg-background/40 px-3 py-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">
-                            You’re buying
-                          </span>
-                          <span className="font-semibold text-foreground">
-                            USDC
-                          </span>
+                {showMask ? (
+                  <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                    <div className="flex items-start gap-2">
+                      <Lock className="mt-[1px] h-3.5 w-3.5" />
+                      <div>
+                        <div className="font-semibold text-foreground/90">
+                          Bank deposits are coming soon
                         </div>
-
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="text-muted-foreground">
-                            Payment currency
-                          </span>
-                          <span className="font-semibold text-foreground">
-                            {displayCurrency}
-                          </span>
-                        </div>
-
-                        <div className="mt-1 flex items-center justify-between gap-3">
-                          <span className="text-muted-foreground">
-                            Destination wallet
-                          </span>
-                          <span className="font-mono text-foreground/90 truncate max-w-[52%]">
-                            {shortAddress(walletAddress)}
-                          </span>
+                        <div className="mt-0.5 text-amber-100/80">
+                          You can preview this flow, but checkout is disabled
+                          for now.
                         </div>
                       </div>
+                    </div>
+                  </div>
+                ) : null}
 
-                      <label className="mt-3 flex items-start gap-2 rounded-2xl border border-border bg-background/40 px-3 py-2 cursor-pointer">
+                <div className="haven-card-soft px-4 py-4 text-[11px]">
+                  <p className="font-medium text-foreground/90">
+                    Buy USDC with Coinbase
+                  </p>
+
+                  <p className="mt-1 text-muted-foreground leading-relaxed">
+                    Haven will open Coinbase in a secure checkout window.
+                    Coinbase is the provider that facilitates payment and the
+                    purchase of USDC. Haven never stores your card or bank
+                    details.
+                  </p>
+
+                  <div className="mt-3 rounded-2xl border border-border bg-background/50 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">
+                        You&apos;re buying
+                      </span>
+                      <span className="font-semibold text-foreground">
+                        USDC
+                      </span>
+                    </div>
+
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-muted-foreground">
+                        Payment currency
+                      </span>
+                      <span className="font-semibold text-foreground">
+                        {displayCurrency}
+                      </span>
+                    </div>
+
+                    <div className="mt-1 flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        Destination wallet
+                      </span>
+                      <span className="font-mono text-foreground/90 truncate max-w-[52%]">
+                        {shortAddress(walletAddress)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <DevEmailGate
+                    allowEmails={ONRAMP_ADMIN_EMAILS}
+                    title="Onramp is temporarily restricted"
+                    message="We’re currently in approval/testing. This feature will be enabled for everyone soon."
+                    blurPx={14}
+                    className="mt-3"
+                  >
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-2 rounded-2xl border border-border bg-background/50 px-3 py-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={coinbaseConsent}
@@ -406,32 +501,40 @@ const Deposit: React.FC<DepositProps> = ({
                         </span>
                       </label>
 
-                      {coinbaseError ? (
-                        <div className="mt-3 rounded-2xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-[10px] text-red-200">
+                      {coinbaseError && (
+                        <div className="rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
                           {coinbaseError}
                         </div>
-                      ) : null}
+                      )}
 
                       <button
                         type="button"
                         onClick={launchCoinbase}
-                        disabled={!coinbaseConsent || coinbaseLaunching}
+                        disabled={
+                          !coinbaseConsent || coinbaseLaunching || !canUseOnramp
+                        }
                         className={[
-                          "mt-3 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition",
-                          "flex items-center justify-center gap-2",
-                          "border border-[#0052FF]/30 bg-[#0052FF]/10 text-[#9bb4ff]",
-                          "hover:bg-[#0052FF]/15 hover:border-[#0052FF]/45",
-                          "disabled:opacity-50 disabled:cursor-not-allowed",
-                          "shadow-[0_10px_26px_rgba(0,82,255,0.14)]",
+                          "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition",
+                          "flex items-center justify-center gap-2 border",
+                          coinbaseConsent && !coinbaseLaunching && canUseOnramp
+                            ? "border-primary/25 bg-primary/10 text-foreground hover:bg-primary/15"
+                            : "border-border bg-background/50 text-muted-foreground cursor-not-allowed",
                         ].join(" ")}
                       >
-                        <span className="inline-flex h-2.5 w-2.5 rounded-full bg-[#0052FF]" />
-                        {coinbaseLaunching
-                          ? "Opening Coinbase…"
-                          : "Continue to Coinbase"}
+                        {coinbaseLaunching ? (
+                          <>
+                            <span className="h-2.5 w-2.5 rounded-full bg-primary animate-pulse" />
+                            Opening Coinbase…
+                          </>
+                        ) : (
+                          <>
+                            <ExternalLink className="h-4 w-4 text-primary" />
+                            Continue to Coinbase
+                          </>
+                        )}
                       </button>
 
-                      {popupRef.current?.cleanup ? (
+                      {popupRef.current?.cleanup && (
                         <button
                           type="button"
                           onClick={() => {
@@ -439,30 +542,30 @@ const Deposit: React.FC<DepositProps> = ({
                             popupRef.current = null;
                             setCoinbaseLaunching(false);
                           }}
-                          className="mt-2 w-full rounded-2xl border border-border bg-background/40 px-4 py-2 text-[11px] text-muted-foreground hover:bg-accent transition"
+                          className="w-full rounded-2xl border border-border bg-background/50 px-4 py-2.5 text-[11px] text-muted-foreground hover:bg-accent transition"
                         >
                           Close Coinbase window
                         </button>
-                      ) : null}
+                      )}
                     </div>
+                  </DevEmailGate>
+                </div>
 
-                    <div className="rounded-2xl border border-border bg-background/40 px-3 py-2 text-[11px]">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">
-                          Current balance
-                        </span>
-                        <span className="font-semibold text-primary">
-                          ${cleanNumber(balanceUsd).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
+                <div className="rounded-2xl border border-border bg-background/50 px-3 py-2 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      Current balance
+                    </span>
+                    <span className="font-semibold text-primary">
+                      ${cleanNumber(balanceUsd).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
               </TabsContent>
 
-              {/* ===== Crypto deposit tab (unchanged) ===== */}
+              {/* Crypto deposit tab */}
               <TabsContent value="crypto" className="mt-2 space-y-4">
-                <div className="haven-card-soft px-3.5 py-3.5 text-[11px]">
+                <div className="haven-card-soft px-4 py-4 text-[11px]">
                   <p className="mb-2 font-medium text-foreground/90">
                     How to deposit USDC to Haven
                   </p>
@@ -499,20 +602,20 @@ const Deposit: React.FC<DepositProps> = ({
                     <li>Choose an amount and confirm.</li>
                   </ol>
 
-                  <div className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-200">
+                  <div className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
                     Warning: Only send USDC on{" "}
                     <span className="font-semibold">Solana</span>. Other
                     networks will result in loss of funds.
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)]">
-                  <div className="haven-card-soft px-3.5 py-3.5">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)]">
+                  <div className="haven-card-soft px-4 py-4">
                     <p className="text-[11px] font-medium text-muted-foreground">
                       Your Haven deposit address
                     </p>
 
-                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-border bg-background/40 px-3 py-2">
+                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-border bg-background/50 px-3 py-2">
                       <div className="flex-1 min-w-0">
                         <p className="truncate text-xs font-mono text-foreground/90">
                           {walletAddress}
@@ -525,12 +628,21 @@ const Deposit: React.FC<DepositProps> = ({
                       <button
                         type="button"
                         onClick={handleCopy}
-                        className={[
-                          "shrink-0 rounded-full px-3 py-1.5 text-[10px] font-semibold transition",
-                          "border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15",
-                        ].join(" ")}
+                        className="shrink-0 rounded-full px-3 py-1.5 text-[10px] font-semibold transition border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15"
                       >
-                        {copied ? "Copied" : "Copy"}
+                        <span className="inline-flex items-center gap-1.5">
+                          {copied ? (
+                            <>
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy
+                            </>
+                          )}
+                        </span>
                       </button>
                     </div>
 
@@ -538,7 +650,7 @@ const Deposit: React.FC<DepositProps> = ({
                       Share this address to receive USDC on Solana.
                     </p>
 
-                    <div className="mt-3 rounded-2xl border border-border bg-background/40 px-3 py-2 text-[11px]">
+                    <div className="mt-3 rounded-2xl border border-border bg-background/50 px-3 py-2 text-[11px]">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">
                           Current balance
@@ -550,7 +662,7 @@ const Deposit: React.FC<DepositProps> = ({
                     </div>
                   </div>
 
-                  <div className="haven-card-soft flex flex-col items-center justify-center gap-2 px-3.5 py-3.5">
+                  <div className="haven-card-soft flex flex-col items-center justify-center gap-2 px-4 py-4">
                     <p className="text-[11px] font-medium text-muted-foreground">
                       Scan to deposit
                     </p>
@@ -559,7 +671,6 @@ const Deposit: React.FC<DepositProps> = ({
                       <QRCodeSVG
                         value={solanaAddressUri}
                         size={124}
-                        includeMargin={false}
                         level="M"
                       />
                     </div>
@@ -573,18 +684,27 @@ const Deposit: React.FC<DepositProps> = ({
             </Tabs>
           </div>
 
-          <div className="shrink-0 border-t border-border bg-card/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:pb-5">
+          {/* Footer */}
+          <div className="mt-4">
             <button
               type="button"
               className="haven-btn-primary"
-              onClick={() => onOpenChange(false)}
+              onClick={close}
+              disabled={coinbaseLaunching}
             >
               Done
             </button>
+
+            <div className="mt-2 text-center text-[11px] text-muted-foreground">
+              Need help? Only deposit{" "}
+              <span className="font-semibold">USDC</span> on{" "}
+              <span className="font-semibold">Solana</span>.
+            </div>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>,
+    document.body
   );
 };
 

@@ -4,12 +4,13 @@ import React, { useMemo } from "react";
 import { useUser } from "@/providers/UserProvider";
 
 type DevEmailGateProps = {
-  allowEmails: string[]; // emails allowed to see children
+  allowEmails: string[];
   children: React.ReactNode;
   title?: string;
   message?: string;
-  blurPx?: number; // blur strength
+  blurPx?: number;
   className?: string;
+  blockWhileLoading?: boolean; // default false
 };
 
 export default function DevEmailGate({
@@ -19,23 +20,33 @@ export default function DevEmailGate({
   message = "We’re currently in approval/testing. This feature will be enabled for everyone soon.",
   blurPx = 14,
   className,
+  blockWhileLoading = false,
 }: DevEmailGateProps) {
   const { user, loading } = useUser();
 
-  const isAllowed = useMemo(() => {
-    const email = (user?.email || "").trim().toLowerCase();
-    if (!email) return false;
-    return allowEmails.map((e) => e.trim().toLowerCase()).includes(email);
-  }, [user?.email, allowEmails]);
+  const email = useMemo(
+    () =>
+      String(user?.email || "")
+        .trim()
+        .toLowerCase(),
+    [user?.email]
+  );
 
-  // While user loads, block to be safe (prevents a flash of content)
-  const blocked = loading || !isAllowed;
+  const isAllowed = useMemo(() => {
+    const allow = (allowEmails || [])
+      .map((e) => String(e).trim().toLowerCase())
+      .filter(Boolean);
+    if (!email) return false;
+    return allow.includes(email);
+  }, [allowEmails, email]);
+
+  const blocked = (blockWhileLoading && loading) || !isAllowed;
 
   return (
     <div className={["relative", className || ""].join(" ")}>
-      {/* Always render children, but blur/disable when blocked */}
+      {/* Blurred preview */}
       <div
-        className={blocked ? "pointer-events-none select-none" : ""}
+        className={blocked ? "select-none" : ""}
         style={
           blocked ? { filter: `blur(${blurPx}px)`, opacity: 0.55 } : undefined
         }
@@ -44,16 +55,26 @@ export default function DevEmailGate({
         {children}
       </div>
 
+      {/* IMPORTANT: overlay must catch clicks so they don't hit the modal backdrop */}
       {blocked ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center">
-          <div className="mx-3 w-full max-w-md rounded-2xl border border-border bg-card/95 p-4 shadow-fintech-lg">
+        <div
+          className="absolute inset-0 z-10 pointer-events-auto flex items-center justify-center"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          {/* full click-catcher */}
+          <div className="absolute inset-0" />
+
+          <div className="relative mx-3 w-full max-w-md rounded-2xl border border-border bg-card/95 p-4 shadow-fintech-lg">
             <div className="text-sm font-semibold text-foreground">{title}</div>
             <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               {message}
-            </div>
-
-            <div className="mt-3 rounded-xl border border-border bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
-              Your account isn’t whitelisted for onramp testing yet.
             </div>
           </div>
         </div>

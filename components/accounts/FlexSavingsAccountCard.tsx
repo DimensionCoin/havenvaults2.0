@@ -169,8 +169,8 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
   // ----------------------------
   if (!hasAccount) {
     return (
-      <Link href="/flex" className="block">
-        <div className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+      <Link href="/flex" className="block h-full">
+        <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
           <div>
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -215,8 +215,8 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
   // ----------------------------
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
-      <Link href="/flex" className="block">
-        <div className="haven-card flex h-full w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+      <Link href="/flex" className="block h-full">
+        <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
           <div>
             <div className="flex items-start justify-between gap-3">
               <div>
