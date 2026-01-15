@@ -286,7 +286,7 @@ const USDCAccountsCarousel: React.FC = () => {
     { key: "deposit", label: "Deposit", index: 0 },
     { key: "flex", label: "Flex", index: 1 },
     { key: "plus", label: "Plus", index: 2 },
-    { key: "spending", label: "Spending", index: 3 },
+    { key: "spending", label: "Spend", index: 3 },
   ];
 
   const goPrev = () =>
