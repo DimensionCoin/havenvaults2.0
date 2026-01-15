@@ -1,54 +1,87 @@
 // app/api/auth/onboard/route.ts
 import "server-only";
+
 import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User, {
-  DISPLAY_CURRENCIES,
-  FinancialKnowledgeLevel,
-  RiskLevel,
+  type FinancialKnowledgeLevel,
+  type RiskLevel,
+  parseDisplayCurrency,
 } from "@/models/User";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const VALID_RISK_LEVELS: RiskLevel[] = ["low", "medium", "high"];
-const VALID_KNOWLEDGE_LEVELS: FinancialKnowledgeLevel[] = [
+/* ───────── Validators (type-guards) ───────── */
+
+const VALID_RISK_LEVELS = ["low", "medium", "high"] as const;
+const VALID_KNOWLEDGE_LEVELS = [
   "none",
   "beginner",
   "intermediate",
   "advanced",
-];
+] as const;
+
+function isRiskLevel(x: unknown): x is RiskLevel {
+  return (
+    typeof x === "string" &&
+    (VALID_RISK_LEVELS as readonly string[]).includes(x)
+  );
+}
+
+function isFinancialKnowledgeLevel(x: unknown): x is FinancialKnowledgeLevel {
+  return (
+    typeof x === "string" &&
+    (VALID_KNOWLEDGE_LEVELS as readonly string[]).includes(x)
+  );
+}
+
+/* ───────── Route ───────── */
+
+type Body = {
+  firstName?: unknown;
+  lastName?: unknown;
+  country?: unknown;
+  displayCurrency?: unknown;
+  financialKnowledgeLevel?: unknown;
+  riskLevel?: unknown;
+};
 
 export async function POST(req: NextRequest) {
   try {
     await connect();
 
     const session = await getSessionFromCookies();
-    if (!session || !session.sub) {
+    if (!session?.sub) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const privyId = session.sub;
 
-    const body: {
-      firstName?: string;
-      lastName?: string;
-      country?: string;
-      displayCurrency?: string;
-      financialKnowledgeLevel?: FinancialKnowledgeLevel;
-      riskLevel?: RiskLevel;
-    } = await req.json().catch(() => ({}));
-    const {
-      firstName,
-      lastName,
-      country,
-      displayCurrency,
-      financialKnowledgeLevel,
-      riskLevel,
-    } = body;
+    const body = (await req.json().catch(() => ({}))) as Body;
 
-    // Basic validation
+    const firstName =
+      typeof body.firstName === "string" ? body.firstName.trim() : "";
+    const lastName =
+      typeof body.lastName === "string" ? body.lastName.trim() : "";
+
+    const country =
+      typeof body.country === "string" && body.country.trim()
+        ? body.country.trim().toUpperCase()
+        : undefined;
+
+    const displayCurrency = parseDisplayCurrency(body.displayCurrency);
+
+    const financialKnowledgeLevel = isFinancialKnowledgeLevel(
+      body.financialKnowledgeLevel
+    )
+      ? body.financialKnowledgeLevel
+      : undefined;
+
+    const riskLevel = isRiskLevel(body.riskLevel) ? body.riskLevel : undefined;
+
+    // ───────── Basic validation ─────────
     if (!firstName || !lastName) {
       return NextResponse.json(
         { error: "First name and last name are required." },
@@ -56,12 +89,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (
-      displayCurrency &&
-      !DISPLAY_CURRENCIES.includes(
-        displayCurrency as typeof DISPLAY_CURRENCIES[number]
-      )
-    ) {
+    // If the client sent a value but it wasn't valid, reject clearly
+    if (body.displayCurrency !== undefined && !displayCurrency) {
       return NextResponse.json(
         { error: "Invalid display currency." },
         { status: 400 }
@@ -69,10 +98,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (
-      financialKnowledgeLevel &&
-      !VALID_KNOWLEDGE_LEVELS.includes(
-        financialKnowledgeLevel as FinancialKnowledgeLevel
-      )
+      body.financialKnowledgeLevel !== undefined &&
+      !financialKnowledgeLevel
     ) {
       return NextResponse.json(
         { error: "Invalid financial knowledge level." },
@@ -80,14 +107,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (riskLevel && !VALID_RISK_LEVELS.includes(riskLevel as RiskLevel)) {
+    if (body.riskLevel !== undefined && !riskLevel) {
       return NextResponse.json(
         { error: "Invalid risk level." },
         { status: 400 }
       );
     }
 
-    // Look up the user by privyId
+    // ───────── Load user ─────────
     const user = await User.findOne({ privyId });
     if (!user) {
       return NextResponse.json(
@@ -96,25 +123,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Apply updates
-    user.firstName = String(firstName).trim();
-    user.lastName = String(lastName).trim();
+    // ───────── Apply updates ─────────
+    user.firstName = firstName;
+    user.lastName = lastName;
 
-    if (country) {
-      user.country = String(country).toUpperCase();
-    }
-
-    if (displayCurrency) {
-      user.displayCurrency = displayCurrency;
-    }
-
-    if (financialKnowledgeLevel) {
+    if (country) user.country = country;
+    if (displayCurrency) user.displayCurrency = displayCurrency;
+    if (financialKnowledgeLevel)
       user.financialKnowledgeLevel = financialKnowledgeLevel;
-    }
-
-    if (riskLevel) {
-      user.riskLevel = riskLevel;
-    }
+    if (riskLevel) user.riskLevel = riskLevel;
 
     user.isOnboarded = true;
 

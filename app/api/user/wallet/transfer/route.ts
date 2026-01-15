@@ -9,14 +9,20 @@ import {
   SendOptions,
   SendTransactionError,
   LAMPORTS_PER_SOL,
+  ParsedTransactionMeta,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 import { getSessionFromCookies } from "@/lib/auth";
+import { connect as connectMongo } from "@/lib/db";
+import { recordUserFees, type FeeToken } from "@/lib/fees";
+import mongoose from "mongoose";
 
-/* ───────── Config ───────── */
+/* ───────── Next.js route config ───────── */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/* ───────── Env ───────── */
 
 function required(name: string): string {
   const v = process.env[name];
@@ -24,21 +30,22 @@ function required(name: string): string {
   return v;
 }
 
-// MUST match the client RPC used to fetch the blockhash
 const SOLANA_RPC = required("NEXT_PUBLIC_SOLANA_RPC");
 
-// Privy server-auth app that owns the Haven fee payer wallet
 const PRIVY_APP_ID = required("PRIVY_APP_ID");
 const PRIVY_SECRET = required("PRIVY_APP_SECRET");
 const PRIVY_AUTH_PK = required("PRIVY_AUTH_PRIVATE_KEY_B64");
 const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 
-// Public address of the Haven fee payer (must be tx.payerKey index 0)
 const HAVEN_PUBKEY = new PublicKey(
   required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
 );
+const TREASURY_OWNER = new PublicKey(
+  required("NEXT_PUBLIC_APP_TREASURY_OWNER")
+);
+const USDC_MINT = new PublicKey(required("NEXT_PUBLIC_USDC_MINT"));
 
-/* ───────── Types & helpers ───────── */
+/* ───────── Types ───────── */
 
 type Body = { transaction: string };
 
@@ -50,7 +57,6 @@ type ErrorLike = {
 
 type MessageV0Subset = {
   staticAccountKeys: PublicKey[];
-  header: { numRequiredSignatures: number };
   recentBlockhash?: string;
 };
 
@@ -69,17 +75,18 @@ type SignResp =
 
 type JsonErrorExtra = Record<string, unknown> | undefined;
 
+/* ───────── Response helpers ───────── */
+
 function jsonError(
   status: number,
   message: string,
   extra?: JsonErrorExtra
 ): NextResponse {
-  // What the client sees: short + human-readable
-  const payload = { error: message, ...(extra || {}) };
-  return NextResponse.json(payload, { status });
+  return NextResponse.json({ error: message, ...(extra || {}) }, { status });
 }
 
-// Normalize Privy signTransaction return into bytes
+/* ───────── Privy signing normalize ───────── */
+
 function toSignedBytes(resp: unknown): Uint8Array {
   const asObj = resp as Record<string, unknown> | null;
 
@@ -88,15 +95,14 @@ function toSignedBytes(resp: unknown): Uint8Array {
       ? (asObj.signedTransaction as unknown)
       : resp;
 
-  if (typeof payload === "string") {
+  if (typeof payload === "string")
     return new Uint8Array(Buffer.from(payload, "base64"));
-  }
-  if (payload instanceof Uint8Array) {
-    return payload;
-  }
+  if (payload instanceof Uint8Array) return payload;
+
   if (Array.isArray(payload) && payload.every((n) => typeof n === "number")) {
     return new Uint8Array(payload as number[]);
   }
+
   if (
     payload &&
     typeof payload === "object" &&
@@ -110,6 +116,8 @@ function toSignedBytes(resp: unknown): Uint8Array {
 
   throw new Error("Unexpected signTransaction return type");
 }
+
+/* ───────── Tx confirmation ───────── */
 
 async function confirmSig(conn: Connection, signature: string) {
   try {
@@ -125,12 +133,13 @@ async function confirmSig(conn: Connection, signature: string) {
   }
 }
 
-// Take Solana logs & return a compact, human-readable string array
+/* ───────── Error log summarizer ───────── */
+
 function summarizeLogs(logs?: string[] | null): string[] {
-  if (!logs || !logs.length) return [];
+  if (!logs?.length) return [];
   return logs
     .map((l) => l.trim())
-    .filter((l) => !!l)
+    .filter(Boolean)
     .filter(
       (l) =>
         /error|fail|insufficient|custom program error/i.test(l) ||
@@ -139,48 +148,242 @@ function summarizeLogs(logs?: string[] | null): string[] {
     );
 }
 
+/* ───────── BigInt helpers (NO BigInt literals) ───────── */
+
+function bi0(): bigint {
+  return BigInt(0);
+}
+
+function bigIntFromString(x: unknown): bigint {
+  try {
+    if (typeof x === "string" && x.trim()) return BigInt(x.trim());
+  } catch {}
+  return bi0();
+}
+
+function clampDecimals(decimals: number) {
+  const d = Number.isFinite(decimals) ? Math.floor(decimals) : 0;
+  return Math.max(0, Math.min(18, d));
+}
+
+// 10^d without bigint exponentiation / literals (keeps TS target < ES2020 happy)
+function pow10BigInt(decimals: number): bigint {
+  const d = clampDecimals(decimals);
+  let out = BigInt(1);
+  const ten = BigInt(10);
+  for (let i = 0; i < d; i++) out = out * ten;
+  return out;
+}
+
+/* ───────── Fee detection (reliable: uses confirmed meta) ───────── */
+
+type TokenBalanceMetaLike = {
+  accountIndex?: number;
+  owner?: string;
+  mint?: string;
+  uiTokenAmount?: {
+    amount?: string; // base units string
+    decimals?: number;
+  };
+  // some RPCs also include these:
+  amount?: string;
+  decimals?: number;
+};
+
+type TxMetaLike = Pick<
+  ParsedTransactionMeta,
+  "preTokenBalances" | "postTokenBalances"
+> & {
+  preTokenBalances?: TokenBalanceMetaLike[];
+  postTokenBalances?: TokenBalanceMetaLike[];
+};
+
+type TxWithMetaLike = { meta?: TxMetaLike | null } | null;
+
+/**
+ * Detect all token deltas RECEIVED by treasury owner by reading tx meta:
+ * - Supports SPL + Token-2022
+ * - Supports ALTs (loaded addresses)
+ * - Supports inner instructions
+ * - Supports Transfer + TransferChecked
+ *
+ * Mechanism:
+ *   For each token account owned by TREASURY_OWNER:
+ *     delta = postTokenBalance.amount - preTokenBalance.amount  (base units)
+ *   Aggregate deltas by mint.
+ */
+async function detectTreasuryFeeTokensFromMeta(params: {
+  conn: Connection;
+  signature: string;
+  treasuryOwner: PublicKey;
+}): Promise<FeeToken[]> {
+  const { conn, signature, treasuryOwner } = params;
+
+  const tx = (await conn.getTransaction(signature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  })) as TxWithMetaLike;
+
+  const meta = tx?.meta ?? null;
+  if (!meta) return [];
+
+  const ownerStr = treasuryOwner.toBase58();
+
+  const pre: TokenBalanceMetaLike[] = Array.isArray(meta.preTokenBalances)
+    ? meta.preTokenBalances
+    : [];
+  const post: TokenBalanceMetaLike[] = Array.isArray(meta.postTokenBalances)
+    ? meta.postTokenBalances
+    : [];
+
+  const preByIdx = new Map<number, TokenBalanceMetaLike>();
+  for (const b of pre) {
+    if (typeof b?.accountIndex === "number") preByIdx.set(b.accountIndex, b);
+  }
+
+  const deltas = new Map<
+    string,
+    { mint: string; decimals: number; baseDelta: bigint; symbol?: string }
+  >();
+
+  for (const pb of post) {
+    const idx = pb?.accountIndex;
+    if (typeof idx !== "number") continue;
+
+    // Only token accounts owned by the treasury owner
+    const owner = pb?.owner;
+    if (owner !== ownerStr) continue;
+
+    const mint = String(pb?.mint || "").trim();
+    if (!mint) continue;
+
+    const decimalsRaw = Number(
+      pb?.uiTokenAmount?.decimals ?? pb?.decimals ?? 0
+    );
+    const decimals = clampDecimals(decimalsRaw);
+
+    // `uiTokenAmount.amount` is base-units string (best source)
+    const postBaseStr =
+      pb?.uiTokenAmount?.amount ??
+      (typeof pb?.amount === "string" ? pb.amount : "0");
+
+    const preBal = preByIdx.get(idx);
+    const preBaseStr =
+      preBal?.uiTokenAmount?.amount ??
+      (typeof preBal?.amount === "string" ? preBal.amount : "0");
+
+    const postBase = bigIntFromString(postBaseStr);
+    const preBase = bigIntFromString(preBaseStr);
+
+    const delta = postBase - preBase;
+    if (delta <= bi0()) continue; // only received amounts
+
+    const prev = deltas.get(mint);
+    if (!prev) {
+      deltas.set(mint, {
+        mint,
+        decimals,
+        baseDelta: delta,
+        symbol: mint === USDC_MINT.toBase58() ? "USDC" : undefined,
+      });
+    } else {
+      deltas.set(mint, {
+        mint,
+        decimals: prev.decimals > 0 ? prev.decimals : decimals,
+        baseDelta: prev.baseDelta + delta,
+        symbol:
+          prev.symbol ?? (mint === USDC_MINT.toBase58() ? "USDC" : undefined),
+      });
+    }
+  }
+
+  const out: FeeToken[] = [];
+  for (const v of deltas.values()) {
+    const denom = pow10BigInt(v.decimals);
+
+    // Fees are expected to be small -> converting is safe for your use case.
+    // If you ever allow very large fee transfers, switch FeeToken.amountUi to string.
+    const ui = Number(v.baseDelta) / Number(denom);
+
+    if (Number.isFinite(ui) && ui > 0) {
+      out.push({
+        mint: v.mint,
+        decimals: v.decimals,
+        amountUi: ui,
+        symbol: v.symbol,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Transaction meta can be briefly unavailable right after confirmation depending on RPC.
+ * This retries a couple times to avoid missing fee events.
+ */
+async function detectTreasuryFeeTokensWithRetry(params: {
+  conn: Connection;
+  signature: string;
+  treasuryOwner: PublicKey;
+  attempts?: number;
+  delayMs?: number;
+}): Promise<FeeToken[]> {
+  const { conn, signature, treasuryOwner } = params;
+  const attempts = Number.isFinite(params.attempts)
+    ? Math.max(1, params.attempts!)
+    : 3;
+  const delayMs = Number.isFinite(params.delayMs)
+    ? Math.max(0, params.delayMs!)
+    : 250;
+
+  for (let i = 0; i < attempts; i++) {
+    const tokens = await detectTreasuryFeeTokensFromMeta({
+      conn,
+      signature,
+      treasuryOwner,
+    });
+    if (tokens.length > 0 || i === attempts - 1) return tokens;
+
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  return [];
+}
+
 /* ───────── Route ───────── */
 
 export async function POST(req: NextRequest) {
-  if (req.method !== "POST") {
-    return jsonError(405, "Method not allowed");
-  }
   if (!req.headers.get("content-type")?.includes("application/json")) {
     return jsonError(415, "Content-Type must be application/json");
   }
 
   try {
-    // 🔐 Require a valid session
     const session = await getSessionFromCookies();
-    if (!session?.userId) {
-      return jsonError(401, "Unauthorized");
-    }
+    if (!session?.userId) return jsonError(401, "Unauthorized");
 
     const body = (await req.json().catch(() => null)) as Body | null;
     if (!body?.transaction || typeof body.transaction !== "string") {
       return jsonError(400, "Missing 'transaction' in body");
     }
 
-    // Raw v0 tx bytes (already signed by the user in the browser)
     const raw = Buffer.from(body.transaction, "base64");
-    if (raw.length === 0) {
-      return jsonError(400, "Invalid transaction encoding");
-    }
+    if (!raw.length) return jsonError(400, "Invalid transaction encoding");
 
     let userSignedTx: VersionedTransaction;
     try {
-      userSignedTx = VersionedTransaction.deserialize(Buffer.from(raw));
+      userSignedTx = VersionedTransaction.deserialize(raw);
     } catch {
       return jsonError(400, "Invalid VersionedTransaction");
     }
 
-    // ✅ Validate fee payer is Haven sponsor wallet
-    const feePayer = userSignedTx.message.staticAccountKeys[0];
-    if (!feePayer.equals(HAVEN_PUBKEY)) {
+    // Fee payer must be Haven sponsor wallet (index 0 in v0 message)
+    const payer = userSignedTx.message.staticAccountKeys[0];
+    if (!payer.equals(HAVEN_PUBKEY)) {
       return jsonError(400, "Invalid fee payer (must be Haven sponsor wallet)");
     }
 
-    // ❌ Reject dummy/empty blockhash
+    // Reject dummy/empty blockhash
     const recentBlockhash = (userSignedTx.message as unknown as MessageV0Subset)
       .recentBlockhash;
     if (
@@ -192,11 +395,11 @@ export async function POST(req: NextRequest) {
 
     const conn = new Connection(SOLANA_RPC, "confirmed");
 
-    // 💰 Pre-flight: check Haven fee payer has enough SOL
+    // Pre-flight: ensure fee payer has SOL to sponsor fees
     try {
       const lamports = await conn.getBalance(HAVEN_PUBKEY, "processed");
       const balanceSol = lamports / LAMPORTS_PER_SOL;
-      const MIN_FEE_WALLET_SOL = 0.005; // tweak if you like
+      const MIN_FEE_WALLET_SOL = 0.005;
 
       if (balanceSol < MIN_FEE_WALLET_SOL) {
         console.error(
@@ -206,9 +409,7 @@ export async function POST(req: NextRequest) {
         return jsonError(
           503,
           "Haven fee wallet is temporarily underfunded. Please try again shortly.",
-          {
-            code: "FEEPAYER_UNDERFUNDED",
-          }
+          { code: "FEEPAYER_UNDERFUNDED" }
         );
       }
     } catch (err) {
@@ -216,10 +417,9 @@ export async function POST(req: NextRequest) {
         "[/api/user/wallet/transfer] Failed to read fee payer balance:",
         err
       );
-      // Not fatal; we still try to send, but you'll see this in logs
     }
 
-    // 🔑 Co-sign via Privy server-auth (Haven fee payer wallet)
+    // Co-sign with Privy (Haven fee payer)
     const appPrivy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
       walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
     });
@@ -228,9 +428,8 @@ export async function POST(req: NextRequest) {
     try {
       const resp: unknown = await appPrivy.walletApi.solana.signTransaction({
         walletId: HAVEN_WALLET_ID,
-        transaction: userSignedTx, // pass the VersionedTransaction object
+        transaction: userSignedTx,
       });
-
       coSignedBytes = toSignedBytes(resp as SignResp);
     } catch (err: unknown) {
       const e = err as ErrorLike;
@@ -238,8 +437,9 @@ export async function POST(req: NextRequest) {
         typeof e.bodyAsString === "function"
           ? String(e.bodyAsString())
           : typeof e.body === "string"
-          ? e.body
-          : undefined;
+            ? e.body
+            : undefined;
+
       const msgStr =
         typeof e.message === "string" ? e.message : bodyStr || String(err);
       const low = msgStr.toLowerCase();
@@ -259,9 +459,7 @@ export async function POST(req: NextRequest) {
 
       console.error(
         "[/api/user/wallet/transfer] Privy signTransaction failed",
-        {
-          message: msgStr,
-        }
+        { message: msgStr }
       );
       return jsonError(500, "Privy signTransaction failed.", {
         code: "PRIVY_SIGN_FAILED",
@@ -278,14 +476,12 @@ export async function POST(req: NextRequest) {
         (err as { message?: unknown })?.message ?? err
       ).toLowerCase();
 
-      // Explicit blockhash handling (again, from RPC side)
       if (msg.includes("blockhash not found") || msg.includes("expired")) {
         return jsonError(409, "Blockhash not found or expired", {
           code: "BLOCKHASH_EXPIRED",
         });
       }
 
-      // Fee / balance issues
       if (
         msg.includes("insufficient funds") ||
         msg.includes("insufficient lamports")
@@ -301,23 +497,19 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Try to pull simulation logs
       if (typeof (err as SendTransactionError)?.getLogs === "function") {
         try {
           const logs = await (err as SendTransactionError).getLogs(conn);
-          const summary = summarizeLogs(logs);
-
           console.error(
             "[/api/user/wallet/transfer] Simulation failed. Full logs:",
             logs
           );
-
           return jsonError(400, "Simulation failed.", {
             code: "SIMULATION_FAILED",
-            logs: summary,
+            logs: summarizeLogs(logs),
           });
         } catch {
-          // ignore getLogs failures; fall through to generic handler
+          // ignore getLogs failures
         }
       }
 
@@ -331,10 +523,46 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Best-effort confirmation
+    // Confirm
     await confirmSig(conn, signature);
 
-    return NextResponse.json({ signature });
+    // Detect + record fees paid to treasury owner (ALL mints, SPL + Token-2022)
+    let feeTokensDetected: FeeToken[] = [];
+    try {
+      feeTokensDetected = await detectTreasuryFeeTokensWithRetry({
+        conn,
+        signature,
+        treasuryOwner: TREASURY_OWNER,
+        attempts: 3,
+        delayMs: 250,
+      });
+
+      if (feeTokensDetected.length > 0) {
+        await connectMongo();
+
+        const userId = mongoose.Types.ObjectId.isValid(session.userId)
+          ? new mongoose.Types.ObjectId(session.userId)
+          : null;
+
+        if (userId) {
+          await recordUserFees({
+            userId,
+            signature, // idempotency key
+            kind: "wallet_transfer_fee",
+            tokens: feeTokensDetected,
+          });
+        }
+      }
+    } catch (e) {
+      // Never fail the transfer response if analytics write fails
+      console.error("[/api/user/wallet/transfer] Fee tracking failed:", e);
+    }
+
+    return NextResponse.json({
+      signature,
+      feeTokensDetected,
+      treasuryOwner: TREASURY_OWNER.toBase58(),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[/api/user/wallet/transfer] Unhandled error:", msg);

@@ -1,4 +1,4 @@
-// app/api/booster/send/route.ts - FIXED PRIVY SIGNING (NO `any`)
+// app/api/booster/send/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import {
@@ -8,6 +8,11 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
+import { getSessionFromCookies } from "@/lib/auth";
+import { recordUserFees } from "@/lib/fees";
+import User from "@/models/User";
+import { connect } from "@/lib/db";
+import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +38,26 @@ const KEEP_DUST_LAMPORTS = 900_000; // 0.0009 SOL
 const DUST_TOLERANCE_LAMPORTS = 100_000;
 const DUST_MAX_LAMPORTS = KEEP_DUST_LAMPORTS + DUST_TOLERANCE_LAMPORTS;
 
+/* ───────── Token Lookup ───────── */
+
+const CLUSTER = getCluster();
+
+/**
+ * Look up token symbol from token config by mint address
+ */
+function getSymbolForMint(mint: string): string | undefined {
+  if (!mint) return undefined;
+
+  for (const token of TOKENS) {
+    const tokenMint = getMintFor(token, CLUSTER);
+    if (tokenMint === mint) {
+      return token.symbol;
+    }
+  }
+
+  return undefined;
+}
+
 /* ───────── TYPES ───────── */
 type ErrorLike = {
   name?: unknown;
@@ -49,6 +74,15 @@ type MessageV0Subset = {
 };
 
 type HasSignatures = { signatures?: Uint8Array[] };
+
+interface SendRequestBody {
+  transaction?: string;
+  // Fee tracking info (optional)
+  feeUnits?: number;
+  feeMint?: string;
+  feeDecimals?: number;
+  feeKind?: string; // e.g. "perp_open", "perp_close", "perp_increase"
+}
 
 /* ───────── HELPERS ───────── */
 
@@ -105,7 +139,6 @@ function anyZero(sig: Uint8Array | number[]): boolean {
   return true;
 }
 
-// ✅ FIXED: Properly handle all Privy response formats WITHOUT `any`
 function toSignedBytes(resp: unknown): Uint8Array {
   // Direct Uint8Array
   if (resp instanceof Uint8Array) {
@@ -145,7 +178,6 @@ function toSignedBytes(resp: unknown): Uint8Array {
 
       // Has serialize method
       if (isRecord(st) && typeof st.serialize === "function") {
-        // serialize() can return Buffer | Uint8Array | number[]
         const out = st.serialize();
         if (out instanceof Uint8Array) return new Uint8Array(out);
         if (typeof Buffer !== "undefined" && Buffer.isBuffer(out))
@@ -189,6 +221,71 @@ function toSignedBytes(resp: unknown): Uint8Array {
   throw new Error("Unexpected signTransaction return type");
 }
 
+/**
+ * Record fee to database (fire-and-forget, non-blocking)
+ */
+async function recordFeeAsync(params: {
+  privyId: string;
+  signature: string;
+  feeUnits: number;
+  feeMint: string;
+  feeDecimals: number;
+  feeKind: string;
+}): Promise<void> {
+  const { privyId, signature, feeUnits, feeMint, feeDecimals, feeKind } =
+    params;
+
+  try {
+    await connect();
+
+    const user = await User.findOne({ privyId }).select({ _id: 1 }).lean();
+
+    if (!user?._id) {
+      console.warn(
+        "[booster/send] Fee recording skipped: user not found",
+        privyId
+      );
+      return;
+    }
+
+    // Convert base units to UI units
+    const feeUi = feeUnits / Math.pow(10, feeDecimals);
+
+    // Look up symbol from token config
+    const feeSymbol = getSymbolForMint(feeMint);
+
+    const result = await recordUserFees({
+      userId: user._id,
+      signature,
+      kind: feeKind,
+      tokens: [
+        {
+          mint: feeMint,
+          amountUi: feeUi,
+          decimals: feeDecimals,
+          symbol: feeSymbol,
+        },
+      ],
+    });
+
+    if (result.ok && result.recorded) {
+      console.log(
+        `[booster/send] Fee recorded: ${feeUi} ${feeSymbol || feeMint.slice(0, 8)} (${feeKind}) for ${signature.slice(0, 8)}`
+      );
+    } else if (result.ok && !result.recorded) {
+      console.log(
+        `[booster/send] Fee skipped (${result.reason}): ${signature.slice(0, 8)}`
+      );
+    }
+  } catch (err) {
+    // Log but don't throw - fee recording shouldn't break the transaction
+    console.error(
+      "[booster/send] Fee recording failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 /* ───────── ROUTE ───────── */
 export async function POST(req: NextRequest) {
   const startTime = Date.now();
@@ -196,10 +293,24 @@ export async function POST(req: NextRequest) {
   const stageRef: { stage: string } = { stage: "init" };
 
   try {
+    // ─────────── Auth ───────────
+    stageRef.stage = "auth";
+    const session = await getSessionFromCookies();
+    if (!session?.userId) {
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: "Not authenticated",
+        userMessage: "Please sign in to continue.",
+        tip: "Refresh the page and try again.",
+        traceId,
+        stage: stageRef.stage,
+      });
+    }
+
     stageRef.stage = "parseBody";
-    const parsed = (await req.json().catch(() => null)) as {
-      transaction?: string;
-    } | null;
+    const parsed = (await req
+      .json()
+      .catch(() => null)) as SendRequestBody | null;
 
     const transaction = parsed?.transaction;
     if (!transaction) {
@@ -212,6 +323,15 @@ export async function POST(req: NextRequest) {
         stage: stageRef.stage,
       });
     }
+
+    // Extract fee info (optional)
+    const feeUnits = typeof parsed?.feeUnits === "number" ? parsed.feeUnits : 0;
+    const feeMint =
+      typeof parsed?.feeMint === "string" ? parsed.feeMint.trim() : "";
+    const feeDecimals =
+      typeof parsed?.feeDecimals === "number" ? parsed.feeDecimals : 6;
+    const feeKind =
+      typeof parsed?.feeKind === "string" ? parsed.feeKind.trim() : "perp";
 
     stageRef.stage = "deserialize";
     let userSignedTx: VersionedTransaction;
@@ -310,29 +430,23 @@ export async function POST(req: NextRequest) {
 
     let coSignedBytes: Uint8Array;
     try {
-      console.log(`[send] ${traceId} Calling Privy signTransaction...`);
+      console.log(`[booster/send] ${traceId} Calling Privy signTransaction...`);
 
       const resp = await appPrivy.walletApi.solana.signTransaction({
         walletId: HAVEN_WALLET_ID,
         transaction: userSignedTx,
       });
 
-      console.log(`[send] ${traceId} Privy response type:`, typeof resp);
-      console.log(
-        `[send] ${traceId} Privy response keys:`,
-        isRecord(resp) ? Object.keys(resp) : null
-      );
-
       coSignedBytes = toSignedBytes(resp);
 
       console.log(
-        `[send] ${traceId} Successfully parsed signed bytes, length: ${coSignedBytes.length}`
+        `[booster/send] ${traceId} Successfully parsed signed bytes, length: ${coSignedBytes.length}`
       );
     } catch (err: unknown) {
       const shaped = shapeErr(err);
       const low = shaped.message.toLowerCase();
 
-      console.error(`[send] ${traceId} Privy signing error:`, shaped);
+      console.error(`[booster/send] ${traceId} Privy signing error:`, shaped);
 
       if (low.includes("blockhash") || low.includes("expired")) {
         return jsonError(409, {
@@ -407,7 +521,10 @@ export async function POST(req: NextRequest) {
       simSuccess = true;
     } catch (simErr: unknown) {
       const shaped = shapeErr(simErr);
-      console.warn(`[send] ${traceId} simulation threw:`, shaped.message);
+      console.warn(
+        `[booster/send] ${traceId} simulation threw:`,
+        shaped.message
+      );
     }
 
     stageRef.stage = "send";
@@ -436,6 +553,20 @@ export async function POST(req: NextRequest) {
         stage: stageRef.stage,
         logs,
         details: shaped.message,
+      });
+    }
+
+    /* ───────── RECORD FEE (fire-and-forget) ───────── */
+    if (feeUnits > 0 && feeMint) {
+      recordFeeAsync({
+        privyId: session.userId,
+        signature,
+        feeUnits,
+        feeMint,
+        feeDecimals,
+        feeKind,
+      }).catch(() => {
+        // Already logged inside the function
       });
     }
 
@@ -479,7 +610,7 @@ export async function POST(req: NextRequest) {
 
     const totalTime = Date.now() - startTime;
     console.log(
-      `[send] ✅ ${signature.slice(0, 8)} in ${totalTime}ms (confirmed: ${confirmed})`
+      `[booster/send] ✅ ${signature.slice(0, 8)} in ${totalTime}ms (confirmed: ${confirmed})`
     );
 
     return NextResponse.json({
@@ -510,7 +641,7 @@ export async function POST(req: NextRequest) {
     const totalTime = Date.now() - startTime;
     const shaped = shapeErr(e);
     console.error(
-      `[send] ❌ Failed in ${totalTime}ms at ${stageRef.stage}:`,
+      `[booster/send] ❌ Failed in ${totalTime}ms at ${stageRef.stage}:`,
       shaped
     );
 

@@ -31,7 +31,7 @@ function required(name: string): string {
 
 const RPC = required("NEXT_PUBLIC_SOLANA_RPC");
 const JUP_API_KEY = required("JUP_API_KEY");
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY; // Optional but recommended
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY; // optional
 const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
 const FEE_RATE_RAW = process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0.01";
@@ -42,7 +42,7 @@ const TREASURY_OWNER = new PublicKey(TREASURY_OWNER_STR);
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
 const JUP_SWAP_IXS = "https://api.jup.ag/swap/v1/swap-instructions";
 
-// Real Solana v0 raw tx limit (bytes)
+// Solana v0 raw tx size limit (bytes)
 const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
@@ -51,17 +51,11 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
 
 /* ───────── Priority Fee Config ───────── */
 
-// Priority fee limits (in microLamports per CU)
 const PRIORITY_FEE_CONFIG = {
-  // Absolute minimum - network base fee
   MIN_MICRO_LAMPORTS: 1,
-  // Default fallback if Helius API fails
-  FALLBACK_MICRO_LAMPORTS: 10_000, // ~0.00001 SOL for 100k CU
-  // Maximum we're willing to pay (prevents runaway costs during congestion)
-  MAX_MICRO_LAMPORTS: 500_000, // ~0.05 SOL for 100k CU
-  // Maximum total lamports for priority fee (hard cap)
-  MAX_TOTAL_LAMPORTS: 100_000, // 0.0001 SOL absolute max
-  // Priority level: "Min", "Low", "Medium", "High", "VeryHigh", "UnsafeMax"
+  FALLBACK_MICRO_LAMPORTS: 10_000,
+  MAX_MICRO_LAMPORTS: 500_000,
+  MAX_TOTAL_LAMPORTS: 100_000,
   PRIORITY_LEVEL: "Medium" as const,
 };
 
@@ -88,12 +82,8 @@ const altCache = new Map<
 >();
 const ALT_CACHE_TTL = 5 * 60 * 1000;
 
-// Priority fee cache (short TTL since network conditions change)
-let priorityFeeCache: {
-  microLamports: number;
-  expires: number;
-} | null = null;
-const PRIORITY_FEE_CACHE_TTL = 10_000; // 10 seconds
+let priorityFeeCache: { microLamports: number; expires: number } | null = null;
+const PRIORITY_FEE_CACHE_TTL = 10_000;
 
 /* ───────── HELPERS ───────── */
 
@@ -159,20 +149,13 @@ async function getAltCached(
   return value;
 }
 
-/**
- * Get optimal priority fee from Helius API
- * Falls back to conservative default if API fails
- */
 async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
   const now = Date.now();
-
-  // Check cache first
   if (priorityFeeCache && priorityFeeCache.expires > now) {
     return priorityFeeCache.microLamports;
   }
 
   try {
-    // Use Helius priority fee estimation API
     const response = await fetch(RPC, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -182,7 +165,6 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
         method: "getPriorityFeeEstimate",
         params: [
           {
-            // If we have specific accounts, use them for more accurate estimation
             ...(accountKeys?.length ? { accountKeys } : {}),
             options: {
               includeAllPriorityFeeLevels: true,
@@ -194,26 +176,16 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
       }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Helius API returned ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`Helius API returned ${response.status}`);
     const data = await response.json();
-
-    if (data.error) {
-      throw new Error(data.error.message || "Helius API error");
-    }
+    if (data.error) throw new Error(data.error.message || "Helius API error");
 
     const result = data.result;
-
-    // Try to get the recommended fee first, then fall back to priority levels
     let microLamports: number;
 
     if (typeof result?.priorityFeeEstimate === "number") {
-      // Use the recommended estimate
       microLamports = result.priorityFeeEstimate;
     } else if (result?.priorityFeeLevels) {
-      // Use the configured priority level
       const levels = result.priorityFeeLevels;
       const levelKey = PRIORITY_FEE_CONFIG.PRIORITY_LEVEL.toLowerCase();
       microLamports =
@@ -224,7 +196,6 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
       throw new Error("Unexpected Helius response format");
     }
 
-    // Clamp to our configured limits
     microLamports = Math.max(
       PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS,
       Math.min(
@@ -233,54 +204,34 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
       )
     );
 
-    // Cache the result
     priorityFeeCache = {
       microLamports,
       expires: now + PRIORITY_FEE_CACHE_TTL,
     };
 
-    console.log(
-      `[PriorityFee] Helius estimate: ${microLamports} microLamports`
-    );
     return microLamports;
   } catch (err) {
-    console.warn(
-      "[PriorityFee] Helius API failed, using fallback:",
-      err instanceof Error ? err.message : err
-    );
+    console.warn("[PriorityFee] Helius failed, using fallback:", err);
     return PRIORITY_FEE_CONFIG.FALLBACK_MICRO_LAMPORTS;
   }
 }
 
-/**
- * Alternative: Get priority fee using getRecentPrioritizationFees RPC
- * This is a standard Solana RPC method that works without Helius
- */
 async function getRecentPriorityFee(conn: Connection): Promise<number> {
   try {
     const fees = await conn.getRecentPrioritizationFees();
+    if (!fees.length) return PRIORITY_FEE_CONFIG.FALLBACK_MICRO_LAMPORTS;
 
-    if (!fees.length) {
-      return PRIORITY_FEE_CONFIG.FALLBACK_MICRO_LAMPORTS;
-    }
-
-    // Get fees from recent slots, sorted by slot (most recent first)
     const sortedFees = fees
       .sort((a, b) => b.slot - a.slot)
-      .slice(0, 20) // Last 20 slots
+      .slice(0, 20)
       .map((f) => f.prioritizationFee)
       .filter((f) => f > 0);
 
-    if (!sortedFees.length) {
-      return PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS;
-    }
+    if (!sortedFees.length) return PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS;
 
-    // Use median for stability (less affected by outliers)
     sortedFees.sort((a, b) => a - b);
-    const medianFee = sortedFees[Math.floor(sortedFees.length / 2)];
-
-    // Add a small buffer (10%) to ensure we're competitive
-    const withBuffer = Math.ceil(medianFee * 1.1);
+    const median = sortedFees[Math.floor(sortedFees.length / 2)];
+    const withBuffer = Math.ceil(median * 1.1);
 
     return Math.max(
       PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS,
@@ -292,20 +243,13 @@ async function getRecentPriorityFee(conn: Connection): Promise<number> {
   }
 }
 
-/**
- * Get the best priority fee estimate
- * Prefers Helius API, falls back to standard RPC method
- */
 async function getOptimalPriorityFee(
   conn: Connection,
   accountKeys?: string[]
 ): Promise<number> {
-  // If we have Helius API key and are using Helius RPC, use their API
   if (HELIUS_API_KEY || RPC.includes("helius")) {
     return getHeliusPriorityFee(accountKeys);
   }
-
-  // Otherwise use standard RPC method
   return getRecentPriorityFee(conn);
 }
 
@@ -319,9 +263,7 @@ function toIx(obj: unknown): TransactionInstruction {
     isWritable: boolean;
   }>;
 
-  if (!pid || !dataStr || !keys) {
-    throw new Error("Invalid Jupiter instruction shape");
-  }
+  if (!pid || !dataStr || !keys) throw new Error("Invalid Jupiter instruction");
 
   return new TransactionInstruction({
     programId: new PublicKey(pid),
@@ -349,6 +291,7 @@ function computeFeeUnits(amountUnits: number) {
   if (!Number.isFinite(amountUnits) || amountUnits <= 0 || bps <= 0) {
     return { feeUnits: 0, feeBps: 0, feeRate: 0 };
   }
+  // ceil(amount * bps / 10_000)
   const feeUnits = Math.floor((amountUnits * bps + 9999) / 10_000);
   return { feeUnits, feeBps: bps, feeRate: bps / 10_000 };
 }
@@ -364,7 +307,6 @@ async function jupFetch(url: string, init?: RequestInit) {
   });
 }
 
-// Convert Jupiter ATA creates to sponsored payer
 function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   const sponsored: TransactionInstruction[] = [];
   const nonAta: TransactionInstruction[] = [];
@@ -402,27 +344,17 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   return { sponsoredAtaIxs: sponsored, nonAtaSetupIxs: nonAta };
 }
 
-/**
- * Filter out any compute budget instructions from Jupiter
- * We'll add our own optimized ones
- */
-function filterComputeBudgetIxs(
-  ixs: TransactionInstruction[]
-): TransactionInstruction[] {
+function filterComputeBudgetIxs(ixs: TransactionInstruction[]) {
   const COMPUTE_BUDGET_PROGRAM = new PublicKey(
     "ComputeBudget111111111111111111111111111111"
   );
   return ixs.filter((ix) => !ix.programId.equals(COMPUTE_BUDGET_PROGRAM));
 }
 
-/**
- * Create optimized compute budget instructions
- */
 function createComputeBudgetIxs(
   computeUnits: number,
   microLamportsPerCu: number
 ): TransactionInstruction[] {
-  // Calculate total priority fee and cap it
   const totalLamports = Math.floor(
     (computeUnits * microLamportsPerCu) / 1_000_000
   );
@@ -431,16 +363,13 @@ function createComputeBudgetIxs(
     PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS
   );
 
-  // Recalculate microLamports if we hit the cap
   const effectiveMicroLamports =
     cappedLamports < totalLamports
       ? Math.floor((cappedLamports * 1_000_000) / computeUnits)
       : microLamportsPerCu;
 
   return [
-    ComputeBudgetProgram.setComputeUnitLimit({
-      units: computeUnits,
-    }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
     ComputeBudgetProgram.setComputeUnitPrice({
       microLamports: effectiveMicroLamports,
     }),
@@ -454,7 +383,6 @@ function parseUiAmountToUnits(amountUi: string, decimals: number): number {
   const [wRaw, fRaw = ""] = s.split(".");
   const whole = wRaw.replace(/\D/g, "");
   const frac = fRaw.replace(/\D/g, "");
-
   if (!whole && !frac) return 0;
 
   const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
@@ -534,12 +462,14 @@ export async function POST(req: Request) {
       false,
       inputProgId
     );
+
     const userOutputAta = getAssociatedTokenAddressSync(
       outputMint,
       userOwner,
       false,
       outputProgId
     );
+
     const treasuryInputAta = getAssociatedTokenAddressSync(
       inputMint,
       TREASURY_OWNER,
@@ -618,11 +548,10 @@ export async function POST(req: Request) {
       new URLSearchParams({
         inputMint: inputMint.toBase58(),
         outputMint: outputMint.toBase58(),
-        amount: String(netUnits),
+        amount: String(netUnits), // ✅ swap uses net (after fee)
         slippageBps: String(slippageBps),
       });
 
-    // Fetch quote, blockhash, and priority fee in parallel
     const [quoteRes, blockhashData, priorityFeeMicroLamports] =
       await Promise.all([
         jupFetch(quoteUrl),
@@ -648,7 +577,6 @@ export async function POST(req: Request) {
     const quoteResponse = await quoteRes.json();
 
     stage = "swapInstructions";
-    // Request swap instructions WITHOUT priority fees - we'll add our own
     const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -657,8 +585,7 @@ export async function POST(req: Request) {
         userPublicKey: userOwner.toBase58(),
         wrapAndUnwrapSol: false,
         dynamicComputeUnitLimit: true,
-        // Don't let Jupiter add priority fees - we handle it ourselves
-        prioritizationFeeLamports: 0,
+        prioritizationFeeLamports: 0, // ✅ we add our own compute budget ixs
       }),
     });
 
@@ -700,15 +627,14 @@ export async function POST(req: Request) {
 
     stage = "buildInstructions";
 
-    // Jupiter setup (ATA creates etc) rewritten as sponsored, and deduped
+    // Jupiter setup rewritten as sponsored ATAs (payer = HAVEN_FEEPAYER)
     const setupIxs = (swapData.setupInstructions ?? []).map(toIx);
     const { sponsoredAtaIxs, nonAtaSetupIxs } =
       rebuildAtaCreatesAsSponsored(setupIxs);
 
-    // Filter out any compute budget instructions Jupiter might have added
     const filteredNonAtaSetupIxs = filterComputeBudgetIxs(nonAtaSetupIxs);
 
-    // Treasury ATA for the input mint
+    // Ensure treasury ATA exists for fee mint (payer = HAVEN_FEEPAYER)
     const treasuryAtaCreateIx =
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER,
@@ -718,7 +644,7 @@ export async function POST(req: Request) {
         inputProgId
       );
 
-    // Fee transfer when feeUnits > 0
+    // Transfer fee from user -> treasury (user signs; fee payer pays SOL)
     const feeIx =
       feeUnits > 0
         ? createTransferCheckedInstruction(
@@ -734,26 +660,24 @@ export async function POST(req: Request) {
         : null;
 
     const swapIx = toIx(swapData.swapInstruction);
+
     const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
     const filteredCleanupIxs = filterComputeBudgetIxs(cleanupIxs);
 
-    // Use Jupiter's compute unit estimate or a reasonable default
-    // Add buffer for our additional instructions (ATA creates, fee transfer)
+    // Compute budget sizing
     const baseComputeUnits = swapData.computeUnitLimit || 200_000;
-    const additionalIxCount = sponsoredAtaIxs.length + (feeIx ? 2 : 1); // ATAs + treasury ATA + fee
+    const additionalIxCount = sponsoredAtaIxs.length + 1 + (feeIx ? 1 : 0); // treasury ATA + fee ix
     const computeUnits = Math.min(
-      baseComputeUnits + additionalIxCount * 30_000, // ~30k CU per ATA create
-      1_400_000 // Solana max
+      baseComputeUnits + additionalIxCount * 30_000,
+      1_400_000
     );
 
-    // Create our optimized compute budget instructions
     const computeBudgetIxs = createComputeBudgetIxs(
       computeUnits,
       priorityFeeMicroLamports
     );
 
-    // Build final instruction array
-    // Order: ComputeBudget -> ATAs -> Treasury ATA -> Fee Transfer -> Swap -> Cleanup
+    // ✅ Final instruction order
     const ixs: TransactionInstruction[] = [
       ...computeBudgetIxs,
       ...sponsoredAtaIxs,
@@ -769,7 +693,7 @@ export async function POST(req: Request) {
 
     const tx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: HAVEN_FEEPAYER,
+        payerKey: HAVEN_FEEPAYER, // ✅ Haven pays SOL
         recentBlockhash: blockhash,
         instructions: ixs,
       }).compileToV0Message(altAccounts)
@@ -782,7 +706,7 @@ export async function POST(req: Request) {
         error: `Raw size ${rawLen} > ${MAX_TX_RAW_BYTES}`,
         userMessage:
           "This swap route is too large. Try a smaller amount or a different pair.",
-        tip: "If this happens often for a mint, pre-create the treasury ATA for it.",
+        tip: "If this happens often, pre-create treasury ATAs for popular mints.",
         stage,
         traceId,
       });
@@ -791,41 +715,42 @@ export async function POST(req: Request) {
     const b64 = Buffer.from(tx.serialize()).toString("base64");
     const buildTime = Date.now() - startTime;
 
-    // Calculate actual priority fee cost for logging
     const priorityFeeLamports = Math.floor(
       (computeUnits * priorityFeeMicroLamports) / 1_000_000
     );
-    const cappedPriorityFee = Math.min(
+    const cappedPriorityFeeLamports = Math.min(
       priorityFeeLamports,
       PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS
     );
 
     console.log(
       `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0, 8)}→${outputMintStr.slice(0, 8)} ` +
-        `gross=${amountUnits} fee=${feeUnits} priorityFee=${cappedPriorityFee}lamports ` +
-        `(${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`
+        `gross=${amountUnits} fee=${feeUnits} net=${netUnits} ` +
+        `priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`
     );
 
+    // IMPORTANT:
+    // - These fee fields are "expected fee" for UI only.
+    // - Your /api/jup/send route should compute the ACTUAL fee received by treasury from tx meta and record to DB.
     return NextResponse.json({
       transaction: b64,
       recentBlockhash: blockhash,
       lastValidBlockHeight,
       traceId,
 
-      // Fee details for UI / analytics
-      feeUnits,
-      feeBps,
-      feeRate,
+      // Expected fee (UI only)
+      expectedFeeUnits: feeUnits,
+      expectedFeeBps: feeBps,
+      expectedFeeRate: feeRate,
       feeMint: inputMint.toBase58(),
       feeDecimals: inputDecimals,
 
-      // Priority fee info (useful for debugging/analytics)
+      // Priority fee info
       priorityFeeMicroLamports,
-      priorityFeeLamports: cappedPriorityFee,
+      priorityFeeLamports: cappedPriorityFeeLamports,
       computeUnits,
 
-      // Legacy shape
-      postChargeFeeUnits: null,
+      // Swap sizing
       grossInUnits: amountUnits,
       netInUnits: netUnits,
       isMax,
@@ -833,7 +758,7 @@ export async function POST(req: Request) {
       outputMint: outputMint.toBase58(),
       buildTimeMs: buildTime,
 
-      // Useful audit data
+      // Audit info
       treasuryOwner: TREASURY_OWNER.toBase58(),
       treasuryFeeAta: treasuryInputAta.toBase58(),
       userInputAta: userInputAta.toBase58(),

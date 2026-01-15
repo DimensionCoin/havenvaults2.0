@@ -14,10 +14,6 @@ export type FinancialKnowledgeLevel =
   | "intermediate"
   | "advanced";
 
-/**
- * Central list of currencies Haven supports for display.
- * Major fiat + USDC.
- */
 export const DISPLAY_CURRENCIES = [
   "USD",
   "EUR",
@@ -69,6 +65,17 @@ export const DISPLAY_CURRENCIES = [
 ] as const;
 
 export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
+const DISPLAY_CURRENCY_SET: ReadonlySet<string> = new Set(DISPLAY_CURRENCIES);
+
+/** Type guard: checks if a string is one of the allowed display currencies */
+export function isDisplayCurrency(x: unknown): x is DisplayCurrency {
+  return typeof x === "string" && DISPLAY_CURRENCY_SET.has(x);
+}
+
+/** Safe parser: returns a valid DisplayCurrency or undefined */
+export function parseDisplayCurrency(x: unknown): DisplayCurrency | undefined {
+  return isDisplayCurrency(x) ? x : undefined;
+}
 
 export type SavingsAccountType = "flex" | "plus";
 export type ContactStatus = "invited" | "active" | "external";
@@ -80,30 +87,16 @@ export type InviteStatus = "sent" | "clicked" | "signed_up";
 
 export interface ISavingsAccount {
   type: SavingsAccountType;
-
-  // authority / owner wallet
   walletAddress: string;
-
-  // Marginfi account you query for balance
   marginfiAccountPk?: string;
 
-  /**
-   * Aggregates (fast path)
-   * These are kept in sync from SavingsLedger (source of truth).
-   */
+  principalDeposited: mongoose.Types.Decimal128;
+  principalWithdrawn: mongoose.Types.Decimal128;
+  interestWithdrawn: mongoose.Types.Decimal128;
 
-  // principal-only accounting
-  principalDeposited: mongoose.Types.Decimal128; // sum of deposit principal
-  principalWithdrawn: mongoose.Types.Decimal128; // principal portion withdrawn
-  interestWithdrawn: mongoose.Types.Decimal128; // interest portion withdrawn
+  totalDeposited: mongoose.Types.Decimal128;
+  totalWithdrawn: mongoose.Types.Decimal128;
 
-  // totals
-  totalDeposited: mongoose.Types.Decimal128; // sum of ledger.amount where direction=deposit
-  totalWithdrawn: mongoose.Types.Decimal128; // sum of ledger.amount where direction=withdraw
-
-  feesPaidUsdc: mongoose.Types.Decimal128;
-
-  // optional cached reconciliation fields
   lastOnChainBalance?: mongoose.Types.Decimal128;
   lastSyncedAt?: Date;
 
@@ -154,6 +147,20 @@ export interface IBalanceSnapshot {
   breakdown?: IBalanceBreakdown;
 }
 
+/**
+ * ✅ Production-safe fee totals:
+ * - amountBase is an INTEGER string in base units (atomic units)
+ * - decimals tells you how to render it
+ * - symbol optional (for UI only)
+ *
+ * Matches lib/fees.ts which aggregates base units as strings.
+ */
+export interface IFeePaidTotal {
+  amountBase: string; // integer string
+  decimals: number; // 0..18
+  symbol?: string;
+}
+
 export interface IUser extends Document {
   privyId: string;
   email: string;
@@ -165,6 +172,9 @@ export interface IUser extends Document {
   profileImageUrl?: string;
 
   savingsAccounts: ISavingsAccount[];
+
+  // ✅ New multi-token totals, keyed by mint base58
+  feesPaidTotals: Map<string, IFeePaidTotal>;
 
   wishlistTokenMints: string[];
 
@@ -201,7 +211,6 @@ export interface IUser extends Document {
 
 const D128 = mongoose.Types.Decimal128;
 const zero = () => D128.fromString("0");
-
 const ensureD128 = (v: any) => (v ? v : zero());
 
 const makeDefaultSavingsAccount = (
@@ -219,13 +228,11 @@ const makeDefaultSavingsAccount = (
   totalDeposited: zero(),
   totalWithdrawn: zero(),
 
-  feesPaidUsdc: zero(),
-
   lastOnChainBalance: undefined,
   lastSyncedAt: undefined,
 });
 
-const makeReferralCode = () => crypto.randomBytes(5).toString("base64url"); // short, URL-safe
+const makeReferralCode = () => crypto.randomBytes(5).toString("base64url");
 
 /* ──────────────────────────────────────────────────────────────────────────────
   Schemas
@@ -235,7 +242,6 @@ const SavingsAccountSchema = new Schema<ISavingsAccount>(
   {
     type: { type: String, enum: ["flex", "plus"], required: true },
     walletAddress: { type: String, required: true, index: true },
-
     marginfiAccountPk: { type: String, trim: true },
 
     principalDeposited: {
@@ -264,8 +270,6 @@ const SavingsAccountSchema = new Schema<ISavingsAccount>(
       default: 0,
       required: true,
     },
-
-    feesPaidUsdc: { type: Schema.Types.Decimal128, default: 0, required: true },
 
     lastOnChainBalance: { type: Schema.Types.Decimal128, default: undefined },
     lastSyncedAt: { type: Date, default: undefined },
@@ -338,6 +342,16 @@ const BalanceSnapshotSchema = new Schema<IBalanceSnapshot>(
   { _id: false }
 );
 
+// ✅ Map value schema for feesPaidTotals (base-units string)
+const FeePaidTotalSchema = new Schema<IFeePaidTotal>(
+  {
+    amountBase: { type: String, required: true, default: "0" },
+    decimals: { type: Number, required: true, default: 6 },
+    symbol: { type: String, required: false },
+  },
+  { _id: false }
+);
+
 const UserSchema = new Schema<IUser>(
   {
     privyId: { type: String, required: true, unique: true, index: true },
@@ -384,13 +398,20 @@ const UserSchema = new Schema<IUser>(
     contacts: { type: [ContactSchema], default: [] },
     invites: { type: [InviteSchema], default: [] },
 
-    // NOTE: required, but we auto-generate it in pre("validate")
     referralCode: { type: String, required: true, unique: true, index: true },
 
     referrals: [{ type: Schema.Types.ObjectId, ref: "User", index: true }],
     referredBy: { type: Schema.Types.ObjectId, ref: "User", index: true },
 
     balanceSnapshots: { type: [BalanceSnapshotSchema], default: [] },
+
+    // ✅ Update #1: Map default as plain object (most reliable for Mongoose Map)
+    feesPaidTotals: {
+      type: Map,
+      of: FeePaidTotalSchema,
+      default: () => ({}), // ✅ was new Map()
+      required: true,
+    },
 
     isPro: { type: Boolean, default: false },
     isOnboarded: { type: Boolean, default: false, index: true },
@@ -403,21 +424,25 @@ const UserSchema = new Schema<IUser>(
 
 /* ──────────────────────────────────────────────────────────────────────────────
   Normalization middleware (Mongoose 7-safe)
-  - ensures savings accounts exist + aligned
-  - ensures new savings fields exist on older docs
-  - generates referralCode when missing
 ────────────────────────────────────────────────────────────────────────────── */
 
 UserSchema.pre("validate", async function () {
   const user = this as IUser;
 
-  // Defensive defaults (helps when old docs are missing arrays)
   if (!Array.isArray(user.savingsAccounts)) user.savingsAccounts = [];
   if (!Array.isArray(user.contacts)) user.contacts = [];
   if (!Array.isArray(user.invites)) user.invites = [];
   if (!Array.isArray(user.wishlistTokenMints)) user.wishlistTokenMints = [];
   if (!Array.isArray(user.referrals)) user.referrals = [];
   if (!Array.isArray(user.balanceSnapshots)) user.balanceSnapshots = [];
+
+  // ✅ Update #2: feesPaidTotals backfill as object (DON'T convert to Map)
+  // When using `.lean()`, feesPaidTotals is a plain object.
+  // Keeping it as an object avoids Map serialization edge cases.
+  const fpt = (user as any).feesPaidTotals;
+  if (!fpt || typeof fpt !== "object") {
+    (user as any).feesPaidTotals = {};
+  }
 
   // Savings normalization
   if (user.walletAddress) {
@@ -438,13 +463,11 @@ UserSchema.pre("validate", async function () {
         acc.walletAddress = user.walletAddress;
       }
 
-      // Backfill missing Decimal128 fields for older docs
       acc.principalDeposited = ensureD128(acc.principalDeposited) as any;
       acc.principalWithdrawn = ensureD128(acc.principalWithdrawn) as any;
       acc.interestWithdrawn = ensureD128(acc.interestWithdrawn) as any;
       acc.totalDeposited = ensureD128(acc.totalDeposited) as any;
       acc.totalWithdrawn = ensureD128(acc.totalWithdrawn) as any;
-      acc.feesPaidUsdc = ensureD128(acc.feesPaidUsdc) as any;
     }
 
     if (!seen.has("flex")) {
@@ -461,7 +484,7 @@ UserSchema.pre("validate", async function () {
     user.savingsAccounts.sort((a, b) => (a.type > b.type ? 1 : -1));
   }
 
-  // Referral code generation (this is what invite/referral flows depend on)
+  // Referral code
   if (!user.referralCode) {
     for (let i = 0; i < 10; i++) {
       const code = makeReferralCode();
@@ -534,5 +557,7 @@ UserSchema.index({ "contacts.walletAddress": 1 });
 UserSchema.index({ "contacts.havenUser": 1 });
 
 export const User =
-  mongoose.models.User || mongoose.model<IUser>("User", UserSchema);
+  (mongoose.models.User as mongoose.Model<IUser>) ||
+  mongoose.model<IUser>("User", UserSchema);
+
 export default User;

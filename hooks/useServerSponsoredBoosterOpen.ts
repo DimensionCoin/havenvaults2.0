@@ -61,7 +61,28 @@ type BoosterOpenBuildResponse = {
   transaction: string;
   recentBlockhash: string;
   lastValidBlockHeight: number;
-  meta?: Record<string, unknown>;
+  meta?: {
+    symbol?: string;
+    side?: string;
+    leverage?: number;
+    marginUnits?: string;
+    collateralUnits?: string;
+    sizeUsdUnits?: string;
+    feeUnits?: string;
+    position?: string;
+    positionRequest?: string;
+    requestCounter?: string;
+    priceSlippageBps?: number;
+    custody?: string;
+    collateralCustody?: string;
+    ownerLamportsBefore?: number;
+    topUpLamports?: number;
+    predictedOwnerRentNeed?: number;
+    keepDustLamports?: number;
+    jupMinWalletLamports?: number;
+    safeSolBufferLamports?: number;
+    buildTimeMs?: number;
+  };
 };
 
 type BoosterSweepBuildResponse = {
@@ -98,6 +119,10 @@ const KEEPER_POLL_INTERVAL_MS = 2_000;
 const KEEPER_MAX_WAIT_MS = 30_000;
 const SWEEP_RETRY_DELAY_MS = 2_000;
 const EXPECTED_REFUND_MIN = 3_000_000;
+
+// USDC mint for fee tracking
+const USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || "";
+const USDC_DECIMALS = 6;
 
 /* ───────── HELPERS ───────── */
 
@@ -234,11 +259,29 @@ export function useServerSponsoredBoosterOpen() {
     });
   }, []);
 
-  const sendTx = useCallback(async (signedTx: VersionedTransaction) => {
-    return postJSON<BoosterSendResponse>("/api/booster/send", {
-      transaction: toB64(signedTx),
-    });
-  }, []);
+  const sendTx = useCallback(
+    async (
+      signedTx: VersionedTransaction,
+      feeInfo?: {
+        feeUnits: number;
+        feeMint: string;
+        feeDecimals: number;
+        feeKind: string;
+      }
+    ) => {
+      return postJSON<BoosterSendResponse>("/api/booster/send", {
+        transaction: toB64(signedTx),
+        // Fee tracking info (optional)
+        ...(feeInfo && {
+          feeUnits: feeInfo.feeUnits,
+          feeMint: feeInfo.feeMint,
+          feeDecimals: feeInfo.feeDecimals,
+          feeKind: feeInfo.feeKind,
+        }),
+      });
+    },
+    []
+  );
 
   // ───────── Wait for Jupiter Keeper ─────────
 
@@ -340,7 +383,7 @@ export function useServerSponsoredBoosterOpen() {
             throw new Error("Sweep returned null transaction");
           }
 
-          // Sign and send
+          // Sign and send (no fee tracking for sweep)
           const signedSweep = await signWithWallet(
             address,
             fromB64(sweepBuild.transaction)
@@ -457,9 +500,25 @@ export function useServerSponsoredBoosterOpen() {
           }
         }
 
-        /* ══════════ PHASE 2: SEND ══════════ */
+        /* ══════════ PHASE 2: SEND WITH FEE TRACKING ══════════ */
         setStatus("sending");
-        const openResp = await sendTx(signedOpenTx);
+
+        // Extract fee info from build response
+        const feeUnitsStr = openBuild.meta?.feeUnits;
+        const feeUnits = feeUnitsStr ? parseInt(feeUnitsStr, 10) : 0;
+
+        // Build fee info object for send
+        const feeInfo =
+          feeUnits > 0 && USDC_MINT
+            ? {
+                feeUnits,
+                feeMint: USDC_MINT,
+                feeDecimals: USDC_DECIMALS,
+                feeKind: "perp_open",
+              }
+            : undefined;
+
+        const openResp = await sendTx(signedOpenTx, feeInfo);
         setOpenSig(openResp.signature);
 
         setStatus("confirming");
@@ -467,7 +526,8 @@ export function useServerSponsoredBoosterOpen() {
         const balanceAfterOpen = openResp.ownerLamportsAfter ?? null;
 
         console.log(
-          `[Open] ${openResp.signature.slice(0, 8)}... confirmed=${openConfirmed}`
+          `[Open] ${openResp.signature.slice(0, 8)}... confirmed=${openConfirmed}` +
+            (feeUnits > 0 ? ` fee=${feeUnits / 10 ** USDC_DECIMALS} USDC` : "")
         );
 
         /* ══════════ PHASE 3: WAIT FOR KEEPER ══════════ */

@@ -70,6 +70,8 @@ type BuildResponse = {
   grossInUnits: number;
   netInUnits: number;
   feeUnits: number;
+  feeMint: string;
+  feeDecimals: number;
   buildTimeMs?: number;
 };
 
@@ -265,8 +267,13 @@ export function useServerSponsoredSwap() {
 
         let sendResp: SendResponse;
         try {
+          // Pass fee info from build response to send endpoint for tracking
           sendResp = await postJSON<SendResponse>("/api/jup/send", {
             transaction: signedB64,
+            // Fee tracking info (symbol resolved server-side from token config)
+            feeUnits: buildResp!.feeUnits,
+            feeMint: buildResp!.feeMint,
+            feeDecimals: buildResp!.feeDecimals,
           });
         } catch (e) {
           // If blockhash expired during send, could retry build+sign

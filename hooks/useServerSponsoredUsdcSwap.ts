@@ -87,6 +87,8 @@ type BuildResponse = {
   grossInUnits: number;
   netInUnits: number;
   feeUnits: number;
+  feeMint: string;
+  feeDecimals: number;
   buildTimeMs?: number;
   priorityFeeLamports?: number;
   priorityFeeMicroLamports?: number;
@@ -472,9 +474,16 @@ export function useServerSponsoredUsdcSwap() {
         /* ══════════ PHASE 3: SEND ══════════ */
         setStatus("sending");
 
+        // Pass fee info from build response to send endpoint for tracking
         const sendResp = await postJSON<SendResponse>(
           "/api/jup/send",
-          { transaction: signedB64 },
+          {
+            transaction: signedB64,
+            // Fee tracking info (symbol resolved server-side from token config)
+            feeUnits: buildResp!.feeUnits,
+            feeMint: buildResp!.feeMint,
+            feeDecimals: buildResp!.feeDecimals,
+          },
           { timeout: 30_000 } // Longer timeout for send (network latency)
         );
 

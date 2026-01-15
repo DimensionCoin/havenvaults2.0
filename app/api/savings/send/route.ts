@@ -30,6 +30,7 @@ import mongoose from "mongoose";
 import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 import { SavingsLedger } from "@/models/SavingsLedger";
+import { recordUserFees } from "@/lib/fees";
 
 const enc = new TextEncoder();
 const SESSION_COOKIE = "haven_session";
@@ -39,6 +40,9 @@ const DECIMALS = 6;
 const TEN = new BN(10);
 const BASE = TEN.pow(new BN(DECIMALS));
 const ZERO = new BN(0);
+
+// USDC mint for fee tracking
+const USDC_MINT_STR = process.env.NEXT_PUBLIC_USDC_MINT || "";
 
 function json(status: number, body: Record<string, unknown>) {
   if (status >= 400) console.error("[/api/savings/send]", body);
@@ -464,6 +468,61 @@ async function syncSavingsAccountAggFromLedger(opts: {
   );
 }
 
+/**
+ * Record fee to unified FeeEvent system (fire-and-forget)
+ * This complements the SavingsLedger tracking with the main fee tracking system
+ */
+async function recordSavingsFeeAsync(params: {
+  userId: mongoose.Types.ObjectId;
+  signature: string;
+  feeUi: string;
+  accountType: "flex" | "plus";
+}): Promise<void> {
+  const { userId, signature, feeUi, accountType } = params;
+
+  try {
+    const feeUiNum = parseFloat(feeUi);
+    if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) {
+      return; // No fee to record
+    }
+
+    if (!USDC_MINT_STR) {
+      console.warn(
+        "[savings/send] Cannot record fee: USDC_MINT not configured"
+      );
+      return;
+    }
+
+    const result = await recordUserFees({
+      userId,
+      signature,
+      kind: `savings_${accountType}_withdraw`,
+      tokens: [
+        {
+          mint: USDC_MINT_STR,
+          amountUi: feeUiNum,
+          decimals: DECIMALS,
+          symbol: "USDC",
+        },
+      ],
+    });
+
+    if (result.ok && result.recorded) {
+      console.log(
+        `[savings/send] Fee recorded: ${feeUi} USDC (${accountType}) for ${signature.slice(0, 8)}`
+      );
+    } else if (result.ok && !result.recorded) {
+      // Duplicate or zero - already logged in recordUserFees
+    }
+  } catch (err) {
+    // Log but don't throw - fee recording shouldn't break the main flow
+    console.error(
+      "[savings/send] Fee recording failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 /* ───────── route ───────── */
 
 export async function POST(req: NextRequest) {
@@ -737,6 +796,18 @@ export async function POST(req: NextRequest) {
         userId: userDoc._id,
         accountType,
       });
+
+      // ✅ Record fee to unified FeeEvent system (only for withdrawals with fees)
+      if (direction === "withdraw" && !feeBase.isZero()) {
+        recordSavingsFeeAsync({
+          userId: userDoc._id,
+          signature: sig,
+          feeUi,
+          accountType,
+        }).catch(() => {
+          // Already logged inside the function
+        });
+      }
     }
 
     return NextResponse.json({
