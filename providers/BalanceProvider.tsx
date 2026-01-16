@@ -59,9 +59,11 @@ type BalanceContextValue = {
   savingsFlexUsd: number;
   savingsFlexAmount: number;
 
-  // ✅ NEW: Plus balance
-  savingsPlusUsd: number;
-  savingsPlusAmount: number;
+  // ✅ Plus
+  savingsPlusUsd: number; // display currency
+  savingsPlusAmount: number; // base UI amount (USD-like)
+  plusReady: boolean; // Plus request resolved
+  plusError?: string | null;
 
   nativeSol: number;
 
@@ -131,16 +133,19 @@ type BoosterApiResponse = {
   }>;
 };
 
-// ✅ NEW: Plus balance response
+// ✅ Plus API actually returns base units + decimals (per your logs)
 type PlusBalanceResponse = {
   owner?: string;
   hasPosition?: boolean;
-  // We treat Plus as USD-like (JupUSD ≈ $1) and use underlyingAssetsUi
-  underlyingAssetsUi?: string; // decimal string
-  underlyingAssets?: string; // base units string (not needed here)
-  // optional fields
-  symbol?: string;
-  jlSymbol?: string;
+
+  // from your log:
+  shares?: string; // base units string
+  underlyingAssets?: string; // base units string
+  decimals?: number; // e.g. 6
+
+  // sometimes APIs also include ui string; accept if present
+  underlyingAssetsUi?: string;
+
   error?: string;
   code?: string;
 };
@@ -183,7 +188,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const ownerAddress = user?.walletAddress || "";
   const ownerReady = Boolean(ownerAddress?.trim());
 
-  /* ───────── Convex price subscription (real-time!) ───────── */
+  /* ───────── Convex price subscription ───────── */
   const convexPrices = useQuery(api.prices.getLatest);
 
   const priceMap = useMemo(() => {
@@ -192,7 +197,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       ETH: 0,
       BTC: 0,
     };
-
     if (!convexPrices) return map;
 
     for (const row of convexPrices) {
@@ -201,7 +205,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         map[sym] = row.lastPrice;
       }
     }
-
     return map;
   }, [convexPrices]);
 
@@ -218,9 +221,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [savingsFlexUsd, setSavingsFlexUsd] = useState(0);
   const [savingsFlexAmount, setSavingsFlexAmount] = useState(0);
 
-  // ✅ NEW: Plus savings state
+  // ✅ Plus
   const [savingsPlusUsd, setSavingsPlusUsd] = useState(0);
   const [savingsPlusAmount, setSavingsPlusAmount] = useState(0);
+  const [plusReady, setPlusReady] = useState(false);
+  const [plusError, setPlusError] = useState<string | null>(null);
 
   const [displayCurrency, setDisplayCurrency] = useState<string>("USD");
   const [fxRateState, setFxRateState] = useState<number>(1);
@@ -229,7 +234,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
   const [totalChange24hPct, setTotalChange24hPct] = useState(0);
 
-  // Raw booster positions (without P&L computed)
   const [boosterPositionsRaw, setBoosterPositionsRaw] = useState<
     Array<{
       id: string;
@@ -245,7 +249,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const refreshInflight = useRef<Promise<void> | null>(null);
 
-  /* ───────── Compute booster positions with live prices ───────── */
+  /* ───────── Booster computed ───────── */
 
   const boosterPositions = useMemo<BoosterStaticPosition[]>(() => {
     return boosterPositionsRaw.map((p) => {
@@ -274,7 +278,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const boosterPositionsCount = boosterPositions.length;
 
-  // Take-home in display currency
   const boosterTakeHomeUsd = useMemo(() => {
     const baseSum = boosterPositions.reduce(
       (sum, p) => sum + (Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0),
@@ -283,13 +286,12 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     return baseSum * fxRateState;
   }, [boosterPositions, fxRateState]);
 
-  // Total = base + booster take-home
   const totalUsd = useMemo(
     () => baseTotalUsdDisplay + boosterTakeHomeUsd,
     [baseTotalUsdDisplay, boosterTakeHomeUsd]
   );
 
-  /* ───────── Refresh (fetches wallet, FX, flex, plus, booster positions) ───────── */
+  /* ───────── Refresh ───────── */
 
   const runRefresh = useCallback(
     async (opts?: { bypassUserLoading?: boolean }) => {
@@ -324,9 +326,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setSavingsFlexUsd(0);
           setSavingsFlexAmount(0);
 
-          // ✅ reset Plus
           setSavingsPlusUsd(0);
           setSavingsPlusAmount(0);
+          setPlusReady(false);
+          setPlusError(null);
 
           setBaseTotalUsdDisplay(0);
           setTotalChange24hUsd(0);
@@ -340,8 +343,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
         setLoading(true);
 
+        // ✅ force UI to wait for fresh Plus response
+        setPlusReady(false);
+        setPlusError(null);
+
         try {
-          // Parallel fetch: wallet, FX, flex, plus, booster positions
           const [walletRes, fxRes, flexRes, plusRes, boosterRes] =
             await Promise.all([
               fetch(
@@ -360,14 +366,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                     credentials: "include",
                   })
                 : Promise.resolve(null),
-
-              // ✅ NEW: Plus balance (cookie-auth)
               fetch("/api/savings/plus/balance", {
                 method: "GET",
                 cache: "no-store",
                 credentials: "include",
               }),
-
               fetch("/api/booster/positions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -378,10 +381,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
           // ---------- Wallet ----------
           if (!walletRes.ok) {
-            console.error(
-              "[BalanceProvider] wallet fetch failed:",
-              walletRes.status
-            );
             setLastUpdated(Date.now());
             return;
           }
@@ -443,7 +442,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             fxTarget = "USD";
           }
 
-          // ---------- Flex Savings ----------
+          // ---------- Flex ----------
           let flexAmount = 0;
           let flexUsdBase = 0;
 
@@ -459,38 +458,45 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                 typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
               flexAmount = safeNumber(amountUiStr, 0);
               flexUsdBase = flexAmount;
-            } else {
-              console.warn(
-                "[BalanceProvider] flex fetch failed:",
-                flexRes.status
-              );
             }
           }
 
-          // ---------- Plus Savings ----------
-          let plusAmount = 0;
-          let plusUsdBase = 0;
+          // ---------- Plus (✅ definitive) ----------
+          let plusBaseUi = 0;
 
           if (plusRes.ok) {
             const pj = (await plusRes
               .json()
               .catch(() => ({}))) as PlusBalanceResponse;
 
-            // underlyingAssetsUi is a decimal string like "12.3456"
-            const underlyingUi = safeNumber(pj.underlyingAssetsUi, 0);
+            // priority: underlyingAssetsUi if API provides it
+            const uiStr = safeStr(pj.underlyingAssetsUi);
+            if (uiStr) {
+              plusBaseUi = clampNonNeg(safeNumber(uiStr, 0));
+            } else {
+              // else compute from base units + decimals (matches your logs)
+              const underlyingBase = safeNumber(pj.underlyingAssets, 0);
+              const decimals = Number.isFinite(pj.decimals as number)
+                ? Number(pj.decimals)
+                : 6;
+              plusBaseUi =
+                underlyingBase > 0
+                  ? underlyingBase / Math.pow(10, Math.max(0, decimals))
+                  : 0;
+              plusBaseUi = clampNonNeg(plusBaseUi);
+            }
 
-            // Plus is JupUSD-like, treat as USD (base) for now
-            plusAmount = clampNonNeg(underlyingUi);
-            plusUsdBase = plusAmount;
+            setSavingsPlusAmount(plusBaseUi);
+            setSavingsPlusUsd(plusBaseUi * fxRate);
+            setPlusReady(true);
           } else {
-            // Don’t hard-fail the whole refresh if Plus API hiccups
-            console.warn(
-              "[BalanceProvider] plus fetch failed:",
-              plusRes.status
-            );
+            setSavingsPlusAmount(0);
+            setSavingsPlusUsd(0);
+            setPlusError(`Plus balance fetch failed: ${plusRes.status}`);
+            setPlusReady(true);
           }
 
-          // ---------- Booster Positions (raw, no P&L yet) ----------
+          // ---------- Booster raw ----------
           const boosterRaw: typeof boosterPositionsRaw = [];
 
           if (boosterRes.ok) {
@@ -537,7 +543,9 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
           setBoosterPositionsRaw(boosterRaw);
 
-          // ---------- Totals (base USD, excluding booster which is computed via useMemo) ----------
+          // ---------- Totals ----------
+          const plusUsdBase = plusBaseUi;
+
           const combinedBaseUsd =
             walletTotalUsdBase +
             (hasLinkedFlexAccount ? flexUsdBase : 0) +
@@ -552,7 +560,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           const changePct =
             prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
 
-          // ---------- Convert to display currency ----------
+          // ---------- Convert wallet tokens to display ----------
           const convertOpt = (n?: number): number | undefined =>
             typeof n === "number" && !Number.isNaN(n) ? n * fxRate : undefined;
 
@@ -566,15 +574,12 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           );
 
           setTokens(nonUsdcTokensDisplay);
+
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
 
           setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
           setSavingsFlexUsd((hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate);
-
-          // ✅ NEW: store Plus
-          setSavingsPlusAmount(plusAmount);
-          setSavingsPlusUsd(plusUsdBase * fxRate);
 
           setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
@@ -582,43 +587,12 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setDisplayCurrency(fxTarget);
           setFxRateState(fxRate);
           setLastUpdated(Date.now());
-
-          // ---------- Snapshot (uses current prices from Convex) ----------
-          // Compute booster take-home with current prices for snapshot
-          const boosterTakeHomeBase = boosterRaw.reduce((sum, p) => {
-            const markUsd =
-              priceMap[p.symbol] > 0 ? priceMap[p.symbol] : p.entryUsd;
-            const pnlUsd =
-              p.entryUsd > 0 && p.sizeUsd > 0
-                ? p.isLong
-                  ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
-                  : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
-                : 0;
-            return sum + p.collateralUsd + pnlUsd;
-          }, 0);
-
-          const snapshotTotalBase = combinedBaseUsd + boosterTakeHomeBase;
-
-          if (snapshotTotalBase > 0) {
-            fetch("/api/user/balance/snapshot", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                owner,
-                totalUsd: snapshotTotalBase,
-                breakdown: {
-                  ...(hasLinkedFlexAccount ? { savingsFlex: flexUsdBase } : {}),
-                  savingsPlus: plusUsdBase, // ✅ NEW
-                  boosterTakeHome: boosterTakeHomeBase,
-                },
-              }),
-            }).catch((e) => {
-              console.error("[BalanceProvider] snapshot failed:", e);
-            });
-          }
-        } catch (err) {
-          console.error("[BalanceProvider] refresh failed:", err);
+        } catch {
           setLastUpdated(Date.now());
+          setSavingsPlusAmount(0);
+          setSavingsPlusUsd(0);
+          setPlusError("Plus refresh error");
+          setPlusReady(true);
         } finally {
           setLoading(false);
         }
@@ -642,7 +616,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     await runRefresh({ bypassUserLoading: true });
   }, [runRefresh]);
 
-  // Initial refresh when owner becomes available
   useEffect(() => {
     if (!ownerReady) return;
     void runRefresh({ bypassUserLoading: false });
@@ -665,9 +638,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     savingsFlexUsd,
     savingsFlexAmount,
 
-    // ✅ NEW
     savingsPlusUsd,
     savingsPlusAmount,
+    plusReady,
+    plusError,
 
     nativeSol,
 

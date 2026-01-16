@@ -1,4 +1,3 @@
-// components/accounts/plus/Deposit.tsx
 "use client";
 
 import React, {
@@ -17,8 +16,6 @@ import {
   Wallet,
   ExternalLink,
   PiggyBank,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
@@ -30,10 +27,8 @@ import { usePlusDeposit, type PlusDepositStatus } from "@/hooks/usePlusDeposit";
 type DepositPlusProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  hasAccount: boolean;
+  hasAccount: boolean; // ignored
 };
-
-// ✅ Removed ModalKind (was unused)
 
 type ModalState =
   | { kind: "processing" }
@@ -134,28 +129,8 @@ function safeNum(v: unknown, fallback = 0): number {
 }
 
 function explorerUrl(sig: string) {
-  return `https://solscan.io/tx/${sig}`;
+  return `https://orbmarkets.io/tx/${sig}`;
 }
-
-/* ───────── safe ctx helpers (no any) ───────── */
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object";
-}
-
-function getNumberField(obj: unknown, key: string): number | undefined {
-  if (!isRecord(obj)) return undefined;
-  const v = obj[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-function getStringField(obj: unknown, key: string): string | undefined {
-  if (!isRecord(obj)) return undefined;
-  const v = obj[key];
-  return typeof v === "string" && v.trim() ? v.trim() : undefined;
-}
-
-/* ───────── UI ATOMS ───────── */
 
 function ProgressBar({ progress }: { progress: number }) {
   return (
@@ -213,39 +188,11 @@ function StageIcon({
 export default function DepositPlus({
   open,
   onOpenChange,
-  hasAccount,
+  hasAccount: _hasAccountProp,
 }: DepositPlusProps) {
   const { user, refresh: refreshUser } = useUser();
-  const balanceCtx = useBalance();
-
-  const refreshBalance =
-    isRecord(balanceCtx) && typeof balanceCtx["refresh"] === "function"
-      ? (balanceCtx["refresh"] as () => Promise<void>)
-      : undefined;
-
-  const ctxLoading = isRecord(balanceCtx)
-    ? Boolean(balanceCtx["loading"])
-    : false;
-
-  // FX rate (displayCurrency per 1 USD). Default 1.
-  const fxRate = safeNum(getNumberField(balanceCtx, "fxRate"), 1);
-
-  // Display currency (CAD/EUR/GBP...). Default USD.
-  const displayCurrency = (
-    getStringField(balanceCtx, "displayCurrency") ??
-    (isRecord(user) ? getStringField(user, "displayCurrency") : undefined) ??
-    "USD"
-  )
-    .toUpperCase()
-    .trim();
-
-  const isUsd = displayCurrency === "USD";
-
-  // USDC balance in USD terms
-  const usdcBalanceUsd = safeNum(getNumberField(balanceCtx, "usdcUsd"), 0);
-
-  // Converted balance for UI
-  const usdcBalanceDisplay = isUsd ? usdcBalanceUsd : usdcBalanceUsd * fxRate;
+  const balance = useBalance();
+  const refreshBalance = balance.refresh;
 
   const {
     deposit,
@@ -263,13 +210,91 @@ export default function DepositPlus({
   const ownerReady = !!user?.walletAddress && user.walletAddress !== "pending";
   const tradeStartedRef = useRef(false);
 
-  // Amount in display currency (what user entered)
+  // ====== NEW: force-refresh on open, and gate label until that refresh settles ======
+  const openSeqRef = useRef(0);
+  const [awaitingFreshPlus, setAwaitingFreshPlus] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+
+    openSeqRef.current += 1;
+    const seq = openSeqRef.current;
+
+    setAwaitingFreshPlus(true);
+
+    // refreshNow() exists on provider; if not, fallback to refresh()
+    const refreshFn =
+      (balance as unknown as { refreshNow?: () => Promise<void> }).refreshNow ??
+      balance.refresh;
+
+    Promise.resolve()
+      .then(() => refreshFn?.())
+      .catch(() => {})
+      .finally(() => {
+        // only clear if this is still the latest "open"
+        if (openSeqRef.current === seq) setAwaitingFreshPlus(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const plusReady = Boolean(balance.plusReady);
+  const plusAmount = safeNum(balance.savingsPlusAmount, 0);
+
+  // labelReady = "we opened + we ran a refresh + plus endpoint resolved"
+  const labelReady = !awaitingFreshPlus && plusReady;
+
+  // (optional) treat dust as zero
+  const hasPlusFunds = labelReady && plusAmount > 0.000001;
+
+  const label = !labelReady ? "…" : hasPlusFunds ? "Deposit" : "Open Account";
+  // ================================================================================
+
+  const displayCurrency = (balance.displayCurrency || "USD")
+    .toUpperCase()
+    .trim();
+
+  const fxRate = safeNum(balance.fxRate, 1);
+  const isUsd = displayCurrency === "USD";
+
+  const usdcBalanceDisplay = safeNum(balance.usdcUsd, 0);
+
+  // ✅ DEBUG: logs on every relevant change while open
+  useEffect(() => {
+    if (!open) return;
+    console.log("[DepositPlus][DEBUG]", {
+      open,
+      awaitingFreshPlus,
+      plusReady: balance.plusReady,
+      plusError: balance.plusError,
+      savingsPlusAmount_raw: balance.savingsPlusAmount,
+      plusAmount_parsed: plusAmount,
+      labelReady,
+      hasPlusFunds,
+      computedLabel: label,
+      balance_loading: balance.loading,
+      lastUpdated: balance.lastUpdated,
+      owner: user?.walletAddress,
+    });
+  }, [
+    open,
+    awaitingFreshPlus,
+    balance.plusReady,
+    balance.plusError,
+    balance.savingsPlusAmount,
+    plusAmount,
+    labelReady,
+    hasPlusFunds,
+    label,
+    balance.loading,
+    balance.lastUpdated,
+    user?.walletAddress,
+  ]);
+
   const amountDisplay = useMemo(() => {
     const n = parseFloat(amountRaw);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }, [amountRaw]);
 
-  // Amount converted to USD (what we send to API)
   const amountUsd = useMemo(() => {
     if (amountDisplay <= 0) return 0;
     if (isUsd) return amountDisplay;
@@ -277,12 +302,13 @@ export default function DepositPlus({
   }, [amountDisplay, isUsd, fxRate]);
 
   const canSubmit = useMemo(() => {
-    if (!ownerReady || ctxLoading) return false;
+    if (!ownerReady) return false;
+    if (!labelReady) return false;
     if (amountDisplay <= 0) return false;
     if (amountDisplay > usdcBalanceDisplay) return false;
     if (amountUsd <= 0) return false;
     return true;
-  }, [ownerReady, ctxLoading, amountDisplay, usdcBalanceDisplay, amountUsd]);
+  }, [ownerReady, labelReady, amountDisplay, usdcBalanceDisplay, amountUsd]);
 
   const currentStage = modal?.kind === "processing" ? depositStatus : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
@@ -308,7 +334,6 @@ export default function DepositPlus({
     };
   }, [open]);
 
-  // If hook sets an error while we are in processing, reflect it.
   useEffect(() => {
     if (!open) return;
     if (!modal || modal.kind !== "processing") return;
@@ -341,20 +366,15 @@ export default function DepositPlus({
 
     try {
       const result = await deposit({
-        amountDisplay: amountUsd, // USD terms to API
+        amountDisplay: amountUsd,
         owner58: user.walletAddress,
         slippageBps: 50,
       });
 
       setAmountRaw("");
 
-      // ✅ no any — log unknown safely
-      refreshBalance?.().catch((e: unknown) =>
-        console.warn("[DepositPlus] Balance refresh failed:", e)
-      );
-      refreshUser?.().catch((e: unknown) =>
-        console.warn("[DepositPlus] User refresh failed:", e)
-      );
+      refreshBalance?.().catch(() => {});
+      refreshUser?.().catch(() => {});
 
       setModal({ kind: "success", signature: result.signature });
     } catch (e: unknown) {
@@ -384,11 +404,6 @@ export default function DepositPlus({
 
   if (!open || !mounted) return null;
 
-  const title = hasAccount ? "Deposit" : "Open Account";
-  const subtitle = hasAccount
-    ? "Swap USDC to JupUSD and deposit into Plus."
-    : "Open a new Plus account and start earning.";
-
   return createPortal(
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
@@ -402,7 +417,6 @@ export default function DepositPlus({
         className="w-full max-w-sm haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* INPUT VIEW */}
         {!modal && (
           <>
             <div className="flex items-start justify-between gap-3">
@@ -410,25 +424,28 @@ export default function DepositPlus({
                 <div className="flex items-center gap-2">
                   <PiggyBank className="h-4 w-4 text-primary" />
                   <div className="text-sm font-semibold text-foreground/90">
-                    {title}
+                    {label}
                   </div>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  {subtitle}
+                  {!labelReady
+                    ? "Loading your Plus account…"
+                    : hasPlusFunds
+                      ? "Add funds to your Plus Savings balance."
+                      : "Open your Plus Savings account and start earning."}
                 </div>
               </div>
 
               <div className="text-right text-xs text-muted-foreground">
                 Available
                 <div className="mt-0.5 font-semibold text-foreground/90">
-                  {ctxLoading
+                  {!labelReady
                     ? "…"
                     : formatMoney(usdcBalanceDisplay, displayCurrency)}
                 </div>
               </div>
             </div>
 
-            {/* Amount */}
             <div className="mt-4">
               <label className="text-xs text-muted-foreground">Amount</label>
 
@@ -444,68 +461,21 @@ export default function DepositPlus({
                   }
                   inputMode="decimal"
                   placeholder="0.00"
-                  disabled={isBusy}
+                  disabled={isBusy || !labelReady}
                   className="w-full bg-transparent text-sm text-foreground/90 outline-none placeholder:text-muted-foreground/60 disabled:opacity-60"
                 />
 
                 <button
                   type="button"
-                  disabled={isBusy || ctxLoading}
+                  disabled={isBusy || !labelReady}
                   onClick={() => setAmountRaw(money2(usdcBalanceDisplay))}
                   className="haven-pill hover:bg-accent disabled:opacity-60"
                 >
                   Max
                 </button>
               </div>
-
-              {!ownerReady && (
-                <div className="mt-2 text-xs text-destructive">
-                  Wallet not connected.
-                </div>
-              )}
-
-              {!ctxLoading &&
-                amountDisplay > usdcBalanceDisplay &&
-                amountDisplay > 0 && (
-                  <div className="mt-2 text-xs text-destructive">
-                    Amount exceeds available balance.
-                  </div>
-                )}
             </div>
 
-            {/* Summary */}
-            {amountDisplay > 0 && (
-              <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-[11px] text-muted-foreground">
-                    You deposit
-                  </div>
-                  <div className="text-sm font-semibold text-foreground/90">
-                    {formatMoney(amountDisplay, displayCurrency)}
-                  </div>
-                </div>
-
-                {!isUsd && amountUsd > 0 && (
-                  <div className="mt-1 flex items-center justify-between">
-                    <div className="text-[11px] text-muted-foreground">
-                      USD equivalent
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      ≈ {formatMoney(amountUsd, "USD")}
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="text-[11px] text-muted-foreground">Route</div>
-                  <div className="text-[11px] font-semibold text-primary">
-                    USDC → JupUSD → Plus Vault
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* CTA */}
             <button
               disabled={!canSubmit || isBusy}
               onClick={onDeposit}
@@ -523,7 +493,7 @@ export default function DepositPlus({
                 </>
               ) : (
                 <>
-                  {hasAccount ? "Deposit" : "Open & Deposit"}
+                  {label}
                   <PiggyBank className="h-4 w-4" />
                 </>
               )}
@@ -540,7 +510,6 @@ export default function DepositPlus({
           </>
         )}
 
-        {/* PROCESSING / SUCCESS / ERROR VIEW */}
         {modal && (
           <>
             {modal.kind !== "processing" && (
@@ -597,59 +566,6 @@ export default function DepositPlus({
                 </>
               )}
             </div>
-
-            {modal.kind === "error" && (
-              <>
-                <div className="mt-4 rounded-2xl border border-destructive/25 bg-destructive/10 p-3">
-                  <div className="text-xs text-destructive text-center">
-                    {modal.errorMessage}
-                    {(modal.code || modal.stage) && (
-                      <span className="opacity-80">
-                        {" "}
-                        ({modal.code || "ERR"}
-                        {modal.stage ? ` / ${modal.stage}` : ""})
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {(modal.traceId || (modal.logs && modal.logs.length)) && (
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowDetails((v) => !v)}
-                      className="w-full flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-xs text-muted-foreground hover:bg-accent transition"
-                    >
-                      <span>Details</span>
-                      {showDetails ? (
-                        <ChevronUp className="h-4 w-4" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4" />
-                      )}
-                    </button>
-
-                    {showDetails && (
-                      <div className="mt-2 rounded-2xl border border-border bg-background/50 p-3">
-                        {modal.traceId && (
-                          <div className="text-[11px] text-muted-foreground">
-                            traceId:{" "}
-                            <span className="text-foreground/90 font-mono">
-                              {modal.traceId}
-                            </span>
-                          </div>
-                        )}
-
-                        {!!modal.logs?.length && (
-                          <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/30 p-2 text-[10px] leading-relaxed text-foreground/80">
-                            {modal.logs.slice(0, 20).join("\n")}
-                          </pre>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
 
             {modal.kind === "success" && (
               <div className="mt-5">

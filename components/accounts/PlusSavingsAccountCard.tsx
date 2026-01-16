@@ -1,3 +1,4 @@
+// components/accounts/PlusSavingsAccountCard.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -21,9 +22,9 @@ type PlusSavingsAccountCardProps = {
   loading?: boolean;
   displayCurrency?: string;
 
-  onDeposit: () => void; // kept for compatibility (unused)
-  onWithdraw: () => void; // kept for compatibility (unused)
-  onOpenAccount: () => void;
+  onDeposit: () => void; // compatibility (unused)
+  onWithdraw: () => void; // compatibility (unused)
+  onOpenAccount: () => void; // compatibility (unused)
 
   apyPctOverride?: number;
 };
@@ -66,8 +67,9 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
   loading: loadingProp,
 
-  // ✅ Fix unused-var lint: accept prop but don’t use it
   onOpenAccount: _onOpenAccount,
+  onDeposit: _onDeposit,
+  onWithdraw: _onWithdraw,
 
   apyPctOverride,
 }) => {
@@ -81,22 +83,26 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
   const [apyLoading, setApyLoading] = useState(false);
 
-  // ✅ Pull Plus balance from provider (already in display currency)
-  const plusUsdDisplay = getNumberField(balanceCtx, "savingsPlusUsd") ?? 0; // display currency value
-  const plusAmount = getNumberField(balanceCtx, "savingsPlusAmount") ?? 0; // base units in UI amount (JupUSD-ish)
+  // ✅ Plus balance + readiness (THIS is what controls Open vs Deposit)
+  const plusReady = Boolean(balanceCtx.plusReady);
+  const plusAmount = getNumberField(balanceCtx, "savingsPlusAmount") ?? 0;
+  const hasPlusFunds = plusReady && plusAmount > 0;
 
-  const balanceLoading = getNumberField(balanceCtx, "loading")
-    ? Boolean(getNumberField(balanceCtx, "loading"))
-    : Boolean((balanceCtx as unknown as { loading?: boolean })?.loading);
+  // Display balance on the card (display currency value is already converted in provider)
+  const plusUsdDisplay = getNumberField(balanceCtx, "savingsPlusUsd") ?? 0;
 
-  // For subtitle
+  const balanceLoading =
+    Boolean(getNumberField(balanceCtx, "loading")) ||
+    Boolean((balanceCtx as unknown as { loading?: boolean })?.loading);
+
+  const effectiveLoading = loadingProp ?? (userLoading || balanceLoading);
+
   const accountPkToShow = account?.walletAddress
     ? account.walletAddress
     : user?.walletAddress && user.walletAddress !== "pending"
       ? user.walletAddress
       : "";
 
-  // ✅ Display currency comes from provider/user
   const displayCurrency = (
     getStringField(balanceCtx, "displayCurrency") ??
     (isRecord(user) ? getStringField(user, "displayCurrency") : undefined) ??
@@ -105,9 +111,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     .toUpperCase()
     .trim();
 
-  const effectiveLoading = loadingProp ?? (userLoading || balanceLoading);
-
-  // Format money in *display currency* (value already converted)
   const formatDisplay = (displayValue?: number | null) => {
     const v =
       displayValue === undefined ||
@@ -211,8 +214,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
       ? apyPctOverride
       : apyPctLive;
 
-  // ✅ Balance value to show:
-  // Prefer provider value; fallback to account.totalDeposited (assumed already display currency)
   const effectiveBalanceDisplay = useMemo(() => {
     if (Number.isFinite(plusUsdDisplay) && plusUsdDisplay > 0)
       return plusUsdDisplay;
@@ -221,10 +222,75 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     return 0;
   }, [account, plusUsdDisplay]);
 
-  // ✅ Has account?
-  // Use provider amount > 0 as a proxy (no API call).
-  const hasPosition = plusAmount > 0;
+  // ✅ BUTTON LABEL: ONLY PLUS BALANCE CONTROLS THIS
+  const depositCtaLabel = !plusReady ? "…" : hasPlusFunds ? "Deposit" : "Open Account";
 
+  // ----------------------------
+  // CLOSED/EMPTY STATE (no funds)
+  // ----------------------------
+  if (!hasPlusFunds) {
+    return (
+      <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
+        <Link href="/plus" className="block h-full">
+          <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+            <div>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="haven-kicker">Plus Savings</p>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">
+                    Higher rate, built for long-term saving
+                  </p>
+                </div>
+
+                <span className="haven-pill">
+                  <span className="h-2 w-2 rounded-full bg-primary" />
+                  New
+                </span>
+              </div>
+
+              <p className="mt-4 text-lg font-semibold text-foreground">
+                Open Plus Savings Account
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Make a deposit to start earning automatically.
+              </p>
+            </div>
+
+            <div className="mt-5">
+              <DrawerTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openDrawer("deposit");
+                  }}
+                  className="haven-btn-primary w-full text-[#0b3204]"
+                >
+                  {depositCtaLabel}
+                </button>
+              </DrawerTrigger>
+            </div>
+          </div>
+        </Link>
+
+        {drawerMode === "deposit" && (
+          <DepositPlus
+            open={drawerOpen}
+            onOpenChange={(open) => {
+              setDrawerOpen(open);
+              if (!open) setDrawerMode(null);
+            }}
+            hasAccount={false}
+          />
+        )}
+      </Drawer>
+    );
+  }
+
+  // ----------------------------
+  // OPEN STATE (has funds)
+  // ----------------------------
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
       <Link href="/plus" className="block h-full">
@@ -232,7 +298,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
           <div>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="haven-kicker">Plus Account</p>
+                <p className="haven-kicker">Plus Savings</p>
                 <p className="mt-0.5 text-[12px] text-muted-foreground">
                   Account #{shortAddress(accountPkToShow)}
                 </p>
@@ -256,7 +322,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
                   : formatDisplay(effectiveBalanceDisplay)}
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Higher yield, USDC → JupUSD vault strategy
+                Interest accrues daily, access anytime
               </p>
             </div>
           </div>
@@ -300,7 +366,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
             setDrawerOpen(open);
             if (!open) setDrawerMode(null);
           }}
-          hasAccount={hasPosition}
+          hasAccount={true}
         />
       )}
 
@@ -311,8 +377,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
             setDrawerOpen(open);
             if (!open) setDrawerMode(null);
           }}
-          // ✅ IMPORTANT: Withdraw component likely expects USD amount.
-          // If WithdrawPlus expects base USD (not display currency), tell me and we’ll pass plusAmount instead.
           availableBalance={effectiveBalanceDisplay}
         />
       )}
