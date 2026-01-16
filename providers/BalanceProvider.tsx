@@ -1,4 +1,3 @@
-// providers/BalanceProvider.tsx
 "use client";
 
 import React, {
@@ -59,6 +58,10 @@ type BalanceContextValue = {
 
   savingsFlexUsd: number;
   savingsFlexAmount: number;
+
+  // ✅ NEW: Plus balance
+  savingsPlusUsd: number;
+  savingsPlusAmount: number;
 
   nativeSol: number;
 
@@ -128,6 +131,20 @@ type BoosterApiResponse = {
   }>;
 };
 
+// ✅ NEW: Plus balance response
+type PlusBalanceResponse = {
+  owner?: string;
+  hasPosition?: boolean;
+  // We treat Plus as USD-like (JupUSD ≈ $1) and use underlyingAssetsUi
+  underlyingAssetsUi?: string; // decimal string
+  underlyingAssets?: string; // base units string (not needed here)
+  // optional fields
+  symbol?: string;
+  jlSymbol?: string;
+  error?: string;
+  code?: string;
+};
+
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 /* ───────── HELPERS ───────── */
@@ -150,6 +167,10 @@ function safeSymbol(v: unknown): "SOL" | "ETH" | "BTC" | null {
 function usdFrom6Str(x?: string | null): number {
   const n = typeof x === "string" ? Number(x) : NaN;
   return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
+}
+
+function clampNonNeg(n: number): number {
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /* ───────── PROVIDER ───────── */
@@ -196,6 +217,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [savingsFlexUsd, setSavingsFlexUsd] = useState(0);
   const [savingsFlexAmount, setSavingsFlexAmount] = useState(0);
+
+  // ✅ NEW: Plus savings state
+  const [savingsPlusUsd, setSavingsPlusUsd] = useState(0);
+  const [savingsPlusAmount, setSavingsPlusAmount] = useState(0);
 
   const [displayCurrency, setDisplayCurrency] = useState<string>("USD");
   const [fxRateState, setFxRateState] = useState<number>(1);
@@ -264,7 +289,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     [baseTotalUsdDisplay, boosterTakeHomeUsd]
   );
 
-  /* ───────── Refresh (fetches wallet, flex, booster positions) ───────── */
+  /* ───────── Refresh (fetches wallet, FX, flex, plus, booster positions) ───────── */
 
   const runRefresh = useCallback(
     async (opts?: { bypassUserLoading?: boolean }) => {
@@ -298,6 +323,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setUsdcAmount(0);
           setSavingsFlexUsd(0);
           setSavingsFlexAmount(0);
+
+          // ✅ reset Plus
+          setSavingsPlusUsd(0);
+          setSavingsPlusAmount(0);
+
           setBaseTotalUsdDisplay(0);
           setTotalChange24hUsd(0);
           setTotalChange24hPct(0);
@@ -311,31 +341,40 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         setLoading(true);
 
         try {
-          // Parallel fetch: wallet, FX, flex, booster positions
-          const [walletRes, fxRes, flexRes, boosterRes] = await Promise.all([
-            fetch(
-              `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
-              { method: "GET", cache: "no-store" }
-            ),
-            fetch("/api/fx", {
-              method: "GET",
-              cache: "no-store",
-              credentials: "include",
-            }),
-            hasLinkedFlexAccount
-              ? fetch("/api/savings/flex/balance", {
-                  method: "GET",
-                  cache: "no-store",
-                  credentials: "include",
-                })
-              : Promise.resolve(null),
-            fetch("/api/booster/positions", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ownerBase58: owner }),
-              cache: "no-store",
-            }),
-          ]);
+          // Parallel fetch: wallet, FX, flex, plus, booster positions
+          const [walletRes, fxRes, flexRes, plusRes, boosterRes] =
+            await Promise.all([
+              fetch(
+                `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
+                { method: "GET", cache: "no-store" }
+              ),
+              fetch("/api/fx", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "include",
+              }),
+              hasLinkedFlexAccount
+                ? fetch("/api/savings/flex/balance", {
+                    method: "GET",
+                    cache: "no-store",
+                    credentials: "include",
+                  })
+                : Promise.resolve(null),
+
+              // ✅ NEW: Plus balance (cookie-auth)
+              fetch("/api/savings/plus/balance", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "include",
+              }),
+
+              fetch("/api/booster/positions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ownerBase58: owner }),
+                cache: "no-store",
+              }),
+            ]);
 
           // ---------- Wallet ----------
           if (!walletRes.ok) {
@@ -428,6 +467,29 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             }
           }
 
+          // ---------- Plus Savings ----------
+          let plusAmount = 0;
+          let plusUsdBase = 0;
+
+          if (plusRes.ok) {
+            const pj = (await plusRes
+              .json()
+              .catch(() => ({}))) as PlusBalanceResponse;
+
+            // underlyingAssetsUi is a decimal string like "12.3456"
+            const underlyingUi = safeNumber(pj.underlyingAssetsUi, 0);
+
+            // Plus is JupUSD-like, treat as USD (base) for now
+            plusAmount = clampNonNeg(underlyingUi);
+            plusUsdBase = plusAmount;
+          } else {
+            // Don’t hard-fail the whole refresh if Plus API hiccups
+            console.warn(
+              "[BalanceProvider] plus fetch failed:",
+              plusRes.status
+            );
+          }
+
           // ---------- Booster Positions (raw, no P&L yet) ----------
           const boosterRaw: typeof boosterPositionsRaw = [];
 
@@ -477,12 +539,15 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
           // ---------- Totals (base USD, excluding booster which is computed via useMemo) ----------
           const combinedBaseUsd =
-            walletTotalUsdBase + (hasLinkedFlexAccount ? flexUsdBase : 0);
+            walletTotalUsdBase +
+            (hasLinkedFlexAccount ? flexUsdBase : 0) +
+            plusUsdBase;
 
           const prevBaseUsd =
             walletTotalUsdBase -
             walletChangeUsdBase +
-            (hasLinkedFlexAccount ? flexUsdBase : 0);
+            (hasLinkedFlexAccount ? flexUsdBase : 0) +
+            plusUsdBase;
 
           const changePct =
             prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
@@ -503,8 +568,14 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setTokens(nonUsdcTokensDisplay);
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
+
           setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
           setSavingsFlexUsd((hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate);
+
+          // ✅ NEW: store Plus
+          setSavingsPlusAmount(plusAmount);
+          setSavingsPlusUsd(plusUsdBase * fxRate);
+
           setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
           setTotalChange24hPct(changePct);
@@ -537,6 +608,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                 totalUsd: snapshotTotalBase,
                 breakdown: {
                   ...(hasLinkedFlexAccount ? { savingsFlex: flexUsdBase } : {}),
+                  savingsPlus: plusUsdBase, // ✅ NEW
                   boosterTakeHome: boosterTakeHomeBase,
                 },
               }),
@@ -580,20 +652,32 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const value: BalanceContextValue = {
     loading,
     tokens,
+
     totalUsd,
     totalChange24hUsd,
     totalChange24hPct,
+
     lastUpdated,
+
     usdcUsd,
     usdcAmount,
+
     savingsFlexUsd,
     savingsFlexAmount,
+
+    // ✅ NEW
+    savingsPlusUsd,
+    savingsPlusAmount,
+
     nativeSol,
+
     displayCurrency,
     fxRate: fxRateState,
+
     boosterTakeHomeUsd,
     boosterPositionsCount,
     boosterPositions,
+
     refresh,
     refreshNow,
   };

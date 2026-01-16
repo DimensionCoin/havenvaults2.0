@@ -27,29 +27,27 @@ export type PlusWithdrawStatus =
   | "error";
 
 export type PlusWithdrawParams = {
-  /** Amount user enters in UI (display currency). */
+  /** Amount user wants to withdraw in USD terms. */
   amountDisplay: number;
   /** Optional: enforce the connected wallet matches this owner58. */
   owner58?: string;
   /** Optional slippage for the JupUSD→USDC swap (bps). Default 50. */
   slippageBps?: number;
-  /** Optional: withdraw max (ignores amountDisplay if true). */
-  isMax?: boolean;
 };
 
 export type PlusWithdrawResult = {
   signature: string;
   totalTimeMs: number;
 
-  // Useful debug/UI fields
   traceId?: string;
   jupUsdWithdrawUnits?: string;
+  usdcOutUnits?: string;
   slippageBps?: number;
 
   fx: {
     targetCurrency: string;
     rateBaseToTarget: number;
-    amountBase: number; // USD amount in base currency units (6dp)
+    amountBase: number; // USD amount
     amountDisplay: number;
   };
 };
@@ -59,6 +57,8 @@ export type PlusWithdrawError = {
   code?: string;
   stage?: string;
   retryable?: boolean;
+  traceId?: string;
+  logs?: string[];
 };
 
 /* ───────── INTERNAL TYPES ───────── */
@@ -73,23 +73,39 @@ type FxResponse = {
 
 type BuildResponse = {
   transaction: string;
+
   recentBlockhash?: string;
   lastValidBlockHeight?: number;
   traceId?: string;
 
   jupUsdWithdrawUnits?: string;
+  usdcOutUnits?: string;
   slippageBps?: number;
 
-  // optional debug
-  computeUnits?: number;
-  priorityFeeLamports?: number;
-  userJupUsdAta?: string;
-  userUsdcAta?: string;
+  payer?: string;
+  quote?: {
+    inAmount?: string;
+    outAmount?: string;
+    otherAmountThreshold?: string;
+    priceImpactPct?: string;
+  };
 };
 
 type SendResponse = {
   signature: string;
   sendTimeMs?: number;
+  traceId?: string;
+};
+
+type ApiErrorShape = {
+  error?: string;
+  message?: string;
+  userMessage?: string;
+  code?: string;
+  stage?: string;
+  traceId?: string;
+  logs?: string[];
+  details?: string;
 };
 
 /* ───────── CONSTANTS ───────── */
@@ -108,6 +124,60 @@ function floor6(n: number): number {
   return Math.floor(n * 1e6) / 1e6;
 }
 
+function isUserRejection(e: unknown): boolean {
+  const msg = String((e as Error)?.message || "").toLowerCase();
+  return (
+    msg.includes("user rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("cancelled") ||
+    msg.includes("user canceled") ||
+    msg.includes("declined")
+  );
+}
+
+function isBlockhashError(e: unknown): boolean {
+  const msg = String((e as Error)?.message || "").toLowerCase();
+  return msg.includes("blockhash") || msg.includes("expired");
+}
+
+function pickApiError(raw: unknown): ApiErrorShape | null {
+  if (!raw) return null;
+  if (isJsonObject(raw)) return raw as ApiErrorShape;
+  return null;
+}
+
+function pickErrorMessage(e: unknown): string {
+  const err = e as Record<string, unknown>;
+
+  if (typeof err?.message === "string" && (err.message as string).trim())
+    return err.message as string;
+
+  if (typeof err?.raw === "string" && (err.raw as string).trim())
+    return err.raw as string;
+
+  if (isJsonObject(err?.raw)) {
+    const r = err.raw as Record<string, unknown>;
+    if (typeof r?.userMessage === "string" && (r.userMessage as string).trim())
+      return r.userMessage as string;
+    if (typeof r?.error === "string" && (r.error as string).trim())
+      return r.error as string;
+    if (typeof r?.message === "string" && (r.message as string).trim())
+      return r.message as string;
+  }
+
+  if (isJsonObject(err)) {
+    if (
+      typeof err?.userMessage === "string" &&
+      (err.userMessage as string).trim()
+    )
+      return err.userMessage as string;
+    if (typeof err?.error === "string" && (err.error as string).trim())
+      return err.error as string;
+  }
+
+  return "Withdrawal failed";
+}
+
 async function postJSON<T>(
   url: string,
   body: unknown,
@@ -124,6 +194,7 @@ async function postJSON<T>(
 
   const text = await res.text().catch(() => "");
   let data: unknown = null;
+
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
@@ -131,25 +202,43 @@ async function postJSON<T>(
   }
 
   if (!res.ok) {
-    const d = (data && isJsonObject(data) ? data : null) as JsonObject | null;
-    const msg = (d?.error || d?.message || `Request failed: ${res.status}`) as
-      | string
-      | undefined;
+    const d = data && isJsonObject(data) ? (data as ApiErrorShape) : null;
 
-    const e = new Error(String(msg || "Request failed")) as Error & {
+    const msg =
+      d?.userMessage ||
+      d?.error ||
+      d?.message ||
+      (text && text.trim() ? text.trim() : null) ||
+      `Request failed: ${res.status}`;
+
+    const e = new Error(String(msg)) as Error & {
+      status?: number;
       code?: string;
-      retryable?: boolean;
       stage?: string;
+      retryable?: boolean;
+      raw?: unknown;
+      url?: string;
+      traceId?: string;
+      logs?: string[];
     };
 
-    e.code = (d?.code as string | undefined) ?? undefined;
-    e.stage = (d?.stage as string | undefined) ?? undefined;
-    e.retryable = String(msg || "")
-      .toLowerCase()
-      .includes("blockhash");
+    e.status = res.status;
+    e.url = url;
+    e.raw = data ?? text ?? null;
+
+    e.code = d?.code;
+    e.stage = d?.stage;
+    e.traceId = d?.traceId;
+    e.logs = Array.isArray(d?.logs) ? d!.logs : undefined;
+
+    e.retryable =
+      Boolean(d?.code && String(d.code).toLowerCase().includes("blockhash")) ||
+      String(msg).toLowerCase().includes("blockhash");
+
     throw e;
   }
 
+  if (data === null) return {} as T;
   return data as T;
 }
 
@@ -162,33 +251,28 @@ async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
     headers: { Accept: "application/json" },
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed: ${res.status}`);
+  const text = await res.text().catch(() => "");
+  let data: unknown = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
   }
 
-  return res.json();
-}
+  if (!res.ok) {
+    const d = data && isJsonObject(data) ? (data as ApiErrorShape) : null;
+    const msg =
+      d?.userMessage ||
+      d?.error ||
+      d?.message ||
+      (text && text.trim() ? text.trim() : null) ||
+      `Request failed: ${res.status}`;
 
-function isUserRejection(e: unknown): boolean {
-  const msg = String((e as Error)?.message || "").toLowerCase();
-  return (
-    msg.includes("user rejected") ||
-    msg.includes("user denied") ||
-    msg.includes("cancelled") ||
-    msg.includes("user canceled")
-  );
-}
+    throw new Error(String(msg));
+  }
 
-function isBlockhashError(e: unknown): boolean {
-  const msg = String((e as Error)?.message || "").toLowerCase();
-  return msg.includes("blockhash") || msg.includes("expired");
-}
-
-function clampSlippageBps(v: unknown, fallback = 50): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(1, Math.min(10_000, Math.floor(n)));
+  return (data ?? {}) as T;
 }
 
 /* ───────── HOOK ───────── */
@@ -204,7 +288,6 @@ export function usePlusWithdraw() {
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // FX cache (5 min TTL)
   const fxCacheRef = useRef<{
     rate: number;
     target: string;
@@ -218,26 +301,30 @@ export function usePlusWithdraw() {
     return typeof addr === "string" && addr.trim() ? addr.trim() : null;
   }, [selectedWallet]);
 
-  // ───────── FX ─────────
+  // ───────── FX (optional metadata) ─────────
 
   const getFx = useCallback(async (signal?: AbortSignal) => {
     const cached = fxCacheRef.current;
     const now = Date.now();
     if (cached && now - cached.at < 5 * 60 * 1000) return cached;
 
-    const raw = await getJSON<FxResponse>(FX_URL, signal);
-    const rate = Number(raw.rate);
-    const target = String(raw.target || "USD")
-      .toUpperCase()
-      .trim();
+    try {
+      const raw = await getJSON<FxResponse>(FX_URL, signal);
+      const rate = Number(raw.rate);
+      const target = String(raw.target || "USD")
+        .toUpperCase()
+        .trim();
 
-    if (!Number.isFinite(rate) || rate <= 0) {
-      throw new Error("Invalid FX rate received");
+      if (!Number.isFinite(rate) || rate <= 0)
+        throw new Error("Invalid FX rate");
+      const next = { rate, target, at: now };
+      fxCacheRef.current = next;
+      return next;
+    } catch {
+      const next = { rate: 1, target: "USD", at: now };
+      fxCacheRef.current = next;
+      return next;
     }
-
-    const next = { rate, target, at: now };
-    fxCacheRef.current = next;
-    return next;
   }, []);
 
   // ───────── Sign ─────────
@@ -264,8 +351,18 @@ export function usePlusWithdraw() {
     async (params: PlusWithdrawParams): Promise<PlusWithdrawResult> => {
       const startTime = Date.now();
 
-      if (inFlightRef.current) {
+      if (inFlightRef.current)
         throw new Error("A withdrawal is already in progress");
+
+      const amountDisplay = Number(params.amountDisplay);
+      if (!Number.isFinite(amountDisplay) || amountDisplay <= 0) {
+        const err: PlusWithdrawError = {
+          message: "Enter a valid positive amount",
+          code: "INVALID_AMOUNT",
+        };
+        setError(err);
+        setStatus("error");
+        throw new Error(err.message);
       }
 
       if (!selectedWallet || !connectedWallet58) {
@@ -278,40 +375,12 @@ export function usePlusWithdraw() {
         throw new Error(err.message);
       }
 
-      // Optional owner check
       if (params.owner58) {
-        try {
-          const expected = new PublicKey(params.owner58).toBase58();
-          if (connectedWallet58 !== expected) {
-            const err: PlusWithdrawError = {
-              message: "Connected wallet doesn't match your account",
-              code: "WALLET_MISMATCH",
-            };
-            setError(err);
-            setStatus("error");
-            throw new Error(err.message);
-          }
-        } catch (e) {
-          if ((e as Error).message.includes("match")) throw e;
+        const expected = new PublicKey(params.owner58).toBase58();
+        if (connectedWallet58 !== expected) {
           const err: PlusWithdrawError = {
-            message: "Invalid owner address",
-            code: "INVALID_OWNER",
-          };
-          setError(err);
-          setStatus("error");
-          throw new Error(err.message);
-        }
-      }
-
-      const isMax = Boolean(params.isMax);
-
-      // Validate amount (unless max)
-      const amountDisplay = Number(params.amountDisplay);
-      if (!isMax) {
-        if (!Number.isFinite(amountDisplay) || amountDisplay <= 0) {
-          const err: PlusWithdrawError = {
-            message: "Enter a valid positive amount",
-            code: "INVALID_AMOUNT",
+            message: "Connected wallet doesn't match your account",
+            code: "WALLET_MISMATCH",
           };
           setError(err);
           setStatus("error");
@@ -323,7 +392,6 @@ export function usePlusWithdraw() {
       abortRef.current = new AbortController();
       const signal = abortRef.current.signal;
 
-      // reset per run
       setStatus("idle");
       setError(null);
       setSignature(null);
@@ -332,24 +400,27 @@ export function usePlusWithdraw() {
         /* ══════════ PHASE 1: BUILD ══════════ */
         setStatus("building");
 
+        // Amount in USD terms (JupUSD ≈ $1)
+        const amountBase = floor6(amountDisplay);
+        if (!Number.isFinite(amountBase) || amountBase <= 0) {
+          throw new Error("Amount too small. Increase the withdrawal amount.");
+        }
+
         const fx = await getFx(signal);
 
-        // Convert UI display -> base currency amount (6dp), same pattern as deposit hooks
-        const amountBase = isMax ? 0 : floor6(amountDisplay / fx.rate);
-
-        const slippageBps = clampSlippageBps(params.slippageBps, 50);
+        const slippageBps = Number.isFinite(params.slippageBps)
+          ? Math.max(1, Math.min(10_000, Number(params.slippageBps)))
+          : 50;
 
         let buildResp!: BuildResponse;
 
-        // Retry once on blockhash issues
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             buildResp = await postJSON<BuildResponse>(
               BUILD_URL,
               {
                 fromOwnerBase58: connectedWallet58,
-                // build route accepts amountUi or amountUnits. We'll pass amountUi in base currency terms.
-                ...(isMax ? { isMax: true } : { amountUi: amountBase }),
+                amountUi: amountBase.toFixed(6),
                 slippageBps,
               },
               signal
@@ -361,9 +432,8 @@ export function usePlusWithdraw() {
           }
         }
 
-        if (!buildResp.transaction) {
-          throw new Error("Failed to build withdraw transaction");
-        }
+        if (!buildResp?.transaction)
+          throw new Error("Failed to build withdrawal transaction");
 
         /* ══════════ PHASE 2: SIGN ══════════ */
         setStatus("signing");
@@ -391,16 +461,13 @@ export function usePlusWithdraw() {
           signal
         );
 
-        if (!sendResp.signature) {
+        if (!sendResp?.signature)
           throw new Error("No signature returned from send");
-        }
-
         setSignature(sendResp.signature);
 
-        /* ══════════ PHASE 4: CONFIRM ══════════ */
+        /* ══════════ PHASE 4: CONFIRM (UI-only) ══════════ */
         setStatus("confirming");
-        await new Promise((r) => setTimeout(r, 1000));
-
+        await new Promise((r) => setTimeout(r, 800));
         setStatus("done");
 
         const totalTime = Date.now() - startTime;
@@ -408,8 +475,9 @@ export function usePlusWithdraw() {
         return {
           signature: sendResp.signature,
           totalTimeMs: totalTime,
-          traceId: buildResp.traceId,
+          traceId: buildResp.traceId ?? sendResp.traceId,
           jupUsdWithdrawUnits: buildResp.jupUsdWithdrawUnits,
+          usdcOutUnits: buildResp.usdcOutUnits,
           slippageBps: buildResp.slippageBps ?? slippageBps,
           fx: {
             targetCurrency: fx.target,
@@ -423,17 +491,34 @@ export function usePlusWithdraw() {
           code?: string;
           retryable?: boolean;
           stage?: string;
+          status?: number;
+          raw?: unknown;
+          url?: string;
+          traceId?: string;
+          logs?: string[];
         };
+
+        const api = pickApiError(err.raw);
+
         const plusErr: PlusWithdrawError = {
-          message: err.message || "Withdrawal failed",
-          code: err.code,
-          stage: err.stage,
-          retryable: err.retryable || isBlockhashError(e),
+          message: api?.userMessage || pickErrorMessage(e),
+          code: api?.code || err.code,
+          stage: api?.stage || err.stage,
+          traceId: api?.traceId || err.traceId,
+          logs: api?.logs || err.logs,
+          retryable: Boolean(err.retryable || isBlockhashError(e)),
         };
 
         setError(plusErr);
         setStatus("error");
-        console.error("[PlusWithdraw] Failed:", plusErr);
+
+        console.error("[PlusWithdraw] Failed:", {
+          plusErr,
+          status: err.status,
+          url: err.url,
+          raw: err.raw,
+        });
+
         throw e;
       } finally {
         inFlightRef.current = false;
@@ -466,6 +551,7 @@ export function usePlusWithdraw() {
       error,
       signature,
       connectedWallet58,
+
       isBusy:
         inFlightRef.current || !["idle", "done", "error"].includes(status),
       isIdle: status === "idle",

@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 const SOLANA_RPC =
   process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
+// ✅ Exclude this mint entirely (don’t price it, don’t return it)
+const EXCLUDED_MINT = "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk";
+
 // REAL mainnet USDC mint
 const REAL_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -149,6 +152,9 @@ async function getSplTokenPositions(owner: string) {
 
       if (!mint || !Number.isFinite(ui) || ui <= 0) continue;
 
+      // ✅ Skip excluded mint at the source
+      if (mint === EXCLUDED_MINT) continue;
+
       const prev = byMint.get(mint);
       if (!prev) byMint.set(mint, { mint, uiAmount: ui, decimals });
       else
@@ -165,7 +171,6 @@ async function getSplTokenPositions(owner: string) {
   return Array.from(byMint.values());
 }
 
-
 type JupPriceEntry = {
   decimals: number;
   usdPrice: number;
@@ -176,7 +181,12 @@ type JupPriceEntry = {
 async function fetchJupPrices(
   mints: string[]
 ): Promise<Record<string, JupPriceEntry>> {
-  const normalized = mints.map(normalizeMintForPricing).filter(Boolean);
+  // ✅ Filter excluded mint before pricing
+  const normalized = mints
+    .filter((m) => m && m !== EXCLUDED_MINT)
+    .map(normalizeMintForPricing)
+    .filter(Boolean);
+
   const unique = Array.from(new Set(normalized));
   if (unique.length === 0) return {};
 
@@ -269,6 +279,9 @@ export async function GET(req: NextRequest) {
     let totalChange24hUsd = 0;
 
     for (const p of positions) {
+      // ✅ Extra guard (even though we filtered earlier)
+      if (p.mint === EXCLUDED_MINT) continue;
+
       const pricingMint = normalizeMintForPricing(p.mint);
       const entry = priceMap[pricingMint] as JupPriceEntry | undefined;
 

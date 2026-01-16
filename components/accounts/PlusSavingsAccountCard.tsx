@@ -1,4 +1,3 @@
-// components/accounts/PlusSavingsAccountCard.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -37,34 +36,7 @@ type ApyResponse = {
   error?: string;
 };
 
-type PlusBalanceResponse = {
-  owner?: string;
-  symbol?: string;
-  hasPosition?: boolean;
-
-  // UI strings (already decimal-adjusted)
-  underlyingAssetsUi?: string; // ← vault balance (incl. accrued interest)
-  underlyingBalanceUi?: string; // wallet balance, not vault balance
-  sharesUi?: string;
-
-  // raw (base units)
-  underlyingAssets?: string;
-  underlyingBalance?: string;
-  shares?: string;
-
-  // token info
-  token?: {
-    decimals?: number;
-    symbol?: string;
-    asset?: {
-      price?: string;
-      symbol?: string;
-    };
-  };
-};
-
 const APY_URL = "/api/savings/plus/apy";
-const BAL_URL = "/api/savings/plus/balance";
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -101,9 +73,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
 }) => {
   const { loading: userLoading, user } = useUser();
   const balanceCtx = useBalance();
-  const balanceLoading = isRecord(balanceCtx)
-    ? Boolean(balanceCtx["loading"])
-    : false;
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
@@ -112,13 +81,13 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
   const [apyLoading, setApyLoading] = useState(false);
 
-  // Live Plus balance (in USD, before currency conversion)
-  const [plusBalanceUsd, setPlusBalanceUsd] = useState<number | null>(null);
-  const [plusBalLoading, setPlusBalLoading] = useState(false);
-  const [hasPosition, setHasPosition] = useState(false);
+  // ✅ Pull Plus balance from provider (already in display currency)
+  const plusUsdDisplay = getNumberField(balanceCtx, "savingsPlusUsd") ?? 0; // display currency value
+  const plusAmount = getNumberField(balanceCtx, "savingsPlusAmount") ?? 0; // base units in UI amount (JupUSD-ish)
 
-  const effectiveLoading =
-    loadingProp ?? (userLoading || balanceLoading || plusBalLoading);
+  const balanceLoading = getNumberField(balanceCtx, "loading")
+    ? Boolean(getNumberField(balanceCtx, "loading"))
+    : Boolean((balanceCtx as unknown as { loading?: boolean })?.loading);
 
   // For subtitle
   const accountPkToShow = account?.walletAddress
@@ -127,9 +96,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
       ? user.walletAddress
       : "";
 
-  // ✅ Remove explicit any: safely read fxRate + displayCurrency from ctx/user if present
-  const fxRate = getNumberField(balanceCtx, "fxRate") ?? 1;
-
+  // ✅ Display currency comes from provider/user
   const displayCurrency = (
     getStringField(balanceCtx, "displayCurrency") ??
     (isRecord(user) ? getStringField(user, "displayCurrency") : undefined) ??
@@ -138,17 +105,16 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     .toUpperCase()
     .trim();
 
-  const isUsd = displayCurrency === "USD";
+  const effectiveLoading = loadingProp ?? (userLoading || balanceLoading);
 
-  // Format money in display currency
-  const formatDisplay = (usdValue?: number | null) => {
-    const usd =
-      usdValue === undefined || usdValue === null || Number.isNaN(usdValue)
+  // Format money in *display currency* (value already converted)
+  const formatDisplay = (displayValue?: number | null) => {
+    const v =
+      displayValue === undefined ||
+      displayValue === null ||
+      Number.isNaN(displayValue)
         ? 0
-        : Number(usdValue);
-
-    // Convert USD to display currency
-    const displayValue = isUsd ? usd : usd * fxRate;
+        : Number(displayValue);
 
     try {
       return new Intl.NumberFormat(undefined, {
@@ -156,9 +122,9 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
         currency: displayCurrency,
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
-      }).format(displayValue);
+      }).format(v);
     } catch {
-      return `$${displayValue.toLocaleString("en-US", {
+      return `$${v.toLocaleString("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       })}`;
@@ -245,82 +211,19 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
       ? apyPctOverride
       : apyPctLive;
 
-  // ───────── Fetch Plus balance ─────────
-  useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      try {
-        setPlusBalLoading(true);
-
-        const res = await fetch(BAL_URL, { method: "GET", cache: "no-store" });
-        if (!res.ok) throw new Error("Failed to fetch plus balance");
-
-        const data = (await res
-          .json()
-          .catch(() => ({}))) as PlusBalanceResponse;
-
-        if (!cancelled) setHasPosition(data.hasPosition === true);
-
-        const underlyingAssetsUi = data.underlyingAssetsUi;
-        const jupUsdAmount = Number(underlyingAssetsUi ?? "0");
-
-        const tokenPrice = Number(data.token?.asset?.price ?? "1");
-        const usdValue = Number.isFinite(jupUsdAmount)
-          ? jupUsdAmount * (Number.isFinite(tokenPrice) ? tokenPrice : 1)
-          : 0;
-
-        console.log("[PlusSavingsAccountCard] Balance fetched:", {
-          underlyingAssetsUi,
-          jupUsdAmount,
-          tokenPrice,
-          usdValue,
-          hasPosition: data.hasPosition,
-        });
-
-        if (!cancelled) setPlusBalanceUsd(usdValue);
-      } catch (e) {
-        console.error("[PlusSavingsAccountCard] Balance fetch error:", e);
-        if (!cancelled) setPlusBalanceUsd(null);
-      } finally {
-        if (!cancelled) setPlusBalLoading(false);
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Refresh balance when drawer closes (after deposit/withdraw)
-  useEffect(() => {
-    if (!drawerOpen && drawerMode === null) {
-      const timer = setTimeout(() => {
-        fetch(BAL_URL, { method: "GET", cache: "no-store" })
-          .then((res) => res.json())
-          .then((data: PlusBalanceResponse) => {
-            const jupUsdAmount = Number(data.underlyingAssetsUi ?? "0");
-            const tokenPrice = Number(data.token?.asset?.price ?? "1");
-            const usdValue = Number.isFinite(jupUsdAmount)
-              ? jupUsdAmount * (Number.isFinite(tokenPrice) ? tokenPrice : 1)
-              : 0;
-            setPlusBalanceUsd(usdValue);
-            setHasPosition(data.hasPosition === true);
-          })
-          .catch(() => {});
-      }, 1000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [drawerOpen, drawerMode]);
-
-  const effectiveBalanceUsd = useMemo(() => {
-    if (Number.isFinite(plusBalanceUsd)) return plusBalanceUsd as number;
+  // ✅ Balance value to show:
+  // Prefer provider value; fallback to account.totalDeposited (assumed already display currency)
+  const effectiveBalanceDisplay = useMemo(() => {
+    if (Number.isFinite(plusUsdDisplay) && plusUsdDisplay > 0)
+      return plusUsdDisplay;
     if (account && Number.isFinite(account.totalDeposited))
       return account.totalDeposited;
     return 0;
-  }, [account, plusBalanceUsd]);
+  }, [account, plusUsdDisplay]);
+
+  // ✅ Has account?
+  // Use provider amount > 0 as a proxy (no API call).
+  const hasPosition = plusAmount > 0;
 
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
@@ -348,7 +251,9 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
 
             <div className="mt-4">
               <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
-                {effectiveLoading ? "…" : formatDisplay(effectiveBalanceUsd)}
+                {effectiveLoading
+                  ? "…"
+                  : formatDisplay(effectiveBalanceDisplay)}
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Higher yield, USDC → JupUSD vault strategy
@@ -406,7 +311,9 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
             setDrawerOpen(open);
             if (!open) setDrawerMode(null);
           }}
-          availableBalance={effectiveBalanceUsd}
+          // ✅ IMPORTANT: Withdraw component likely expects USD amount.
+          // If WithdrawPlus expects base USD (not display currency), tell me and we’ll pass plusAmount instead.
+          availableBalance={effectiveBalanceDisplay}
         />
       )}
     </Drawer>

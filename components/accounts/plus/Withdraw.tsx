@@ -17,7 +17,10 @@ import {
   Wallet,
   ExternalLink,
   ArrowDownToLine,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 import {
@@ -30,18 +33,24 @@ import {
 type WithdrawPlusProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Available to withdraw in DISPLAY currency (pass from parent "plus" balance). */
+  /** Available balance in USD terms (from vault position) */
   availableBalance: number;
 };
 
 type ModalKind = "processing" | "success" | "error";
 
-type ModalState = {
-  kind: ModalKind;
-  signature?: string | null;
-  errorMessage?: string;
-  amountUi?: number;
-} | null;
+type ModalState =
+  | { kind: "processing" }
+  | { kind: "success"; signature: string }
+  | {
+      kind: "error";
+      errorMessage: string;
+      code?: string;
+      stage?: string;
+      traceId?: string;
+      logs?: string[];
+    }
+  | null;
 
 /* ───────── STAGE CONFIG ───────── */
 
@@ -57,31 +66,31 @@ const STAGE_CONFIG: Record<
   idle: { title: "", subtitle: "", progress: 0, icon: "spinner" },
   building: {
     title: "Preparing withdrawal",
-    subtitle: "Building transaction...",
-    progress: 15,
+    subtitle: "Building vault withdrawal + swap…",
+    progress: 22,
     icon: "spinner",
   },
   signing: {
-    title: "Approve in wallet",
-    subtitle: "Please sign the transaction",
-    progress: 35,
+    title: "Approving transaction",
+    subtitle: "Approve the transaction in your wallet…",
+    progress: 46,
     icon: "wallet",
   },
   sending: {
     title: "Submitting",
-    subtitle: "Broadcasting to Solana...",
-    progress: 55,
+    subtitle: "Broadcasting to Solana…",
+    progress: 70,
     icon: "spinner",
   },
   confirming: {
     title: "Confirming",
-    subtitle: "Waiting for network...",
-    progress: 80,
+    subtitle: "Waiting for network confirmation…",
+    progress: 88,
     icon: "spinner",
   },
   done: {
     title: "Withdrawal complete!",
-    subtitle: "Funds are now in your wallet",
+    subtitle: "Your USDC has been returned to your wallet",
     progress: 100,
     icon: "success",
   },
@@ -119,7 +128,7 @@ function money2(n: number) {
   return Number.isFinite(n) ? n.toFixed(2) : "0.00";
 }
 
-function safeNum(v: unknown, fallback: number): number {
+function safeNum(v: unknown, fallback = 0): number {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
     const n = parseFloat(v);
@@ -132,13 +141,13 @@ function explorerUrl(sig: string) {
   return `https://solscan.io/tx/${sig}`;
 }
 
-/* ───────── SUB COMPONENTS ───────── */
+/* ───────── UI ATOMS ───────── */
 
 function ProgressBar({ progress }: { progress: number }) {
   return (
     <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
       <div
-        className="h-full bg-amber-500 rounded-full transition-all duration-500 ease-out"
+        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
         style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
       />
     </div>
@@ -185,7 +194,7 @@ function StageIcon({
   );
 }
 
-/* ───────── MAIN COMPONENT ───────── */
+/* ───────── MAIN ───────── */
 
 export default function WithdrawPlus({
   open,
@@ -197,61 +206,83 @@ export default function WithdrawPlus({
   const refreshBalance = balanceCtx?.refresh;
 
   const ctxLoading = !!balanceCtx?.loading;
-  const displayCurrency = (
-    balanceCtx?.displayCurrency ||
-    user?.displayCurrency ||
-    "USD"
-  ).toUpperCase();
 
-  const available = safeNum(availableBalance, 0);
+  // Get FX rate and display currency from balance context
+  const fxRate = safeNum((balanceCtx as Record<string, unknown>)?.fxRate, 1);
+  const displayCurrency = (
+    (balanceCtx as Record<string, unknown>)?.displayCurrency ||
+    (user as Record<string, unknown>)?.displayCurrency ||
+    "USD"
+  )
+    .toString()
+    .toUpperCase()
+    .trim();
+
+  const isUsd = displayCurrency === "USD";
+
+  // Available balance in display currency
+  const availableBalanceDisplay = isUsd
+    ? availableBalance
+    : availableBalance * fxRate;
 
   const {
     withdraw,
     reset: resetWithdraw,
     status: withdrawStatus,
+    error: withdrawError,
     isBusy,
   } = usePlusWithdraw();
 
   const [amountRaw, setAmountRaw] = useState("");
-  const [withdrawAll, setWithdrawAll] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [mounted, setMounted] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
+  const ownerReady = !!user?.walletAddress && user.walletAddress !== "pending";
   const tradeStartedRef = useRef(false);
 
-  const amountNum = useMemo(() => {
+  // Amount in display currency (what user entered)
+  const amountDisplay = useMemo(() => {
     const n = parseFloat(amountRaw);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }, [amountRaw]);
 
-  const ownerReady = !!user?.walletAddress && user.walletAddress !== "pending";
+  // Amount converted to USD (what we send to the API)
+  const amountUsd = useMemo(() => {
+    if (amountDisplay <= 0) return 0;
+    if (isUsd) return amountDisplay;
+    return fxRate > 0 ? amountDisplay / fxRate : 0;
+  }, [amountDisplay, isUsd, fxRate]);
 
   const canSubmit = useMemo(() => {
     if (!ownerReady || ctxLoading) return false;
-    if (!withdrawAll && amountNum <= 0) return false;
-    if (!withdrawAll && amountNum > available) return false;
-    if (withdrawAll && available <= 0) return false;
+    if (amountDisplay <= 0) return false;
+    if (amountDisplay > availableBalanceDisplay) return false;
+    if (amountUsd <= 0) return false;
     return true;
-  }, [ownerReady, ctxLoading, amountNum, available, withdrawAll]);
+  }, [
+    ownerReady,
+    ctxLoading,
+    amountDisplay,
+    availableBalanceDisplay,
+    amountUsd,
+  ]);
 
   const currentStage = modal?.kind === "processing" ? withdrawStatus : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
 
-  // Portal mount guard
   useEffect(() => setMounted(true), []);
 
-  // Reset when modal closes
   useEffect(() => {
     if (!open) {
       setAmountRaw("");
-      setWithdrawAll(false);
       setModal(null);
+      setShowDetails(false);
       tradeStartedRef.current = false;
       resetWithdraw();
     }
   }, [open, resetWithdraw]);
 
-  // Lock background scroll
   useEffect(() => {
     if (!open) return;
     const prev = document.documentElement.style.overflow;
@@ -261,19 +292,25 @@ export default function WithdrawPlus({
     };
   }, [open]);
 
-  const handleMax = useCallback(() => {
-    setAmountRaw(money2(available));
-    setWithdrawAll(true);
-  }, [available]);
+  useEffect(() => {
+    if (!open) return;
+    if (!modal || modal.kind !== "processing") return;
+    if (!withdrawError) return;
 
-  const handleAmountChange = useCallback((value: string) => {
-    setAmountRaw(clampMoneyInput(value));
-    setWithdrawAll(false);
-  }, []);
+    setModal({
+      kind: "error",
+      errorMessage: withdrawError.message || "Withdrawal failed",
+      code: withdrawError.code,
+      stage: withdrawError.stage,
+      traceId: withdrawError.traceId,
+      logs: withdrawError.logs,
+    });
+  }, [open, modal, withdrawError]);
 
   const closeModal = useCallback(() => {
     if (!modal || modal.kind === "processing") return;
     setModal(null);
+    setShowDetails(false);
     tradeStartedRef.current = false;
     onOpenChange(false);
   }, [modal, onOpenChange]);
@@ -283,50 +320,46 @@ export default function WithdrawPlus({
 
     tradeStartedRef.current = true;
     setModal({ kind: "processing" });
+    setShowDetails(false);
 
     try {
-      const amountToShow = withdrawAll ? available : amountNum;
-
       const result = await withdraw({
-        amountDisplay: amountToShow,
+        amountDisplay: amountUsd, // Send USD amount to API
         owner58: user.walletAddress,
-        isMax: withdrawAll,
-        // you can expose slippage in UI later; keeping default in hook is fine
+        slippageBps: 50,
       });
 
       setAmountRaw("");
-      setWithdrawAll(false);
 
-      refreshBalance?.().catch((e) => {
-        console.warn("[WithdrawPlus] Balance refresh failed:", e);
-      });
-      refreshUser?.().catch((e) => {
-        console.warn("[WithdrawPlus] User refresh failed:", e);
-      });
+      refreshBalance?.().catch((e: unknown) =>
+        console.warn("[WithdrawPlus] Balance refresh failed:", e)
+      );
+      refreshUser?.().catch((e: unknown) =>
+        console.warn("[WithdrawPlus] User refresh failed:", e)
+      );
 
-      setModal({
-        kind: "success",
-        signature: result.signature,
-        amountUi: amountToShow,
-      });
+      setModal({ kind: "success", signature: result.signature });
     } catch (e) {
-      const err = e as Error & { raw?: { userMessage?: string } };
+      const msg =
+        withdrawError?.message || (e as Error)?.message || "Withdrawal failed";
       setModal({
         kind: "error",
-        errorMessage:
-          err?.message || err?.raw?.userMessage || "Withdrawal failed",
+        errorMessage: msg,
+        code: withdrawError?.code,
+        stage: withdrawError?.stage,
+        traceId: withdrawError?.traceId,
+        logs: withdrawError?.logs,
       });
     }
   }, [
     canSubmit,
     isBusy,
-    user,
-    amountNum,
-    available,
-    withdrawAll,
+    user?.walletAddress,
     withdraw,
+    amountUsd,
     refreshBalance,
     refreshUser,
+    withdrawError,
   ]);
 
   if (!open || !mounted) return null;
@@ -344,10 +377,9 @@ export default function WithdrawPlus({
         className="w-full max-w-sm haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* ───────── INPUT VIEW ───────── */}
+        {/* INPUT VIEW */}
         {!modal && (
           <>
-            {/* Header */}
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -357,19 +389,21 @@ export default function WithdrawPlus({
                   </div>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Withdraw from Plus and receive USDC in your wallet.
+                  Withdraw from Plus vault to USDC.
                 </div>
               </div>
 
               <div className="text-right text-xs text-muted-foreground">
                 Available
                 <div className="mt-0.5 font-semibold text-foreground/90">
-                  {ctxLoading ? "…" : formatMoney(available, displayCurrency)}
+                  {ctxLoading
+                    ? "…"
+                    : formatMoney(availableBalanceDisplay, displayCurrency)}
                 </div>
               </div>
             </div>
 
-            {/* Amount Input */}
+            {/* Amount */}
             <div className="mt-4">
               <label className="text-xs text-muted-foreground">Amount</label>
 
@@ -380,7 +414,9 @@ export default function WithdrawPlus({
 
                 <input
                   value={amountRaw}
-                  onChange={(e) => handleAmountChange(e.target.value)}
+                  onChange={(e) =>
+                    setAmountRaw(clampMoneyInput(e.target.value))
+                  }
                   inputMode="decimal"
                   placeholder="0.00"
                   disabled={isBusy}
@@ -390,12 +426,8 @@ export default function WithdrawPlus({
                 <button
                   type="button"
                   disabled={isBusy || ctxLoading}
-                  onClick={handleMax}
-                  className={[
-                    "haven-pill transition",
-                    withdrawAll ? "ring-1 ring-primary/30 bg-primary/10" : "",
-                    isBusy || ctxLoading ? "opacity-60" : "",
-                  ].join(" ")}
+                  onClick={() => setAmountRaw(money2(availableBalanceDisplay))}
+                  className="haven-pill hover:bg-accent disabled:opacity-60"
                 >
                   Max
                 </button>
@@ -406,10 +438,10 @@ export default function WithdrawPlus({
                   Wallet not connected.
                 </div>
               )}
+
               {!ctxLoading &&
-                !withdrawAll &&
-                amountNum > available &&
-                amountNum > 0 && (
+                amountDisplay > availableBalanceDisplay &&
+                amountDisplay > 0 && (
                   <div className="mt-2 text-xs text-destructive">
                     Amount exceeds available balance.
                   </div>
@@ -417,25 +449,33 @@ export default function WithdrawPlus({
             </div>
 
             {/* Summary */}
-            {(withdrawAll ? available : amountNum) > 0 && (
+            {amountDisplay > 0 && (
               <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[11px] text-muted-foreground">
                     You withdraw
                   </div>
                   <div className="text-sm font-semibold text-foreground/90">
-                    {formatMoney(
-                      withdrawAll ? available : amountNum,
-                      displayCurrency
-                    )}
+                    {formatMoney(amountDisplay, displayCurrency)}
                   </div>
                 </div>
 
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="text-[11px] text-muted-foreground">
-                    You receive
+                {!isUsd && amountUsd > 0 && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <div className="text-[11px] text-muted-foreground">
+                      USD equivalent
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      ≈ {formatMoney(amountUsd, "USD")}
+                    </div>
                   </div>
-                  <div className="text-sm font-semibold text-primary">USDC</div>
+                )}
+
+                <div className="mt-2 flex items-center justify-between">
+                  <div className="text-[11px] text-muted-foreground">Route</div>
+                  <div className="text-[11px] font-semibold text-primary">
+                    Plus Vault → JupUSD → USDC
+                  </div>
                 </div>
               </div>
             )}
@@ -464,7 +504,6 @@ export default function WithdrawPlus({
               )}
             </button>
 
-            {/* Close button */}
             <button
               type="button"
               onClick={() => onOpenChange(false)}
@@ -476,11 +515,11 @@ export default function WithdrawPlus({
           </>
         )}
 
-        {/* ───────── PROCESSING / SUCCESS / ERROR VIEW ───────── */}
+        {/* PROCESSING / SUCCESS / ERROR VIEW */}
         {modal && (
           <>
             {modal.kind !== "processing" && (
-              <div className="mb-2 flex justify-end">
+              <div className="flex justify-end mb-2">
                 <button
                   type="button"
                   onClick={closeModal}
@@ -491,7 +530,7 @@ export default function WithdrawPlus({
               </div>
             )}
 
-            <div className="flex flex-col items-center pt-2 text-center">
+            <div className="flex flex-col items-center text-center pt-2">
               {modal.kind === "processing" && stageConfig ? (
                 <>
                   <StageIcon icon={stageConfig.icon} />
@@ -515,7 +554,7 @@ export default function WithdrawPlus({
                       Withdrawal complete!
                     </div>
                     <div className="mt-1 text-sm text-muted-foreground">
-                      USDC is now in your wallet
+                      Your USDC has been returned to your wallet
                     </div>
                   </div>
                 </>
@@ -534,32 +573,66 @@ export default function WithdrawPlus({
               )}
             </div>
 
-            {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-destructive/25 bg-destructive/10 p-3">
-                <div className="text-center text-xs text-destructive">
-                  {modal.errorMessage}
+            {modal.kind === "error" && (
+              <>
+                <div className="mt-4 rounded-2xl border border-destructive/25 bg-destructive/10 p-3">
+                  <div className="text-xs text-destructive text-center">
+                    {modal.errorMessage}
+                    {(modal.code || modal.stage) && (
+                      <span className="opacity-80">
+                        {" "}
+                        ({modal.code || "ERR"}
+                        {modal.stage ? ` / ${modal.stage}` : ""})
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
+
+                {(modal.traceId || (modal.logs && modal.logs.length)) && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowDetails((v) => !v)}
+                      className="w-full flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-xs text-muted-foreground hover:bg-accent transition"
+                    >
+                      <span>Details</span>
+                      {showDetails ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </button>
+
+                    {showDetails && (
+                      <div className="mt-2 rounded-2xl border border-border bg-background/50 p-3">
+                        {modal.traceId && (
+                          <div className="text-[11px] text-muted-foreground">
+                            traceId:{" "}
+                            <span className="text-foreground/90 font-mono">
+                              {modal.traceId}
+                            </span>
+                          </div>
+                        )}
+
+                        {!!modal.logs?.length && (
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/30 p-2 text-[10px] leading-relaxed text-foreground/80">
+                            {modal.logs.slice(0, 20).join("\n")}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
-            {modal.kind === "success" && modal.amountUi !== undefined && (
-              <div className="mt-4 rounded-2xl border border-border bg-background/50 p-3">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Amount</span>
-                  <span className="font-semibold text-foreground/90">
-                    {formatMoney(modal.amountUi, displayCurrency)}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {modal.kind === "success" && modal.signature && (
+            {modal.kind === "success" && (
               <div className="mt-5">
                 <a
                   href={explorerUrl(modal.signature)}
                   target="_blank"
                   rel="noreferrer"
-                  className="group flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition"
+                  className="flex items-center justify-between rounded-2xl border border-border bg-background/50 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition group"
                 >
                   <span>View transaction</span>
                   <ExternalLink className="h-4 w-4 opacity-50 group-hover:opacity-100" />
@@ -584,7 +657,7 @@ export default function WithdrawPlus({
 
             {modal.kind === "processing" && (
               <div className="mt-6 text-center text-xs text-muted-foreground">
-                Please keep window open
+                Please keep this window open
               </div>
             )}
           </>
