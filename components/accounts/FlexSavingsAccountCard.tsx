@@ -186,7 +186,7 @@ const FlexSavingsAccountCard: React.FC<FlexSavingsAccountCardProps> = ({
               </span>
             </div>
 
-            <p className="mt-4 text-lg font-semibold">Open Flex Account</p>
+            <p className="mt-4 text-lg font-semibold text-foreground">Open Flex Account</p>
             <p className="mt-1 text-[11px] text-muted-foreground">
               Start earning automatically on idle USDC.
             </p>

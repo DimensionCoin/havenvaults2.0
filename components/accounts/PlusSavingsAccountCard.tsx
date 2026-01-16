@@ -1,23 +1,70 @@
 // components/accounts/PlusSavingsAccountCard.tsx
 "use client";
 
-import React, { useMemo, useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Drawer, DrawerTrigger } from "@/components/ui/drawer";
+import { useUser } from "@/providers/UserProvider";
+import { useBalance } from "@/providers/BalanceProvider";
+
+import DepositPlus from "@/components/accounts/plus/Deposit";
+import WithdrawPlus from "@/components/accounts/plus/Withdraw";
+
+type DrawerMode = "deposit" | "withdraw" | null;
 
 type SavingsAccountShape = {
   walletAddress: string;
-  totalDeposited: number; // already in DISPLAY currency (unused for now)
+  totalDeposited: number;
 };
 
 type PlusSavingsAccountCardProps = {
   account?: SavingsAccountShape;
-  loading: boolean;
-  displayCurrency: string;
+  loading?: boolean;
+  displayCurrency?: string;
 
-  // kept for compatibility
-  onDeposit: () => void;
-  onWithdraw: () => void;
+  onDeposit: () => void; // kept for compatibility (unused)
+  onWithdraw: () => void; // kept for compatibility (unused)
   onOpenAccount: () => void;
+
+  apyPctOverride?: number;
 };
+
+type ApyResponse = {
+  ok?: boolean;
+  apyPct?: number;
+  apy?: number;
+  apyPercentage?: string;
+  error?: string;
+};
+
+type PlusBalanceResponse = {
+  owner?: string;
+  symbol?: string;
+  hasPosition?: boolean;
+
+  // UI strings (already decimal-adjusted)
+  underlyingAssetsUi?: string; // ← vault balance (incl. accrued interest)
+  underlyingBalanceUi?: string; // wallet balance, not vault balance
+  sharesUi?: string;
+
+  // raw (base units)
+  underlyingAssets?: string;
+  underlyingBalance?: string;
+  shares?: string;
+
+  // token info
+  token?: {
+    decimals?: number;
+    symbol?: string;
+    asset?: {
+      price?: string;
+      symbol?: string;
+    };
+  };
+};
+
+const APY_URL = "/api/savings/plus/apy";
+const BAL_URL = "/api/savings/plus/balance";
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -25,141 +72,344 @@ const shortAddress = (addr?: string | null) => {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 };
 
-function makeMoneyFormatter(currency: string) {
-  const c = (currency || "USD").toUpperCase();
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: c,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  } catch {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  }
+/* ───────── safe helpers (no any) ───────── */
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object";
+}
+
+function getNumberField(obj: unknown, key: string): number | undefined {
+  if (!isRecord(obj)) return undefined;
+  const v = obj[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function getStringField(obj: unknown, key: string): string | undefined {
+  if (!isRecord(obj)) return undefined;
+  const v = obj[key];
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
 const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
-  loading,
-  displayCurrency,
-  onOpenAccount,
+  loading: loadingProp,
+
+  // ✅ Fix unused-var lint: accept prop but don’t use it
+  onOpenAccount: _onOpenAccount,
+
+  apyPctOverride,
 }) => {
-  const formatMoney = useMemo(
-    () => makeMoneyFormatter(displayCurrency),
-    [displayCurrency]
-  );
+  const { loading: userLoading, user } = useUser();
+  const balanceCtx = useBalance();
+  const balanceLoading = isRecord(balanceCtx)
+    ? Boolean(balanceCtx["loading"])
+    : false;
 
-  // Fetch real APY from API
-  const [apyFinal, setApyFinal] = useState<number>(7.0); // Default fallback
-  const [apyLoading, setApyLoading] = useState<boolean>(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
 
+  // Live APY
+  const [apyPctLive, setApyPctLive] = useState<number | null>(null);
+  const [apyLoading, setApyLoading] = useState(false);
+
+  // Live Plus balance (in USD, before currency conversion)
+  const [plusBalanceUsd, setPlusBalanceUsd] = useState<number | null>(null);
+  const [plusBalLoading, setPlusBalLoading] = useState(false);
+  const [hasPosition, setHasPosition] = useState(false);
+
+  const effectiveLoading =
+    loadingProp ?? (userLoading || balanceLoading || plusBalLoading);
+
+  // For subtitle
+  const accountPkToShow = account?.walletAddress
+    ? account.walletAddress
+    : user?.walletAddress && user.walletAddress !== "pending"
+      ? user.walletAddress
+      : "";
+
+  // ✅ Remove explicit any: safely read fxRate + displayCurrency from ctx/user if present
+  const fxRate = getNumberField(balanceCtx, "fxRate") ?? 1;
+
+  const displayCurrency = (
+    getStringField(balanceCtx, "displayCurrency") ??
+    (isRecord(user) ? getStringField(user, "displayCurrency") : undefined) ??
+    "USD"
+  )
+    .toUpperCase()
+    .trim();
+
+  const isUsd = displayCurrency === "USD";
+
+  // Format money in display currency
+  const formatDisplay = (usdValue?: number | null) => {
+    const usd =
+      usdValue === undefined || usdValue === null || Number.isNaN(usdValue)
+        ? 0
+        : Number(usdValue);
+
+    // Convert USD to display currency
+    const displayValue = isUsd ? usd : usd * fxRate;
+
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: displayCurrency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(displayValue);
+    } catch {
+      return `$${displayValue.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+  };
+
+  const openDrawer = (mode: Exclude<DrawerMode, null>) => {
+    setDrawerMode(mode);
+    setDrawerOpen(true);
+  };
+
+  const handleDrawerChange = (open: boolean) => {
+    setDrawerOpen(open);
+    if (!open) setDrawerMode(null);
+  };
+
+  // ───────── Fetch APY ─────────
   useEffect(() => {
-    async function fetchAPY() {
-      try {
-        const response = await fetch("/api/savings/plus/apy");
-        if (!response.ok) throw new Error("Failed to fetch APY");
-
-        const data = await response.json();
-        setApyFinal(parseFloat(data.apyPercentage));
-      } catch (error) {
-        console.error("Error fetching Plus APY:", error);
-        // Keep default 7.0 on error
-      } finally {
-        setApyLoading(false);
-      }
+    if (typeof apyPctOverride === "number" && Number.isFinite(apyPctOverride)) {
+      setApyPctLive(null);
+      setApyLoading(false);
+      return;
     }
 
-    fetchAPY();
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        setApyLoading(true);
+
+        const cacheKey = "plus_apy_cache_v1";
+        const cachedRaw = sessionStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw) as {
+            at: number;
+            apyPct: number;
+          };
+          if (
+            cached &&
+            typeof cached.at === "number" &&
+            typeof cached.apyPct === "number" &&
+            Number.isFinite(cached.apyPct) &&
+            Date.now() - cached.at < 5 * 60 * 1000
+          ) {
+            if (!cancelled) setApyPctLive(cached.apyPct);
+            return;
+          }
+        }
+
+        const res = await fetch(APY_URL, { method: "GET", cache: "no-store" });
+        const data = (await res.json().catch(() => ({}))) as ApyResponse;
+
+        const pct =
+          typeof data.apyPct === "number" && Number.isFinite(data.apyPct)
+            ? data.apyPct
+            : typeof data.apy === "number" && Number.isFinite(data.apy)
+              ? data.apy * 100
+              : typeof data.apyPercentage === "string" &&
+                  Number.isFinite(Number(data.apyPercentage))
+                ? Number(data.apyPercentage)
+                : 0;
+
+        if (!cancelled) setApyPctLive(pct);
+
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({ at: Date.now(), apyPct: pct })
+        );
+      } catch {
+        if (!cancelled) setApyPctLive(null);
+      } finally {
+        if (!cancelled) setApyLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [apyPctOverride]);
+
+  const apyFinal =
+    typeof apyPctOverride === "number" && Number.isFinite(apyPctOverride)
+      ? apyPctOverride
+      : apyPctLive;
+
+  // ───────── Fetch Plus balance ─────────
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        setPlusBalLoading(true);
+
+        const res = await fetch(BAL_URL, { method: "GET", cache: "no-store" });
+        if (!res.ok) throw new Error("Failed to fetch plus balance");
+
+        const data = (await res
+          .json()
+          .catch(() => ({}))) as PlusBalanceResponse;
+
+        if (!cancelled) setHasPosition(data.hasPosition === true);
+
+        const underlyingAssetsUi = data.underlyingAssetsUi;
+        const jupUsdAmount = Number(underlyingAssetsUi ?? "0");
+
+        const tokenPrice = Number(data.token?.asset?.price ?? "1");
+        const usdValue = Number.isFinite(jupUsdAmount)
+          ? jupUsdAmount * (Number.isFinite(tokenPrice) ? tokenPrice : 1)
+          : 0;
+
+        console.log("[PlusSavingsAccountCard] Balance fetched:", {
+          underlyingAssetsUi,
+          jupUsdAmount,
+          tokenPrice,
+          usdValue,
+          hasPosition: data.hasPosition,
+        });
+
+        if (!cancelled) setPlusBalanceUsd(usdValue);
+      } catch (e) {
+        console.error("[PlusSavingsAccountCard] Balance fetch error:", e);
+        if (!cancelled) setPlusBalanceUsd(null);
+      } finally {
+        if (!cancelled) setPlusBalLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const mockBalance = 0;
+  // Refresh balance when drawer closes (after deposit/withdraw)
+  useEffect(() => {
+    if (!drawerOpen && drawerMode === null) {
+      const timer = setTimeout(() => {
+        fetch(BAL_URL, { method: "GET", cache: "no-store" })
+          .then((res) => res.json())
+          .then((data: PlusBalanceResponse) => {
+            const jupUsdAmount = Number(data.underlyingAssetsUi ?? "0");
+            const tokenPrice = Number(data.token?.asset?.price ?? "1");
+            const usdValue = Number.isFinite(jupUsdAmount)
+              ? jupUsdAmount * (Number.isFinite(tokenPrice) ? tokenPrice : 1)
+              : 0;
+            setPlusBalanceUsd(usdValue);
+            setHasPosition(data.hasPosition === true);
+          })
+          .catch(() => {});
+      }, 1000);
 
-  // show something stable in the subtitle (same shape as Flex)
-  const accountPkToShow = account?.walletAddress
-    ? shortAddress(account.walletAddress)
-    : "—";
+      return () => clearTimeout(timer);
+    }
+  }, [drawerOpen, drawerMode]);
+
+  const effectiveBalanceUsd = useMemo(() => {
+    if (Number.isFinite(plusBalanceUsd)) return plusBalanceUsd as number;
+    if (account && Number.isFinite(account.totalDeposited))
+      return account.totalDeposited;
+    return 0;
+  }, [account, plusBalanceUsd]);
 
   return (
-    <div className="relative h-full min-h-[240px] w-full">
-      {/* BASE CARD (matches Flex open state layout) */}
-      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6">
-        <div>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Plus Account</p>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Account #{accountPkToShow}
-              </p>
+    <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
+      <Link href="/plus" className="block h-full">
+        <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
+          <div>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="haven-kicker">Plus Account</p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">
+                  Account #{shortAddress(accountPkToShow)}
+                </p>
+              </div>
+
+              <span className="haven-pill">
+                {apyLoading ? (
+                  "APY …"
+                ) : apyFinal === null ? (
+                  "APY —"
+                ) : (
+                  <>APY {apyFinal.toFixed(2)}%</>
+                )}
+              </span>
             </div>
 
-            {/* APY pill (same shape) */}
-            <span className="haven-pill">
-              {apyLoading ? "APY ..." : `APY ${apyFinal.toFixed(2)}%`}
-            </span>
+            <div className="mt-4">
+              <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
+                {effectiveLoading ? "…" : formatDisplay(effectiveBalanceUsd)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Higher yield, USDC → JupUSD vault strategy
+              </p>
+            </div>
           </div>
 
-          <div className="mt-4">
-            <p className="text-3xl text-foreground/80 font-semibold tracking-tight sm:text-4xl">
-              {loading ? "…" : formatMoney.format(mockBalance)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Lock funds for higher yield and faster growth
-            </p>
+          <div className="mt-5 flex gap-2">
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDrawer("deposit");
+                }}
+                className="haven-btn-primary flex-1 text-[#0b3204]"
+              >
+                Deposit
+              </button>
+            </DrawerTrigger>
+
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDrawer("withdraw");
+                }}
+                className="haven-btn-primary flex-1 text-[#0b3204]"
+              >
+                Withdraw
+              </button>
+            </DrawerTrigger>
           </div>
         </div>
+      </Link>
 
-        {/* Actions row (same spacing/height as Flex) */}
-        <div className="mt-5 flex gap-2">
-          <button
-            type="button"
-            className="haven-btn-primary flex-1 text-[#0b3204]"
-            disabled
-            aria-disabled="true"
-          >
-            Deposit
-          </button>
-          <button
-            type="button"
-            className="haven-btn-primary flex-1 text-[#0b3204]"
-            disabled
-            aria-disabled="true"
-          >
-            Withdraw
-          </button>
-        </div>
-      </div>
+      {drawerMode === "deposit" && (
+        <DepositPlus
+          open={drawerOpen}
+          onOpenChange={(open) => {
+            setDrawerOpen(open);
+            if (!open) setDrawerMode(null);
+          }}
+          hasAccount={hasPosition}
+        />
+      )}
 
-      {/* OVERLAY (absolute → does NOT change size) */}
-      <div className="absolute inset-0 z-10 rounded-3xl border border-border bg-background/75 backdrop-blur-[2px]">
-        <div className="flex h-full w-full flex-col items-center justify-center px-5 text-center">
-          <span className="haven-pill">
-            {apyLoading ? "APY ..." : `APY ${apyFinal.toFixed(2)}%`}
-          </span>
-
-          <div className="mt-3 text-xl font-semibold tracking-tight text-foreground">
-            Coming soon
-          </div>
-
-          <div className="mt-1 text-[12px] text-muted-foreground max-w-[260px]">
-            Plus is launching soon. Higher yield, more growth.
-          </div>
-
-          <button
-            type="button"
-            onClick={onOpenAccount}
-            className="mt-4 haven-btn-primary max-w-[220px] text-[#0b3204]"
-          >
-            Coming soon!
-          </button>
-        </div>
-      </div>
-    </div>
+      {drawerMode === "withdraw" && (
+        <WithdrawPlus
+          open={drawerOpen}
+          onOpenChange={(open) => {
+            setDrawerOpen(open);
+            if (!open) setDrawerMode(null);
+          }}
+          availableBalance={effectiveBalanceUsd}
+        />
+      )}
+    </Drawer>
   );
 };
 
