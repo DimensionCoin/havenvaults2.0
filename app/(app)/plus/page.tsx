@@ -19,51 +19,50 @@ import { useBalance } from "@/providers/BalanceProvider";
    (/api/savings/plus/activity)
 ========================= */
 
-type TokenAmount = {
-  uiAmount?: number;
-  uiAmountString?: string;
-  amount?: number;
-  decimals?: number;
-};
-
-type TokenTransfer = {
-  mint?: string;
-  tokenAddress?: string;
-  mintAddress?: string;
-  fromUserAccount?: string;
-  from?: string;
-  source?: string;
-  toUserAccount?: string;
-  to?: string;
-  destination?: string;
-  tokenAmount?: TokenAmount;
-  rawTokenAmount?: TokenAmount;
-  amount?: number | TokenAmount;
-};
-
-type TokenBalanceChange = {
-  mint?: string;
-  userAccount?: string;
-  owner?: string;
-  rawTokenAmount?: TokenAmount;
-  tokenAmount?: TokenAmount;
-  amount?: number | TokenAmount;
-  changeType?: string;
-};
-
-type AccountData = {
-  tokenBalanceChanges?: TokenBalanceChange[];
-};
-
 type ApiTx = {
   signature: string;
   timestamp: number | null;
   tokenTransfers?: TokenTransfer[];
-  accountData?: AccountData[];
+  accountData?: AccountDataEntry[];
   type?: string | null;
   source?: string | null;
   fee?: number | null;
   involvedAccounts?: string[];
+};
+
+type TokenAmount = {
+  uiAmount?: number | string | null;
+  uiAmountString?: string | null;
+};
+
+type TokenTransfer = {
+  mint?: string | null;
+  tokenAddress?: string | null;
+  mintAddress?: string | null;
+  fromUserAccount?: string | null;
+  from?: string | null;
+  source?: string | null;
+  toUserAccount?: string | null;
+  to?: string | null;
+  destination?: string | null;
+  tokenAmount?: TokenAmount | null;
+  rawTokenAmount?: TokenAmount | number | string | null;
+  amount?: number | string | null;
+};
+
+type TokenBalanceChange = {
+  mint?: string | null;
+  userAccount?: string | null;
+  owner?: string | null;
+  rawTokenAmount?: TokenAmount | number | string | null;
+  tokenAmount?: TokenAmount | number | string | null;
+  amount?: number | string | null;
+  changeType?: string | null;
+};
+
+type AccountDataEntry = {
+  account?: string | null;
+  tokenBalanceChanges?: TokenBalanceChange[];
 };
 
 type TxResponse = {
@@ -76,7 +75,7 @@ type TxResponse = {
   traceId?: string;
 };
 
-type ParsedActivity = ApiTx & {
+type ActivityTx = ApiTx & {
   _title: string;
   _subtitle: string;
   _direction: "in" | "out" | "neutral";
@@ -159,7 +158,7 @@ function norm(v: unknown) {
  * - rawTokenAmount / tokenAmount
  * - changeType ("inc"/"dec") or amount can be +/- depending on shape
  *
- * We'll compute USDC delta for the OWNER if possible.
+ * We’ll compute USDC delta for the OWNER if possible.
  */
 function readUsdcDeltaFromBalanceChanges(owner: string, tx: ApiTx) {
   const ownerLower = owner.trim().toLowerCase();
@@ -234,7 +233,7 @@ function parsePlusEvent(owner: string, tx: ApiTx) {
     if (to === ownerLower) usdcIn += amt;
   }
 
-  // fallback if tokenTransfers didn't reveal it
+  // fallback if tokenTransfers didn’t reveal it
   if (usdcIn === 0 && usdcOut === 0) {
     const fallback = readUsdcDeltaFromBalanceChanges(owner, tx);
     usdcIn = fallback.usdcIn;
@@ -307,8 +306,7 @@ export default function PlusSavingsAccountPage() {
             ? `&before=${encodeURIComponent(nextBefore)}`
             : "";
 
-        const url = `/api/savings/plus/activity?limit=25${cursor}`;
-
+        const url = `/api/savings/plus/activity?wallet=${encodeURIComponent(walletAddress)}&limit=25${cursor}`;
         const res = await fetch(url, {
           method: "GET",
           cache: "no-store",
@@ -374,7 +372,7 @@ export default function PlusSavingsAccountPage() {
   // ✅ parse + sort for rendering
   const activity = useMemo(() => {
     const owner = walletAddress;
-    const mapped: ParsedActivity[] = txs.map((tx) => {
+    const mapped: ActivityTx[] = txs.map((tx) => {
       const parsed = parsePlusEvent(owner, tx);
       return {
         ...tx,
@@ -391,7 +389,7 @@ export default function PlusSavingsAccountPage() {
 
   const hasMore = !exhausted;
 
-  // ✅ Better loading: wait for Plus to resolve so you don't flash $0.00
+  // ✅ Better loading: wait for Plus to resolve so you don’t flash $0.00
   const balancePending = userLoading || balanceLoading || !plusReady;
 
   const balanceDisplay = useMemo(() => {
@@ -520,7 +518,7 @@ export default function PlusSavingsAccountPage() {
                   const title = tx._title;
                   const subtitle = tx._subtitle;
                   const direction = tx._direction;
-                  const amountUsdc = tx._amountUsdc;
+                  const amountUsdc = Number(tx._amountUsdc || 0);
 
                   const icon =
                     direction === "in" ? (
