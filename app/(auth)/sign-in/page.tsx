@@ -729,14 +729,14 @@ export default function SignInPage() {
 
                   <div className="relative">
                     <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                      <IoMailSharp className="h-4 w-4" />
+                      <IoMailSharp className="h-4 w-4 text-black" />
                     </div>
                     <input
                       type="email"
                       placeholder="you@domain.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="haven-input pl-9"
+                      className="haven-input pl-9 text-black"
                     />
                   </div>
 
@@ -766,7 +766,7 @@ export default function SignInPage() {
                         placeholder="••••••"
                         value={code}
                         onChange={(e) => setCode(e.target.value)}
-                        className="haven-input tracking-[0.35em] text-center"
+                        className="haven-input text-black tracking-[0.35em] text-center"
                       />
 
                       <button
@@ -866,7 +866,7 @@ export default function SignInPage() {
                         value={referralCode}
                         onChange={(e) => setReferralCode(e.target.value)}
                         placeholder="Enter referral code"
-                        className="haven-input mt-2"
+                        className="haven-input mt-2 text-black"
                       />
 
                       <p className="mt-2 text-[11px] text-muted-foreground">

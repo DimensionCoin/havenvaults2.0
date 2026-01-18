@@ -223,7 +223,11 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   }, [account, plusUsdDisplay]);
 
   // ✅ BUTTON LABEL: ONLY PLUS BALANCE CONTROLS THIS
-  const depositCtaLabel = !plusReady ? "…" : hasPlusFunds ? "Deposit" : "Open Account";
+  const depositCtaLabel = !plusReady
+    ? "…"
+    : hasPlusFunds
+      ? "Deposit"
+      : "Open Account";
 
   // ----------------------------
   // CLOSED/EMPTY STATE (no funds)

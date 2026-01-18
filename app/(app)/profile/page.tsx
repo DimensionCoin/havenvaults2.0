@@ -19,6 +19,7 @@ import {
   MailPlus,
   MoonStar,
 } from "lucide-react";
+import HistoryChart from "@/components/dash/Chart";
 
 type ContactStatus = "invited" | "active" | "external";
 type Contact = {
@@ -436,8 +437,6 @@ const ProfilePage: React.FC = () => {
                 </p>
               </div>
             </div>
-
-           
           </div>
 
           {/* Content */}
@@ -590,13 +589,16 @@ const ProfilePage: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <MoonStar className="h-4 w-4 text-muted-foreground" />
                         <div className="shrink-0">
                           <ThemeToggle />
                         </div>
                       </div>
                     </div>
                   </div>
+                </div>
+
+                <div className="p-1">
+                  <HistoryChart />
                 </div>
 
                 {/* Wallet */}

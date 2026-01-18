@@ -61,7 +61,7 @@ function PillShell({
         "rounded-full border border-border",
         "bg-card/80 backdrop-blur-xl",
         "shadow-fintech-sm",
-        "px-1.5 py-1",
+        "px-3 py-1.5",
         className || "",
       ].join(" ")}
     >
@@ -307,11 +307,11 @@ const DashboardHeroCard: React.FC = () => {
 
   return (
     <section className="w-full">
-      <div className="relative overflow-hidden rounded-3xl border border-border bg-card pt-5 md:px-6 md:pt-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.45)]">
+      <div className="relative overflow-hidden  rounded-3xl border border-border bg-card pt-5 md:px-6 md:pt-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)] dark:shadow-[0_16px_48px_rgba(0,0,0,0.45)]">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-foreground/10 to-transparent dark:from-foreground/12" />
 
         {/* Header row */}
-        <div className="relative z-10 flex items-center justify-between gap-4 px-4 md:px-0">
+        <div className="relative z-10 flex items-center justify-between gap-4 px-4 md:px-0 ">
           <div className="flex items-center gap-3 md:gap-4">
             <Link
               href="/profile"
@@ -366,7 +366,7 @@ const DashboardHeroCard: React.FC = () => {
         </div>
 
         {/* Balance + 24h change */}
-        <div className="relative z-10 mt-5 flex items-end justify-between gap-4 px-4 md:px-0">
+        <div className="relative mb-4 z-10 mt-5 flex items-end justify-between gap-4 px-4 md:px-0">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.20em] text-muted-foreground">
               Total account balance
@@ -378,7 +378,7 @@ const DashboardHeroCard: React.FC = () => {
 
           <div
             className={[
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[10px] md:text-xs font-semibold border",
+              "inline-flex mb-4 items-center gap-1.5 rounded-full px-3 py-2 text-[10px] md:text-xs font-semibold border",
               isPositive
                 ? "bg-primary/10 text-foreground border-primary/20"
                 : "bg-destructive/10 text-foreground border-destructive/20",
@@ -398,10 +398,7 @@ const DashboardHeroCard: React.FC = () => {
           </div>
         </div>
 
-        {/* Chart block */}
-        <div className="relative z-10 mt-5 mb-0 md:mb-3 rounded-2xl border border-border bg-secondary px-3 pt-2 pb-2">
-          <HistoryChart />
-        </div>
+        
       </div>
     </section>
   );

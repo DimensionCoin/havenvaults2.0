@@ -284,9 +284,7 @@ const USDCAccountsCarousel: React.FC = () => {
 
   const slides: { key: SlideKey; label: string; index: number }[] = [
     { key: "deposit", label: "Deposit", index: 0 },
-    { key: "flex", label: "Flex", index: 1 },
-    { key: "plus", label: "Plus", index: 2 },
-    { key: "spending", label: "Spend", index: 3 },
+    { key: "plus", label: "Plus", index: 1 },
   ];
 
   const goPrev = () =>
@@ -329,12 +327,7 @@ const USDCAccountsCarousel: React.FC = () => {
   const handleTransferClick = (type: SlideKey) =>
     type === "flex" && setFlexDepositOpen(true);
 
-  // Spending card placeholder data
-  const spendingBalance = 0;
-  const spendingLast4 = "••••";
-  const spendingHolder = "Haven User";
-  const spendingExpires = "••/••";
-
+ 
   return (
     <>
       <DepositFlex
@@ -369,25 +362,7 @@ const USDCAccountsCarousel: React.FC = () => {
             })}
           </div>
 
-          {/* Prev / Next */}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={goPrev}
-              className="haven-icon-btn"
-              aria-label="Previous"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={goNext}
-              className="haven-icon-btn"
-              aria-label="Next"
-            >
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
+         
         </div>
 
         <div className="-mx-2 px-2 lg:-mx-3 lg:px-3">
@@ -423,19 +398,7 @@ const USDCAccountsCarousel: React.FC = () => {
               />
             </div>
 
-            <div
-              data-carousel-card
-              className="snap-center shrink-0 [scroll-snap-stop:always]"
-            >
-              <FlexSavingsAccountCard
-                account={flexAccount}
-                loading={loading}
-                displayCurrency={displayCurrency}
-                onDeposit={() => handleDepositClick("flex")}
-                onWithdraw={() => handleWithdrawClick("flex")}
-                onOpenAccount={() => handleOpenAccountClick("flex")}
-              />
-            </div>
+            
 
             <div
               data-carousel-card
@@ -449,32 +412,6 @@ const USDCAccountsCarousel: React.FC = () => {
                 onWithdraw={() => handleWithdrawClick("plus")}
                 onOpenAccount={() => handleOpenAccountClick("plus")}
               />
-            </div>
-
-            <div
-              data-carousel-card
-              className="snap-center shrink-0 [scroll-snap-stop:always]"
-            >
-              <div
-                data-carousel-card
-                className="snap-center shrink-0 [scroll-snap-stop:always]"
-              >
-                <DevEmailGate
-                  allowEmails={["nick.vassallo97@gmail.com", "test@yourdomain.com"]}
-                  title="Spending is temporarily restricted"
-                  message="We’re currently in approval/testing. This feature will be enabled for everyone soon."
-                >
-                  <SpendingAccountCard
-                    loading={loading}
-                    balance={spendingBalance}
-                    last4={spendingLast4}
-                    holderName={spendingHolder}
-                    expires={spendingExpires}
-                    onDeposit={() => handleDepositClick("spending")}
-                    onWithdraw={() => handleWithdrawClick("spending")}
-                  />
-                </DevEmailGate>
-              </div>
             </div>
           </div>
         </div>

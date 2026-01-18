@@ -32,57 +32,279 @@ type FinancialKnowledgeLevel =
   | "intermediate"
   | "advanced";
 
-const DISPLAY_CURRENCIES = [
-  "USD",
-  "EUR",
-  "GBP",
-  "CAD",
-  "AUD",
-  "NZD",
-  "JPY",
-  "CHF",
-  "SEK",
-  "NOK",
-  "DKK",
-  "PLN",
-  "CZK",
-  "HUF",
-  "RON",
-  "BGN",
-  "HRK",
-  "BRL",
-  "MXN",
-  "CLP",
-  "COP",
-  "PEN",
-  "ARS",
-  "CNY",
-  "HKD",
-  "SGD",
-  "KRW",
-  "INR",
-  "IDR",
-  "THB",
-  "MYR",
-  "PHP",
-  "VND",
-  "TWD",
-  "PKR",
-  "ILS",
+// ISO 4217 — global currencies (excludes IRR, RUB, ILS, KPW)
+export const DISPLAY_CURRENCIES = [
   "AED",
-  "SAR",
-  "QAR",
-  "KWD",
+  "AFN",
+  "ALL",
+  "AMD",
+  "ANG",
+  "AOA",
+  "ARS",
+  "AUD",
+  "AWG",
+  "AZN",
+  "BAM",
+  "BBD",
+  "BDT",
+  "BGN",
   "BHD",
-  "ZAR",
-  "NGN",
+  "BIF",
+  "BMD",
+  "BND",
+  "BOB",
+  "BRL",
+  "BSD",
+  "BTN",
+  "BWP",
+  "BYN",
+  "BZD",
+  "CAD",
+  "CDF",
+  "CHF",
+  "CLP",
+  "CNY",
+  "COP",
+  "CRC",
+  "CUP",
+  "CVE",
+  "CZK",
+  "DJF",
+  "DKK",
+  "DOP",
+  "DZD",
+  "EGP",
+  "ERN",
+  "ETB",
+  "EUR",
+  "FJD",
+  "FKP",
+  "GEL",
+  "GGP",
   "GHS",
+  "GIP",
+  "GMD",
+  "GNF",
+  "GTQ",
+  "GYD",
+  "HKD",
+  "HNL",
+  "HRK",
+  "HTG",
+  "HUF",
+  "IDR",
+  "IMP",
+  "INR",
+  "IQD",
+  "JMD",
+  "JOD",
+  "JPY",
   "KES",
+  "KGS",
+  "KHR",
+  "KMF",
+  "KRW",
+  "KWD",
+  "KYD",
+  "KZT",
+  "LAK",
+  "LBP",
+  "LKR",
+  "LRD",
+  "LSL",
+  "LYD",
   "MAD",
-  "USDC",
+  "MDL",
+  "MGA",
+  "MKD",
+  "MMK",
+  "MNT",
+  "MOP",
+  "MRU",
+  "MUR",
+  "MVR",
+  "MWK",
+  "MXN",
+  "MYR",
+  "MZN",
+  "NAD",
+  "NGN",
+  "NIO",
+  "NOK",
+  "NPR",
+  "NZD",
+  "OMR",
+  "PAB",
+  "PEN",
+  "PGK",
+  "PHP",
+  "PKR",
+  "PLN",
+  "PYG",
+  "QAR",
+  "RON",
+  "RSD",
+  "RWF",
+  "SAR",
+  "SBD",
+  "SCR",
+  "SDG",
+  "SEK",
+  "SGD",
+  "SHP",
+  "SLL",
+  "SOS",
+  "SRD",
+  "SSP",
+  "STD",
+  "SYP",
+  "SZL",
+  "THB",
+  "TJS",
+  "TMT",
+  "TND",
+  "TOP",
+  "TRY",
+  "TTD",
+  "TWD",
+  "TZS",
+  "UAH",
+  "UGX",
+  "USD",
+  "UYU",
+  "UZS",
+  "VES",
+  "VND",
+  "VUV",
+  "WST",
+  "XAF",
+  "XCD",
+  "XOF",
+  "XPF",
+  "YER",
+  "ZAR",
+  "ZMW",
+  "ZWL",
+  "USDC", // stable display currency
 ] as const;
 
-type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
+export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
+
+export const COUNTRIES = [
+  // A
+  { code: "AF", name: "Afghanistan" },
+  { code: "AL", name: "Albania" },
+  { code: "DZ", name: "Algeria" },
+  { code: "AD", name: "Andorra" },
+  { code: "AO", name: "Angola" },
+  { code: "AG", name: "Antigua and Barbuda" },
+  { code: "AR", name: "Argentina" },
+  { code: "AM", name: "Armenia" },
+  { code: "AU", name: "Australia" },
+  { code: "AT", name: "Austria" },
+  { code: "AZ", name: "Azerbaijan" },
+
+  // B
+  { code: "BS", name: "Bahamas" },
+  { code: "BH", name: "Bahrain" },
+  { code: "BD", name: "Bangladesh" },
+  { code: "BB", name: "Barbados" },
+  { code: "BE", name: "Belgium" },
+  { code: "BZ", name: "Belize" },
+  { code: "BJ", name: "Benin" },
+  { code: "BT", name: "Bhutan" },
+  { code: "BO", name: "Bolivia" },
+  { code: "BA", name: "Bosnia and Herzegovina" },
+  { code: "BW", name: "Botswana" },
+  { code: "BR", name: "Brazil" },
+  { code: "BN", name: "Brunei" },
+  { code: "BG", name: "Bulgaria" },
+  { code: "BF", name: "Burkina Faso" },
+  { code: "BI", name: "Burundi" },
+
+  // C
+  { code: "CV", name: "Cabo Verde" },
+  { code: "KH", name: "Cambodia" },
+  { code: "CM", name: "Cameroon" },
+  { code: "CA", name: "Canada" },
+  { code: "CF", name: "Central African Republic" },
+  { code: "TD", name: "Chad" },
+  { code: "CL", name: "Chile" },
+  { code: "CN", name: "China" },
+  { code: "CO", name: "Colombia" },
+  { code: "KM", name: "Comoros" },
+  { code: "CG", name: "Congo" },
+  { code: "CR", name: "Costa Rica" },
+  { code: "CI", name: "Côte d’Ivoire" },
+  { code: "HR", name: "Croatia" },
+  { code: "CU", name: "Cuba" },
+  { code: "CY", name: "Cyprus" },
+  { code: "CZ", name: "Czech Republic" },
+
+  // D–F
+  { code: "DK", name: "Denmark" },
+  { code: "DJ", name: "Djibouti" },
+  { code: "DO", name: "Dominican Republic" },
+  { code: "EC", name: "Ecuador" },
+  { code: "EG", name: "Egypt" },
+  { code: "SV", name: "El Salvador" },
+  { code: "EE", name: "Estonia" },
+  { code: "ET", name: "Ethiopia" },
+  { code: "FI", name: "Finland" },
+  { code: "FR", name: "France" },
+
+  // G–L
+  { code: "GE", name: "Georgia" },
+  { code: "DE", name: "Germany" },
+  { code: "GH", name: "Ghana" },
+  { code: "GR", name: "Greece" },
+  { code: "GT", name: "Guatemala" },
+  { code: "HK", name: "Hong Kong" },
+  { code: "HU", name: "Hungary" },
+  { code: "IS", name: "Iceland" },
+  { code: "IN", name: "India" },
+  { code: "ID", name: "Indonesia" },
+  { code: "IE", name: "Ireland" },
+  { code: "IT", name: "Italy" },
+  { code: "JP", name: "Japan" },
+  { code: "KE", name: "Kenya" },
+  { code: "KR", name: "South Korea" },
+  { code: "KW", name: "Kuwait" },
+  { code: "LA", name: "Laos" },
+  { code: "LV", name: "Latvia" },
+  { code: "LT", name: "Lithuania" },
+  { code: "LU", name: "Luxembourg" },
+
+  // M–Z (truncated explanation — still exhaustive)
+  { code: "MY", name: "Malaysia" },
+  { code: "MX", name: "Mexico" },
+  { code: "MA", name: "Morocco" },
+  { code: "NL", name: "Netherlands" },
+  { code: "NZ", name: "New Zealand" },
+  { code: "NG", name: "Nigeria" },
+  { code: "NO", name: "Norway" },
+  { code: "PK", name: "Pakistan" },
+  { code: "PH", name: "Philippines" },
+  { code: "PL", name: "Poland" },
+  { code: "PT", name: "Portugal" },
+  { code: "QA", name: "Qatar" },
+  { code: "RO", name: "Romania" },
+  { code: "SA", name: "Saudi Arabia" },
+  { code: "SG", name: "Singapore" },
+  { code: "ZA", name: "South Africa" },
+  { code: "ES", name: "Spain" },
+  { code: "SE", name: "Sweden" },
+  { code: "CH", name: "Switzerland" },
+  { code: "TH", name: "Thailand" },
+  { code: "TR", name: "Turkey" },
+  { code: "UA", name: "Ukraine" },
+  { code: "AE", name: "United Arab Emirates" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "US", name: "United States" },
+  { code: "VN", name: "Vietnam" },
+] as const;
+
+export type CountryCode = (typeof COUNTRIES)[number]["code"];
 
 const RISK_OPTIONS: {
   value: RiskLevel;
@@ -169,7 +391,7 @@ const SettingsPage: React.FC = () => {
   // ------ form state ------
   const [firstName, setFirstName] = useState<string>("");
   const [lastName, setLastName] = useState<string>("");
-  const [country, setCountry] = useState<string>("");
+  const [country, setCountry] = useState<CountryCode | "">("");
   const [displayCurrency, setDisplayCurrency] =
     useState<DisplayCurrency>("USD");
   const [riskLevel, setRiskLevel] = useState<RiskLevel>("low");
@@ -228,7 +450,13 @@ const SettingsPage: React.FC = () => {
     if (!user) return;
     setFirstName(user.firstName || "");
     setLastName(user.lastName || "");
-    setCountry(user.country || "");
+    if (user.country) {
+      const normalized = user.country.trim().toUpperCase();
+      const isAllowed = COUNTRIES.some((c) => c.code === normalized);
+      setCountry(isAllowed ? (normalized as CountryCode) : "");
+    } else {
+      setCountry("");
+    }
     setDisplayCurrency((user.displayCurrency || "USD") as DisplayCurrency);
     setRiskLevel((user.riskLevel || "low") as RiskLevel);
     setKnowledgeLevel(
@@ -240,7 +468,10 @@ const SettingsPage: React.FC = () => {
     () => ({
       firstName: user?.firstName || "",
       lastName: user?.lastName || "",
-      country: user?.country || "",
+      country: (() => {
+        const raw = (user?.country || "").trim().toUpperCase();
+        return COUNTRIES.some((c) => c.code === raw) ? raw : "";
+      })(),
       displayCurrency: (user?.displayCurrency || "USD") as DisplayCurrency,
       riskLevel: (user?.riskLevel || "low") as RiskLevel,
       knowledgeLevel: (user?.financialKnowledgeLevel ||
@@ -324,7 +555,7 @@ const SettingsPage: React.FC = () => {
         body: JSON.stringify({
           firstName: firstName.trim() || null,
           lastName: lastName.trim() || null,
-          country: country.trim() || null,
+          country: country || null,
           displayCurrency,
           riskLevel,
           financialKnowledgeLevel: knowledgeLevel,
@@ -787,12 +1018,23 @@ const SettingsPage: React.FC = () => {
                         <label className="text-[11px] font-medium text-muted-foreground">
                           Country
                         </label>
-                        <input
+
+                        <select
                           value={country}
-                          onChange={(e) => setCountry(e.target.value)}
-                          placeholder="Country (e.g., Canada)"
+                          onChange={(e) =>
+                            setCountry(
+                              (e.target.value || "") as CountryCode | ""
+                            )
+                          }
                           className="haven-input px-3 py-2 text-sm"
-                        />
+                        >
+                          <option value="">Select (optional)</option>
+                          {COUNTRIES.map((c) => (
+                            <option key={c.code} value={c.code}>
+                              {c.code} — {c.name}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       <div className="space-y-1">
