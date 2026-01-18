@@ -8,7 +8,7 @@ const networkEnv = process.env.NEXT_PUBLIC_SOLANA_NETWORK;
 if (!rpcUrl) {
   // On the client this will just be ignored, but on the server it helps catch misconfig early
   console.warn(
-    "[solanaConfig] Missing NEXT_PUBLIC_SOLANA_RPC_URL. Falling back to devnet."
+    "[solanaConfig] Missing NEXT_PUBLIC_SOLANA_RPC_URL. Falling back to devnet.",
   );
 }
 
@@ -20,5 +20,5 @@ export const SOLANA_NETWORK: SolanaNetwork =
   (SOLANA_RPC_URL.includes("devnet")
     ? "devnet"
     : SOLANA_RPC_URL.includes("mainnet")
-    ? "mainnet"
-    : "other");
+      ? "mainnet"
+      : "other");

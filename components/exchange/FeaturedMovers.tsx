@@ -1,112 +1,121 @@
+// components/exchange/FeaturedMovers.tsx
 "use client";
 
-import React, { useMemo } from "react";
+import React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { TrendingUp, TrendingDown } from "lucide-react";
-import type { Token, PriceEntry } from "./types";
-import {
-  TOKENS,
-  getCluster,
-  getMintFor,
-  type TokenMeta,
-} from "@/lib/tokenConfig";
+import type { AssetRow, Movers } from "./types";
 
-const CLUSTER = getCluster();
+type Props = {
+  title?: string; // optional, but we’ll keep the “two sections” look
+  movers: Movers;
+  className?: string;
 
-const MINT_TO_META: Record<string, TokenMeta> = (() => {
-  const map: Record<string, TokenMeta> = {};
-  TOKENS.forEach((meta: TokenMeta) => {
-    const mint = getMintFor(meta, CLUSTER);
-    if (!mint) return;
-    map[mint] = meta;
-  });
-  return map;
-})();
+  /** how many to show per side */
+  limit?: number;
 
-const getTokenSlug = (token: Token) => {
-  const meta = MINT_TO_META[token.mint];
-  if (meta?.id) return meta.id.toLowerCase();
-  if (meta?.symbol) return meta.symbol.toLowerCase();
-  return (token.symbol || token.mint).toLowerCase();
-};
+  /** optional override for where to link */
+  hrefFor?: (asset: AssetRow) => string;
 
-// "$" only, no "CA$"
-const formatMoneyNoCode = (v?: number | null) => {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    currencyDisplay: "narrowSymbol",
-    maximumFractionDigits: n < 1 ? 6 : 2,
-  });
-};
+  /** optional click handler (analytics, etc.) */
+  onAssetClick?: (asset: AssetRow) => void;
 
-const formatChange = (value: number | null | undefined): string => {
-  if (value === null || value === undefined || !Number.isFinite(value))
-    return "—";
-  const sign = value >= 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
-};
-
-type FeaturedMoversProps = {
-  tokens: Token[];
-  prices: Record<string, PriceEntry>;
-  displayCurrency: string;
-  fxRate: number;
+  /** show skeleton look while loading */
   loading?: boolean;
 };
 
-const MoverCard: React.FC<{
-  token: Token;
-  price?: PriceEntry;
-  fxRate: number;
-  type: "gainer" | "loser";
-}> = ({ token, price, fxRate, type }) => {
-  const slug = getTokenSlug(token);
-  const priceDisplay = price?.price ? price.price * fxRate : null;
-  const change = price?.priceChange24hPct ?? null;
+function fmtUsd(n?: number) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  return `$${n.toFixed(6)}`;
+}
 
+function fmtChange(n?: number) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  const sign = n >= 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}%`;
+}
+
+const defaultHrefFor = (a: AssetRow) => `/invest/${encodeURIComponent(a.mint)}`;
+
+const SectionHeader = ({
+  icon,
+  title,
+  right,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  right?: string;
+}) => (
+  <div className="mb-2 flex items-center justify-between">
+    <span className="haven-pill">
+      {icon}
+      <span className="ml-1">{title}</span>
+    </span>
+    <span className="text-[11px] text-muted-foreground">{right}</span>
+  </div>
+);
+
+function MoverCard({
+  asset,
+  type,
+  href,
+  onClick,
+}: {
+  asset: AssetRow;
+  type: "gainer" | "loser";
+  href: string;
+  onClick?: () => void;
+}) {
   const isGainer = type === "gainer";
+  const change = asset.changePct24h;
 
   return (
     <Link
-      href={`/invest/${slug}`}
+      href={href}
+      onClick={onClick}
       className={[
         "group relative flex min-w-[178px] flex-col overflow-hidden",
         "rounded-3xl border border-border",
         "bg-card/80 backdrop-blur-xl",
-        "shadow-fintech-md",
         "transition active:scale-[0.985]",
         "hover:bg-card",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       ].join(" ")}
     >
-      {/* subtle top wash (token-based, light/dark safe) */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-primary/10 to-transparent" />
+      {/* subtle top wash */}
+      <div
+        className={[
+          "pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b to-transparent",
+          isGainer ? "from-primary/12" : "from-destructive/10",
+        ].join(" ")}
+      />
 
       <div className="relative p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-border bg-background/60">
-            {token.logoURI ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={token.logoURI}
-                alt={token.name || token.symbol || "Token"}
-                className="h-full w-full object-cover"
+          <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-border bg-background/60">
+            {asset.logoURI ? (
+              <Image
+                src={asset.logoURI}
+                alt={asset.name || asset.symbol || "Asset"}
+                fill
+                sizes="40px"
+                className="object-cover"
               />
             ) : (
               <span className="text-[11px] font-semibold tracking-wide text-muted-foreground">
-                {(token.symbol || "?").slice(0, 2).toUpperCase()}
+                {(asset.symbol || "?").slice(0, 2).toUpperCase()}
               </span>
             )}
           </div>
 
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-foreground">
-              {token.symbol || "—"}
+              {asset.symbol || "—"}
             </div>
             <div className="truncate text-[11px] text-muted-foreground">
-              {token.name || ""}
+              {asset.name || ""}
             </div>
           </div>
         </div>
@@ -114,7 +123,7 @@ const MoverCard: React.FC<{
         <div className="mt-3 flex items-end justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[13px] font-semibold text-foreground">
-              {priceDisplay === null ? "—" : formatMoneyNoCode(priceDisplay)}
+              {fmtUsd(asset.priceUsd)}
             </div>
             <div className="mt-1 text-[11px] text-muted-foreground">Price</div>
           </div>
@@ -133,87 +142,68 @@ const MoverCard: React.FC<{
             ) : (
               <TrendingDown className="h-3 w-3" />
             )}
-            {formatChange(change)}
+            {fmtChange(change)}
           </span>
         </div>
       </div>
     </Link>
   );
-};
+}
 
-const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
-  tokens,
-  prices,
-  fxRate,
+export default function FeaturedMovers({
+  movers,
+  className,
+  limit = 5,
+  hrefFor,
+  onAssetClick,
   loading = false,
-}) => {
-  const { gainers, losers } = useMemo(() => {
-    const withPrices = tokens
-      .map((t) => ({
-        token: t,
-        price: prices[t.mint],
-        change: prices[t.mint]?.priceChange24hPct ?? null,
-      }))
-      .filter((x) => x.change !== null && Number.isFinite(x.change));
+}: Props) {
+  const gainers = movers.gainers.slice(0, limit);
+  const losers = movers.losers.slice(0, limit);
 
-    const sorted = [...withPrices].sort(
-      (a, b) => (b.change as number) - (a.change as number)
-    );
+ if (loading) {
+   return (
+     <div className={["space-y-6", className ?? ""].join(" ")}>
+       <div>
+         <div className="mb-2 flex items-center justify-between">
+           <div className="h-5 w-28 animate-pulse rounded-full bg-border/60" />
+           <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
+         </div>
+         <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+           {Array.from({ length: limit }).map((_, i) => (
+             <div
+               key={i}
+               className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
+             />
+           ))}
+         </div>
+       </div>
 
-    return {
-      gainers: sorted.filter((x) => (x.change as number) > 0).slice(0, 3),
-      losers: sorted
-        .filter((x) => (x.change as number) < 0)
-        .slice(-3)
-        .reverse(),
-    };
-  }, [tokens, prices]);
+       <div>
+         <div className="mb-2 flex items-center justify-between">
+           <div className="h-5 w-24 animate-pulse rounded-full bg-border/60" />
+           <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
+         </div>
+         <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+           {Array.from({ length: limit }).map((_, i) => (
+             <div
+               key={i}
+               className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
+             />
+           ))}
+         </div>
+       </div>
+     </div>
+   );
+ }
 
-  if (loading) {
-    return (
-      <div className="space-y-5">
-        {/* Header skeleton */}
-        <div className="flex items-center justify-between">
-          <div className="h-3 w-28 animate-pulse rounded bg-border/60" />
-          <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
-        </div>
-
-        {/* Cards skeleton */}
-        <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
-            />
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   if (gainers.length === 0 && losers.length === 0) return null;
 
-  const SectionHeader = ({
-    icon,
-    title,
-    right,
-  }: {
-    icon: React.ReactNode;
-    title: string;
-    right?: string;
-  }) => (
-    <div className="mb-2 flex items-center justify-between">
-      <span className="haven-pill">
-        {icon}
-        <span className="ml-1">{title}</span>
-      </span>
-      <span className="text-[11px] text-muted-foreground">{right}</span>
-    </div>
-  );
+  const toHref = hrefFor ?? defaultHrefFor;
 
   return (
-    <div className="space-y-6">
-      {/* Top Gainers */}
+    <div className={["space-y-6", className ?? ""].join(" ")}>
       {gainers.length > 0 && (
         <div>
           <SectionHeader
@@ -223,20 +213,19 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
           />
 
           <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
-            {gainers.map(({ token, price }) => (
+            {gainers.map((a) => (
               <MoverCard
-                key={token.mint}
-                token={token}
-                price={price}
-                fxRate={fxRate}
+                key={`g:${a.mint}`}
+                asset={a}
                 type="gainer"
+                href={toHref(a)}
+                onClick={() => onAssetClick?.(a)}
               />
             ))}
           </div>
         </div>
       )}
 
-      {/* Top Losers */}
       {losers.length > 0 && (
         <div>
           <SectionHeader
@@ -246,13 +235,13 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
           />
 
           <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
-            {losers.map(({ token, price }) => (
+            {losers.map((a) => (
               <MoverCard
-                key={token.mint}
-                token={token}
-                price={price}
-                fxRate={fxRate}
+                key={`l:${a.mint}`}
+                asset={a}
                 type="loser"
+                href={toHref(a)}
+                onClick={() => onAssetClick?.(a)}
               />
             ))}
           </div>
@@ -260,6 +249,4 @@ const FeaturedMovers: React.FC<FeaturedMoversProps> = ({
       )}
     </div>
   );
-};
-
-export default FeaturedMovers;
+}

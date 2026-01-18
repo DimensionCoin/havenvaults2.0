@@ -54,13 +54,7 @@ export const CRYPTO_FLAT_FEE_USDC_UI: number = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 0.2;
 })();
 
-/* ------------------------------- Catalog ------------------------------- */
-/**
- * No stablecoins here.
- * If you still need USDC internally for swaps/fees, keep it in a separate INTERNAL_TOKENS constant.
- */
-
-export const TOKENS: TokenMeta[] = [
+export const CRYPTO_TOKENS: TokenMeta[] = [
   // ---------------- Top MC (Crypto + tokenized assets)
   {
     name: "Solana",
@@ -118,282 +112,6 @@ export const TOKENS: TokenMeta[] = [
     mints: { mainnet: "CrAr4RRJMBVwRsZtT62pEhfA9H5utymC2mVx8e7FreP2" },
   },
 
-  // ---------------- Stocks (tokenized)
-  {
-    name: "S&P500",
-    symbol: "SPY",
-    id: "sp500-xstock",
-    logo: "/logos/spx.webp",
-    kind: "stock",
-    categories: ["Stocks", "Top MC"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" },
-  },
-  {
-    name: "Tesla",
-    symbol: "TSLA",
-    id: "tesla-xstock",
-    logo: "/logos/tsla.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["EV"],
-    decimals: 8,
-    mints: { mainnet: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
-  },
-  {
-    name: "Nvidia",
-    symbol: "NVDA",
-    id: "nvidia-xstock",
-    logo: "/logos/nvda.webp",
-    kind: "stock",
-    categories: ["Stocks", "Top MC"],
-    tags: ["AI"],
-    decimals: 8,
-    mints: { mainnet: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
-  },
-  {
-    name: "NasDaq",
-    symbol: "QQQ",
-    id: "nasdaq-xstock",
-    logo: "/logos/qqq.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index", "Tech"],
-    decimals: 8,
-    mints: { mainnet: "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ" },
-  },
-  {
-    name: "Exxon Mobil",
-    symbol: "XOM",
-    id: "exxon-mobil-xstock",
-    logo: "/logos/exxon.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index", "Tech"],
-    decimals: 8,
-    mints: { mainnet: "XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh" },
-  },
-  {
-    name: "Apple",
-    symbol: "AAPL",
-    id: "apple-xstock",
-    logo: "/logos/aapl.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Big Tech"],
-    decimals: 8,
-    mints: { mainnet: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp" },
-  },
-  {
-    name: "Alphabet",
-    symbol: "GOOGL",
-    id: "alphabet-xstock",
-    logo: "/logos/google.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Big Tech"],
-    decimals: 8,
-    mints: { mainnet: "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN" },
-  },
-  {
-    name: "Meta",
-    symbol: "META",
-    id: "meta-xstock",
-    logo: "/logos/meta.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Big Tech"],
-    decimals: 8,
-    mints: { mainnet: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
-  },
-  {
-    name: "Gold",
-    symbol: "GLDX",
-    id: "gold-xstock",
-    logo: "/logos/gld.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Commodity"],
-    decimals: 8,
-    mints: { mainnet: "Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re" },
-  },
-  {
-    name: "Coinbase",
-    symbol: "COIN",
-    id: "coinbase-xstock",
-    logo: "/logos/coin.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Exchange"],
-    decimals: 8,
-    mints: { mainnet: "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu" },
-  },
-  {
-    name: "Robinhood",
-    symbol: "HOOD",
-    id: "robinhood-xstock",
-    logo: "/logos/hood.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Broker"],
-    decimals: 8,
-    mints: { mainnet: "XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg" },
-  },
-  {
-    name: "Amazon",
-    symbol: "AMZN",
-    id: "amazon-xstock",
-    logo: "/logos/amzn.webp",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["E-Commerce"],
-    decimals: 8,
-    mints: { mainnet: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg" },
-  },
-  {
-    name: "Procter & Gamble",
-    symbol: "PG",
-    id: "procter-gamble-xstock",
-    logo: "/logos/pg.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV" },
-  },
-  {
-    name: "Johnson & Johnson",
-    symbol: "JNJ",
-    id: "johnson-johnson-xstock",
-    logo: "/logos/jnj.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsGVi5eo1Dh2zUpic4qACcjuWGjNv8GCt3dm5XcX6Dn" },
-  },
-  {
-    name: "Walmart",
-    symbol: "WMT",
-    id: "walmart-xstock",
-    logo: "/logos/wmt.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci" },
-  },
-  {
-    name: "UnitedHealth",
-    symbol: "UNH",
-    id: "unitedhealth-xstock",
-    logo: "/logos/unh.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe" },
-  },
-  {
-    name: "Berkshire Hathaway",
-    symbol: "BRK.B",
-    id: "berkshire-hathaway-xstock",
-    logo: "/logos/brk.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "Xs6B6zawENwAbWVi7w92rjazLuAr5Az59qgWKcNb45x" },
-  },
-  {
-    name: "Oracle",
-    symbol: "ORCL",
-    id: "oracle-xstock",
-    logo: "/logos/orcl.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL" },
-  },
-  {
-    name: "McDonald's",
-    symbol: "MCD",
-    id: "mcdonald-s-xstock",
-    logo: "/logos/mcd.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsqE9cRRpzxcGKDXj1BJ7Xmg4GRhZoyY1KpmGSxAWT2" },
-  },
-  {
-    name: "Microsoft",
-    symbol: "MSFT",
-    id: "microsoft-xstock",
-    logo: "/logos/mfst.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX" },
-  },
-  {
-    name: "Visa",
-    symbol: "VX",
-    id: "visa-xstock",
-    logo: "/logos/vx.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p" },
-  },
-  {
-    name: "SpaceX",
-    symbol: "SPACEX",
-    id: "spacex-prestocks-2",
-    logo: "/logos/spacex.png",
-    kind: "stock",
-    categories: ["PreMarket", "Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh" },
-  },
-  {
-    name: "Anthropic",
-    symbol: "ANTHROPIC",
-    id: "anthropic-prestocks-2",
-    logo: "/logos/anthropic.png",
-    kind: "stock",
-    categories: ["PreMarket", "Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw" },
-  },
-  {
-    name: "xAI",
-    symbol: "XAI",
-    id: "xai-prestocks-2",
-    logo: "/logos/xai.png",
-    kind: "stock",
-    categories: ["PreMarket", "Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "PreC1KtJ1sBPPqaeeqL6Qb15GTLCYVvyYEwxhdfTwfx" },
-  },
-  {
-    name: "OpenAI",
-    symbol: "OPENAI",
-    id: "openai-prestocks-2",
-    logo: "/logos/openai.png",
-    kind: "stock",
-    categories: ["PreMarket", "Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF" },
-  },
   // ---------------- DeFi / Infra / DePin / Memes / LSTs
   {
     name: "Raydium",
@@ -735,11 +453,295 @@ export const TOKENS: TokenMeta[] = [
   },
 ];
 
+export const STOCK_TOKENS: TokenMeta[] = [
+  // ---------------- Stocks (tokenized)
+  {
+    name: "S&P500",
+    symbol: "SPY",
+    id: "sp500-xstock",
+    logo: "/logos/spx.webp",
+    kind: "stock",
+    categories: ["Stocks", "Top MC"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" },
+  },
+  {
+    name: "Tesla",
+    symbol: "TSLA",
+    id: "tesla-xstock",
+    logo: "/logos/tsla.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["EV"],
+    decimals: 8,
+    mints: { mainnet: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
+  },
+  {
+    name: "Nvidia",
+    symbol: "NVDA",
+    id: "nvidia-xstock",
+    logo: "/logos/nvda.webp",
+    kind: "stock",
+    categories: ["Stocks", "Top MC"],
+    tags: ["AI"],
+    decimals: 8,
+    mints: { mainnet: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
+  },
+  {
+    name: "NasDaq",
+    symbol: "QQQ",
+    id: "nasdaq-xstock",
+    logo: "/logos/qqq.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index", "Tech"],
+    decimals: 8,
+    mints: { mainnet: "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ" },
+  },
+  {
+    name: "Exxon Mobil",
+    symbol: "XOM",
+    id: "exxon-mobil-xstock",
+    logo: "/logos/exxon.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index", "Tech"],
+    decimals: 8,
+    mints: { mainnet: "XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh" },
+  },
+  {
+    name: "Apple",
+    symbol: "AAPL",
+    id: "apple-xstock",
+    logo: "/logos/aapl.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Big Tech"],
+    decimals: 8,
+    mints: { mainnet: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp" },
+  },
+  {
+    name: "Alphabet",
+    symbol: "GOOGL",
+    id: "alphabet-xstock",
+    logo: "/logos/google.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Big Tech"],
+    decimals: 8,
+    mints: { mainnet: "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN" },
+  },
+  {
+    name: "Meta",
+    symbol: "META",
+    id: "meta-xstock",
+    logo: "/logos/meta.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Big Tech"],
+    decimals: 8,
+    mints: { mainnet: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
+  },
+  {
+    name: "Gold",
+    symbol: "GLDX",
+    id: "gold-xstock",
+    logo: "/logos/gld.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Commodity"],
+    decimals: 8,
+    mints: { mainnet: "Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re" },
+  },
+  {
+    name: "Coinbase",
+    symbol: "COIN",
+    id: "coinbase-xstock",
+    logo: "/logos/coin.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Exchange"],
+    decimals: 8,
+    mints: { mainnet: "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu" },
+  },
+  {
+    name: "Robinhood",
+    symbol: "HOOD",
+    id: "robinhood-xstock",
+    logo: "/logos/hood.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Broker"],
+    decimals: 8,
+    mints: { mainnet: "XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg" },
+  },
+  {
+    name: "Amazon",
+    symbol: "AMZN",
+    id: "amazon-xstock",
+    logo: "/logos/amzn.webp",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["E-Commerce"],
+    decimals: 8,
+    mints: { mainnet: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg" },
+  },
+  {
+    name: "Procter & Gamble",
+    symbol: "PG",
+    id: "procter-gamble-xstock",
+    logo: "/logos/pg.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV" },
+  },
+  {
+    name: "Johnson & Johnson",
+    symbol: "JNJ",
+    id: "johnson-johnson-xstock",
+    logo: "/logos/jnj.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsGVi5eo1Dh2zUpic4qACcjuWGjNv8GCt3dm5XcX6Dn" },
+  },
+  {
+    name: "Walmart",
+    symbol: "WMT",
+    id: "walmart-xstock",
+    logo: "/logos/wmt.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci" },
+  },
+  {
+    name: "UnitedHealth",
+    symbol: "UNH",
+    id: "unitedhealth-xstock",
+    logo: "/logos/unh.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe" },
+  },
+  {
+    name: "Berkshire Hathaway",
+    symbol: "BRK.B",
+    id: "berkshire-hathaway-xstock",
+    logo: "/logos/brk.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "Xs6B6zawENwAbWVi7w92rjazLuAr5Az59qgWKcNb45x" },
+  },
+  {
+    name: "Oracle",
+    symbol: "ORCL",
+    id: "oracle-xstock",
+    logo: "/logos/orcl.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL" },
+  },
+  {
+    name: "McDonald's",
+    symbol: "MCD",
+    id: "mcdonald-s-xstock",
+    logo: "/logos/mcd.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsqE9cRRpzxcGKDXj1BJ7Xmg4GRhZoyY1KpmGSxAWT2" },
+  },
+  {
+    name: "Microsoft",
+    symbol: "MSFT",
+    id: "microsoft-xstock",
+    logo: "/logos/mfst.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX" },
+  },
+  {
+    name: "Visa",
+    symbol: "VX",
+    id: "visa-xstock",
+    logo: "/logos/vx.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p" },
+  },
+
+  // ---------------- PreMarket (tokenized)
+  {
+    name: "SpaceX",
+    symbol: "SPACEX",
+    id: "spacex-prestocks-2",
+    logo: "/logos/spacex.png",
+    kind: "stock",
+    categories: ["PreMarket", "Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh" },
+  },
+  {
+    name: "Anthropic",
+    symbol: "ANTHROPIC",
+    id: "anthropic-prestocks-2",
+    logo: "/logos/anthropic.png",
+    kind: "stock",
+    categories: ["PreMarket", "Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw" },
+  },
+  {
+    name: "xAI",
+    symbol: "XAI",
+    id: "xai-prestocks-2",
+    logo: "/logos/xai.png",
+    kind: "stock",
+    categories: ["PreMarket", "Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "PreC1KtJ1sBPPqaeeqL6Qb15GTLCYVvyYEwxhdfTwfx" },
+  },
+  {
+    name: "OpenAI",
+    symbol: "OPENAI",
+    id: "openai-prestocks-2",
+    logo: "/logos/openai.png",
+    kind: "stock",
+    categories: ["PreMarket", "Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF" },
+  },
+];
+
+// Backwards compatible: existing code can keep importing TOKENS
+export const TOKENS: TokenMeta[] = [...STOCK_TOKENS, ...CRYPTO_TOKENS];
+
 /* ------------------------------- Finders -------------------------------- */
 
 export function getMintFor(
   token: Pick<TokenMeta, "mints">,
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): string | null {
   return token.mints[cluster] ?? null;
 }
@@ -755,7 +757,7 @@ export function findTokenBySymbol(symbol: string): TokenMeta | undefined {
 
 export function findTokenByMint(
   mint: string,
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): TokenMeta | undefined {
   const m = mint.trim();
   return TOKENS.find((t) => t.mints[cluster] === m);
@@ -763,14 +765,14 @@ export function findTokenByMint(
 
 export function requireMintBySymbol(
   symbol: string,
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): string {
   const t = findTokenBySymbol(symbol);
   if (!t) throw new Error(`Unknown token symbol: ${symbol}`);
   const mint = t.mints[cluster];
   if (!mint)
     throw new Error(
-      `Token ${symbol} is not enabled on ${cluster}. Add its mint in TOKENS[].mints.${cluster}.`
+      `Token ${symbol} is not enabled on ${cluster}. Add its mint in TOKENS[].mints.${cluster}.`,
     );
   return mint;
 }
@@ -779,17 +781,17 @@ export function requireMintBySymbol(
 
 export function tokensByCategory(
   category: TokenCategory,
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): TokenMeta[] {
   return TOKENS.filter(
-    (t) => !!t.mints[cluster] && t.categories.includes(category)
+    (t) => !!t.mints[cluster] && t.categories.includes(category),
   );
 }
 
 export function tokensByCategories(
   categories: TokenCategory[],
   mode: "any" | "all" = "any",
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): TokenMeta[] {
   const wanted = new Set(categories);
   return TOKENS.filter((t) => {
@@ -807,11 +809,25 @@ export function tokensByCategories(
 
 export function tokensByTag(
   tag: string,
-  cluster: Cluster = getCluster()
+  cluster: Cluster = getCluster(),
 ): TokenMeta[] {
   const q = tag.trim().toLowerCase();
   return TOKENS.filter(
     (t) =>
-      !!t.mints[cluster] && (t.tags ?? []).some((x) => x.toLowerCase() === q)
+      !!t.mints[cluster] && (t.tags ?? []).some((x) => x.toLowerCase() === q),
   );
+}
+
+/* ------------------------- Optional convenience ------------------------- */
+// If you want direct list getters without categories logic:
+export function stockTokensForCluster(
+  cluster: Cluster = getCluster(),
+): TokenMeta[] {
+  return STOCK_TOKENS.filter((t) => !!t.mints[cluster]);
+}
+
+export function cryptoTokensForCluster(
+  cluster: Cluster = getCluster(),
+): TokenMeta[] {
+  return CRYPTO_TOKENS.filter((t) => !!t.mints[cluster]);
 }

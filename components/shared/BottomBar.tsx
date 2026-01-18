@@ -5,11 +5,11 @@ import React from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { LineChart, Zap, ArrowDownUp, Layers } from "lucide-react";
+import { ChartCandlestick, Zap, Layers, Bitcoin } from "lucide-react";
 
 const navItems = [
-  { href: "/exchange", label: "Markets", Icon: ArrowDownUp, center: false },
-  { href: "/invest", label: "Portfolio", Icon: LineChart, center: false },
+  { href: "/stocks", label: "Stocks", Icon: ChartCandlestick, center: false },
+  { href: "/crypto", label: "Crypto", Icon: Bitcoin, isHome: false },
   { href: "/dashboard", label: "Home", Icon: null, center: true },
   { href: "/bundles", label: "Bundles", Icon: Layers, center: false },
   { href: "/amplify", label: "Amplify", Icon: Zap, center: false },

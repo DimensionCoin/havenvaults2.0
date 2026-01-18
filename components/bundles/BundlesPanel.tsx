@@ -25,6 +25,7 @@ import {
   Minus,
   Plus,
   Check,
+  X,
 } from "lucide-react";
 
 import { BUNDLES, type RiskLevel, type TokenAllocation } from "./bundlesConfig";
@@ -38,6 +39,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogClose,
 } from "@/components/ui/dialog";
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -241,7 +243,6 @@ function MobileWeightEditorRow({
   const amount = (totalAmount * allocation.weight) / 100;
   const weight = Math.round(allocation.weight);
 
-  // Increment/decrement by 5% for easier mobile use
   const increment = () => {
     if (!allocation.locked) {
       onWeightChange(index, Math.min(100, allocation.weight + 5));
@@ -268,7 +269,6 @@ function MobileWeightEditorRow({
       `}
     >
       <div className="flex items-center gap-3 p-3">
-        {/* Token icon */}
         <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full bg-secondary ring-2 ring-border">
           <Image
             src={meta?.logo || "/placeholder.svg"}
@@ -278,7 +278,6 @@ function MobileWeightEditorRow({
           />
         </div>
 
-        {/* Token info */}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground">
             {allocation.symbol}
@@ -288,10 +287,8 @@ function MobileWeightEditorRow({
           </p>
         </div>
 
-        {/* Weight display / controls */}
         {isEditing ? (
           <div className="flex items-center gap-1">
-            {/* Lock button */}
             <button
               type="button"
               onClick={() => onLockToggle(index)}
@@ -312,13 +309,16 @@ function MobileWeightEditorRow({
               )}
             </button>
 
-            {/* Stepper controls */}
             <div
               className={`
-              flex items-center rounded-xl border overflow-hidden
-              ${allocation.locked ? "opacity-50" : ""}
-              ${allocation.locked ? "border-border" : "border-primary/30 bg-primary/5"}
-            `}
+                flex items-center rounded-xl border overflow-hidden
+                ${allocation.locked ? "opacity-50" : ""}
+                ${
+                  allocation.locked
+                    ? "border-border"
+                    : "border-primary/30 bg-primary/5"
+                }
+              `}
             >
               <button
                 type="button"
@@ -368,7 +368,6 @@ function MobileWeightEditorRow({
         )}
       </div>
 
-      {/* Progress bar - always visible */}
       <div className="h-1.5 w-full bg-secondary/50">
         <div
           className={`
@@ -415,17 +414,17 @@ function ExecutionStep({
       <div className="flex items-center gap-3">
         <div
           className={`
-          relative h-9 w-9 overflow-hidden rounded-full ring-2
-          ${
-            isConfirmed
-              ? "ring-primary/30"
-              : isFailed
-                ? "ring-destructive/30"
-                : isActive
-                  ? "ring-primary/40"
-                  : "ring-border"
-          }
-        `}
+            relative h-9 w-9 overflow-hidden rounded-full ring-2
+            ${
+              isConfirmed
+                ? "ring-primary/30"
+                : isFailed
+                  ? "ring-destructive/30"
+                  : isActive
+                    ? "ring-primary/40"
+                    : "ring-border"
+            }
+          `}
         >
           <Image
             src={meta?.logo || "/placeholder.svg"}
@@ -479,7 +478,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
 
   const bundle = useBundleSwap();
 
-  // UI State
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(BUNDLES[0]?.id ?? "");
   const [amountDisplay, setAmountDisplay] = useState<string>("");
@@ -516,7 +514,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     return Number.isFinite(n) ? n : 0;
   }, [amountDisplay]);
 
-  // Initialize custom allocations when bundle changes
   useEffect(() => {
     if (selected) {
       setCustomAllocations(
@@ -618,12 +615,12 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
     await bundle.execute(ownerBase58, swaps);
   }, [
     canBuy,
-    selected,
     amountNumber,
     fxRate,
     bundle,
     ownerBase58,
     customAllocations,
+    selected,
   ]);
 
   const handleRetry = useCallback(async () => {
@@ -681,11 +678,11 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search portfolios..."
-            className="haven-input pl-11"
+            className="haven-input pl-11 text-black placeholder:text-black/50"
           />
         </div>
 
-        {/* Risk Filters - horizontal scroll on mobile */}
+        {/* Risk Filters */}
         <div className="flex gap-2 mt-3 sm:mt-4 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 no-scrollbar">
           {(["all", "low", "medium", "high", "degen"] as const).map((risk) => (
             <button
@@ -727,7 +724,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
           filteredBundles.map((b) => {
             const Icon = getRiskIcon(b.risk);
             const topWeights = [...b.allocations]
-              .sort((a, b) => b.weight - a.weight)
+              .sort((a, bb) => bb.weight - a.weight)
               .slice(0, 3);
 
             return (
@@ -747,21 +744,20 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     <div className="flex items-center gap-2.5 sm:gap-3 mb-2 sm:mb-3">
                       <div
                         className={`
-                        flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl sm:rounded-2xl border
-                        ${
-                          b.risk === "low"
-                            ? "bg-primary/10 border-primary/20"
-                            : b.risk === "medium"
-                              ? "bg-accent border-border"
-                              : b.risk === "high"
-                                ? "bg-amber-500/10 border-amber-500/20"
-                                : "bg-destructive/10 border-destructive/20"
-                        }
-                      `}
+                          flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl sm:rounded-2xl border
+                          ${
+                            b.risk === "low"
+                              ? "bg-primary/10 border-primary/20"
+                              : b.risk === "medium"
+                                ? "bg-accent border-border"
+                                : b.risk === "high"
+                                  ? "bg-amber-500/10 border-amber-500/20"
+                                  : "bg-destructive/10 border-destructive/20"
+                          }
+                        `}
                       >
                         <Icon
-                          className={`h-4 w-4
-                          ${
+                          className={`h-4 w-4 ${
                             b.risk === "low"
                               ? "text-primary"
                               : b.risk === "medium"
@@ -769,8 +765,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                                 : b.risk === "high"
                                   ? "text-amber-500"
                                   : "text-destructive"
-                          }
-                        `}
+                          }`}
                         />
                       </div>
                       <div className="min-w-0">
@@ -787,7 +782,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       {b.subtitle}
                     </p>
 
-                    {/* Weight preview badges */}
                     <div className="flex flex-wrap gap-1.5 mb-2.5 sm:mb-3">
                       {topWeights.map((a) => (
                         <span
@@ -827,16 +821,25 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
         onOpenChange={(v) => (v ? setOpen(true) : closeModal())}
       >
         <DialogContent
-          className="
-            p-0 overflow-hidden flex flex-col gap-0
-            bg-card border-border text-foreground shadow-fintech-lg
-            sm:w-[min(92vw,520px)] sm:max-w-[520px] sm:max-h-[90vh] sm:rounded-3xl
-            max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none
-            max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none
-            max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0
-          "
+          className={[
+            // base
+            "p-0 overflow-hidden flex flex-col gap-0",
+            "bg-card border-border text-foreground shadow-fintech-lg",
+            "min-h-0",
+
+            // desktop
+            "sm:w-[min(92vw,520px)] sm:max-w-[520px] sm:max-h-[90vh] sm:rounded-3xl",
+
+            // ✅ mobile: center it in viewport (prevents being pushed offscreen)
+            "max-sm:fixed",
+            "max-sm:left-1/2 max-sm:top-1/2",
+            "max-sm:-translate-x-1/2 max-sm:-translate-y-1/2",
+            "max-sm:w-[calc(100vw-24px)]",
+            // safe-area aware max height
+            "max-sm:max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-24px)]",
+            "max-sm:rounded-3xl",
+          ].join(" ")}
           style={{
-            // Prevent horizontal scroll
             overflowX: "hidden",
             touchAction: "pan-y pinch-zoom",
           }}
@@ -852,24 +855,24 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
           )}
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {/* Modal Header */}
-            <div className="shrink-0 px-4 sm:px-5 pt-4 sm:pt-5 pb-3 sm:pb-4 border-b border-border">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
+            {/* Sticky header */}
+            <div className="sticky top-0 z-10 shrink-0 border-b border-border bg-card/95 backdrop-blur px-4 sm:px-5 pt-4 sm:pt-5 pb-3 sm:pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   {selected && (
                     <div
                       className={`
-                      flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl sm:rounded-2xl border
-                      ${
-                        selected.risk === "low"
-                          ? "bg-primary/10 border-primary/20"
-                          : selected.risk === "medium"
-                            ? "bg-accent border-border"
-                            : selected.risk === "high"
-                              ? "bg-amber-500/10 border-amber-500/20"
-                              : "bg-destructive/10 border-destructive/20"
-                      }
-                    `}
+                        flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl sm:rounded-2xl border
+                        ${
+                          selected.risk === "low"
+                            ? "bg-primary/10 border-primary/20"
+                            : selected.risk === "medium"
+                              ? "bg-accent border-border"
+                              : selected.risk === "high"
+                                ? "bg-amber-500/10 border-amber-500/20"
+                                : "bg-destructive/10 border-destructive/20"
+                        }
+                      `}
                     >
                       {React.createElement(getRiskIcon(selected.risk), {
                         className: `h-4 w-4 sm:h-5 sm:w-5 ${
@@ -884,8 +887,9 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       })}
                     </div>
                   )}
-                  <div>
-                    <DialogTitle className="text-base font-semibold text-foreground">
+
+                  <div className="min-w-0">
+                    <DialogTitle className="text-base font-semibold text-foreground truncate">
                       {selected?.name ?? "Portfolio"}
                     </DialogTitle>
                     <DialogDescription className="text-[11px] sm:text-xs text-muted-foreground mt-0.5">
@@ -897,18 +901,33 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     </DialogDescription>
                   </div>
                 </div>
+
+                <DialogClose asChild>
+                  <button
+                    type="button"
+                    aria-label="Close"
+                    className={[
+                      "shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-xl",
+                      "border border-border bg-secondary/60 text-muted-foreground",
+                      "hover:bg-accent hover:text-foreground active:scale-95 transition",
+                    ].join(" ")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </DialogClose>
               </div>
             </div>
+
+            {/* Scroll content + footer remain exactly like your current file */}
+            {/* (keep the rest of your modal body/footer unchanged) */}
 
             {/* Scrollable Content */}
             <div
               className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-5 py-4"
-              style={{
-                overflowX: "hidden",
-                touchAction: "pan-y",
-              }}
+              style={{ overflowX: "hidden", touchAction: "pan-y" }}
             >
-              {/* Amount Input - shown in idle phase */}
+              {/* ... YOUR EXISTING CONTENT EXACTLY ... */}
+              {/* Amount Input */}
               {bundle.state.phase === "idle" && (
                 <div className="haven-card-soft p-4 mb-4">
                   <label className="haven-kicker block mb-3">
@@ -935,7 +954,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     />
                   </div>
 
-                  {/* Quick Presets - grid on mobile */}
                   <div className="grid grid-cols-5 gap-2 mb-4">
                     {presets.map((preset) => (
                       <button
@@ -974,18 +992,15 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                 </div>
               )}
 
-              {/* Weight Editor - Mobile First */}
               {bundle.state.phase === "idle" &&
                 customAllocations.length > 0 && (
                   <div className="haven-card-soft p-4">
-                    {/* Header with toggle */}
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <PieChart className="h-4 w-4 text-muted-foreground" />
                         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Weights
                         </span>
-                        {/* Total indicator */}
                         <span
                           className={`
                           text-xs font-semibold tabular-nums px-2 py-0.5 rounded-full
@@ -1044,7 +1059,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       </div>
                     </div>
 
-                    {/* Editing tip */}
                     {isEditingWeights && (
                       <div className="mb-4 p-3 rounded-xl bg-primary/5 border border-primary/10">
                         <p className="text-xs text-muted-foreground">
@@ -1056,7 +1070,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                       </div>
                     )}
 
-                    {/* Allocation rows */}
                     <div className="space-y-2">
                       {customAllocations.map((allocation, index) => (
                         <MobileWeightEditorRow
@@ -1074,7 +1087,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                   </div>
                 )}
 
-              {/* Execution Progress */}
               {bundle.state.items.length > 0 && (
                 <div className="space-y-3">
                   {bundle.isExecuting && (
@@ -1105,7 +1117,6 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
                     ))}
                   </div>
 
-                  {/* Retry Failed */}
                   {bundle.hasFailed && !bundle.isExecuting && (
                     <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 p-4">
                       <div className="flex items-start gap-3">
@@ -1140,8 +1151,7 @@ export default function BundlesPanel({ ownerBase58 }: Props) {
               )}
             </div>
 
-            {/* Footer CTA */}
-            <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-5 py-4 pb-[max(env(safe-area-inset-bottom),16px)]">
+            <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-5 py-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
               {bundle.state.phase === "idle" && (
                 <p className="text-[11px] text-muted-foreground text-center mb-3">
                   {hasCustomWeights ? "Custom weights" : "Smart weighted"} •

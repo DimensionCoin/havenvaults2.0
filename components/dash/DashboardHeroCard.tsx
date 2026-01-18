@@ -21,7 +21,6 @@ import {
 
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
-import HistoryChart from "@/components/dash/Chart";
 import ThemeToggle from "../shared/ThemeToggle";
 import NotificationButton from "../shared/NotificationButton";
 import { LogoutButton } from "@/components/shared/LogoutButton";

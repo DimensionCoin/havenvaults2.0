@@ -6,6 +6,7 @@ import {
   getCluster,
   type TokenMeta,
   type TokenCategory,
+  type TokenKind,
 } from "@/lib/tokenConfig";
 
 export const runtime = "nodejs";
@@ -16,11 +17,13 @@ type TokenSummary = {
   symbol: string;
   name: string;
   logoURI: string;
-  // ✅ NEW: multi-category support
-  categories?: TokenCategory[];
+  kind: TokenKind;
+  categories: TokenCategory[];
+  tags?: string[];
 };
 
 type TokensApiResponse = {
+  cluster: ReturnType<typeof getCluster>;
   tokens: TokenSummary[];
   pagination: {
     page: number;
@@ -34,6 +37,7 @@ type TokensApiResponse = {
 const CATEGORY_ORDER: TokenCategory[] = [
   "Top MC",
   "Stocks",
+  "PreMarket",
   "DeFi",
   "Infrastructure",
   "Meme",
@@ -41,12 +45,10 @@ const CATEGORY_ORDER: TokenCategory[] = [
   "DePin",
   "Gaming",
   "NFT",
+  "Privacy",
   "Utility",
 ];
 
-// Sort by:
-// 1) primary category order (first category in categories[]), unknown last
-// 2) then by name
 function sortTokens(tokens: TokenMeta[]): TokenMeta[] {
   return [...tokens].sort((a, b) => {
     const aPrimary = a.categories?.[0];
@@ -59,9 +61,12 @@ function sortTokens(tokens: TokenMeta[]): TokenMeta[] {
     const bi = biRaw === -1 ? 999 : biRaw;
 
     if (ai !== bi) return ai - bi;
-
     return a.name.localeCompare(b.name);
   });
+}
+
+function isTokenKind(v: string): v is TokenKind {
+  return v === "crypto" || v === "stock";
 }
 
 export async function GET(req: NextRequest) {
@@ -71,32 +76,35 @@ export async function GET(req: NextRequest) {
     const pageRaw = searchParams.get("page") || "1";
     const pageSizeRaw = searchParams.get("pageSize") || "25";
     const qRaw = (searchParams.get("q") || "").trim();
-
-    // ✅ NEW: server-side category filtering for multi-category tokens
-    // e.g. "Stocks", or "all"
     const categoryRaw = (searchParams.get("category") || "").trim();
+    const kindRaw = (searchParams.get("kind") || "all").trim().toLowerCase();
+    const tagRaw = (searchParams.get("tag") || "").trim(); // ✅ NEW
 
     const page = Math.max(1, Number(pageRaw) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(pageSizeRaw) || 25));
-
+    const pageSize = Math.min(200, Math.max(1, Number(pageSizeRaw) || 25)); // ✅ allow bigger lists
     const cluster = getCluster();
-    const allForCluster = sortTokens(tokensForCluster(cluster));
 
-    // simple search by name/symbol/id
+    let filtered = sortTokens(tokensForCluster(cluster));
+
+    // ✅ kind filter
+    if (kindRaw !== "all" && isTokenKind(kindRaw)) {
+      filtered = filtered.filter((t) => t.kind === kindRaw);
+    }
+
+    // ✅ search by name/symbol/id
     const q = qRaw.toLowerCase();
-    let filtered = q
-      ? allForCluster.filter((t) => {
-          const name = t.name.toLowerCase();
-          const symbol = t.symbol.toLowerCase();
-          const id = (t.id || "").toLowerCase();
-          return name.includes(q) || symbol.includes(q) || id.includes(q);
-        })
-      : allForCluster;
+    if (q) {
+      filtered = filtered.filter((t) => {
+        const name = t.name.toLowerCase();
+        const symbol = t.symbol.toLowerCase();
+        const id = (t.id || "").toLowerCase();
+        return name.includes(q) || symbol.includes(q) || id.includes(q);
+      });
+    }
 
-    // ✅ apply category filter BEFORE pagination
+    // ✅ category filter
     if (categoryRaw && categoryRaw !== "all") {
       const allowed = new Set<TokenCategory>(CATEGORY_ORDER);
-
       if (allowed.has(categoryRaw as TokenCategory)) {
         const wanted = categoryRaw as TokenCategory;
         filtered = filtered.filter((t) =>
@@ -105,9 +113,18 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ✅ tag filter (secondary chips)
+    if (tagRaw && tagRaw !== "all") {
+      const wanted = tagRaw.toLowerCase();
+      filtered = filtered.filter((t) =>
+        (t.tags ?? []).some((x) => x.toLowerCase() === wanted)
+      );
+    }
+
     const total = filtered.length;
     const start = (page - 1) * pageSize;
     const end = start + pageSize;
+
     const slice = filtered.slice(start, end);
 
     const tokens: TokenSummary[] = slice
@@ -120,24 +137,31 @@ export async function GET(req: NextRequest) {
           symbol: t.symbol,
           name: t.name,
           logoURI: t.logo,
+          kind: t.kind,
           categories: t.categories ?? [],
+          tags: t.tags ?? [],
         };
       })
       .filter(Boolean) as TokenSummary[];
 
-    const hasMore = end < total;
-
     const payload: TokensApiResponse = {
+      cluster,
       tokens,
       pagination: {
         page,
         pageSize,
         total,
-        hasMore,
+        hasMore: end < total,
       },
     };
 
-    return NextResponse.json(payload);
+    // ✅ Cache: fast UX after first load, still safe since tokens are basically static
+    return NextResponse.json(payload, {
+      headers: {
+        // cache in browser for 5 min, allow stale while revalidating for 1 hour
+        "Cache-Control": "public, max-age=300, stale-while-revalidate=3600",
+      },
+    });
   } catch (error) {
     console.error("[GET /api/tokens] Error:", error);
     return NextResponse.json(

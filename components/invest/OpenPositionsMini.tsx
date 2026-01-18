@@ -1,3 +1,4 @@
+// components/invest/OpenPositionsMini.tsx
 "use client";
 
 import React, { useMemo, useCallback } from "react";
@@ -164,151 +165,171 @@ const OpenPositionsMini: React.FC = () => {
   };
 
   return (
-    <div className="mt-5">
-      <div className="mb-2 flex items-center justify-between px-1">
-        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-          Multiplier positions
-        </p>
+    <div className="mt-6">
+      {/* Header matches Invest page style */}
+      <div className="mb-2 flex items-end justify-between gap-3 px-1">
+        <div>
+          <div className="haven-kicker">Multiplier positions</div>
+          <div className="text-sm font-semibold text-foreground">
+            {hasPositions ? "Open positions" : "No open positions"}
+          </div>
+        </div>
 
-        <span className="text-[11px] text-muted-foreground">
+        <span className="haven-pill">
           {boosterPositionsCount} position
           {boosterPositionsCount === 1 ? "" : "s"}
         </span>
       </div>
 
-      {!hasPositions ? (
-        <button
-          type="button"
-          onClick={goToMultiplier}
-          className="block w-full text-left"
-          aria-label="Open Amplify (Multiplier tab)"
-        >
-          <div className="rounded-2xl border border-dashed border-border bg-background/40 py-6 text-center transition hover:bg-accent">
-            <p className="text-sm font-medium text-foreground">
-              No open positions
+      {/* Whole card is one tappable target (simple UX) */}
+      <button
+        type="button"
+        onClick={goToMultiplier}
+        className="block w-full text-left"
+        aria-label="Open Amplify (Multiplier tab)"
+      >
+        {!hasPositions ? (
+          <div className="haven-card-soft p-6 text-center transition hover:bg-accent">
+            <p className="text-sm font-semibold text-foreground">
+              Nothing open yet
             </p>
             <p className="mt-1 text-[12px] text-muted-foreground">
               Boosted positions will show here when you open one.
             </p>
           </div>
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={goToMultiplier}
-          className="block w-full text-left"
-          aria-label="Open Amplify (Multiplier tab)"
-        >
-          <div className="overflow-hidden rounded-2xl border border-border bg-background/40 transition hover:bg-accent">
-            {/* take-home summary */}
-            <div className="flex items-center justify-between px-4 py-3">
-              <p className="text-[12px] text-muted-foreground">
-                Take home <span className="text-[8px]">(T/H)</span>
-              </p>
-              <p className="text-[13px] font-semibold text-foreground">
-                {formatMoneyNoCode(takeHomeLocal, displayCurrency)}
-              </p>
+        ) : (
+          <div className="haven-card-soft overflow-hidden">
+            {/* Summary row */}
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-[12px] text-muted-foreground">
+                  Take home <span className="text-[10px]">(T/H)</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Top {topRows.length} positions
+                </div>
+              </div>
+
+              <div className="shrink-0 text-right">
+                <div className="text-[13px] font-semibold text-foreground">
+                  {formatMoneyNoCode(takeHomeLocal, displayCurrency)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">Total</div>
+              </div>
             </div>
 
             <div className="border-t border-border/70" />
 
-            {topRows.map((p, idx) => {
-              const symbol = safeStr(p.symbol, "SOL").toUpperCase();
-              const meta = findTokenBySymbol(symbol);
+            {/* Rows */}
+            <div className="flex flex-col gap-2 p-2">
+              {topRows.map((p, idx) => {
+                const symbol = safeStr(p.symbol, "SOL").toUpperCase();
+                const meta = findTokenBySymbol(symbol);
 
-              const positionValueUsd = safeNum(
-                p.spotValueUsd,
-                safeNum(p.sizeUsd, 0)
-              );
-              const collateralUsd = safeNum(p.collateralUsd, 0);
-              const pnlUsd = safeNum(p.pnlUsd, 0);
-              const entryUsd = safeNum(p.entryUsd, 0);
+                const positionValueUsd = safeNum(
+                  p.spotValueUsd,
+                  safeNum(p.sizeUsd, 0)
+                );
+                const collateralUsd = safeNum(p.collateralUsd, 0);
+                const pnlUsd = safeNum(p.pnlUsd, 0);
+                const entryUsd = safeNum(p.entryUsd, 0);
 
-              const positionValueLocal = usdToLocal(positionValueUsd);
-              const collateralLocal = usdToLocal(collateralUsd);
-              const pnlLocal = usdToLocal(pnlUsd);
+                const positionValueLocal = usdToLocal(positionValueUsd);
+                const collateralLocal = usdToLocal(collateralUsd);
+                const pnlLocal = usdToLocal(pnlUsd);
 
-              const sizeTokens = safeNum(
-                p.sizeTokens,
-                calcSizeTokensFromEntry(positionValueUsd, entryUsd)
-              );
+                const sizeTokens = safeNum(
+                  p.sizeTokens,
+                  calcSizeTokensFromEntry(positionValueUsd, entryUsd)
+                );
 
-              const pnlClass =
-                pnlLocal > 0
-                  ? "text-primary"
-                  : pnlLocal < 0
-                    ? "text-destructive"
-                    : "text-muted-foreground";
+                const pnlClass =
+                  pnlLocal > 0
+                    ? "text-primary"
+                    : pnlLocal < 0
+                      ? "text-destructive"
+                      : "text-muted-foreground";
 
-              const rowTakeHomeLocal = collateralLocal + pnlLocal;
+                const rowTakeHomeLocal = collateralLocal + pnlLocal;
 
-              return (
-                <div
-                  key={safeStr(p.id, `${symbol}-${idx}`)}
-                  className={[
-                    "flex items-start justify-between gap-3 px-4 py-4",
-                    idx !== 0 ? "border-t border-border/70" : "",
-                  ].join(" ")}
-                >
-                  {/* LEFT */}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Image
-                        src={meta?.logo || "/placeholder.svg"}
-                        alt={`${symbol} logo`}
-                        width={22}
-                        height={22}
-                        className="h-5 w-5 rounded-full border border-border bg-background/60"
-                      />
-                      <span className="text-[13px] font-semibold text-foreground">
-                        {symbol}
-                      </span>
+                return (
+                  <div
+                    key={safeStr(p.id, `${symbol}-${idx}`)}
+                    className="haven-row px-3 py-3"
+                  >
+                    {/* LEFT */}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="relative h-9 w-9 overflow-hidden rounded-full border border-border bg-background/60">
+                        <Image
+                          src={meta?.logo || "/placeholder.svg"}
+                          alt={`${symbol} logo`}
+                          fill
+                          sizes="36px"
+                          className="object-cover"
+                        />
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-semibold text-foreground">
+                            {symbol}
+                          </span>
+                        </div>
+
+                        <div className="mt-0.5 flex items-baseline gap-2">
+                          <span className="text-[11px] text-muted-foreground">
+                            {sizeTokens > 0
+                              ? `(${sizeTokens.toFixed(3)})`
+                              : "(—)"}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {formatMoneyNoCode(
+                              positionValueLocal,
+                              displayCurrency
+                            )}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    {/* (0.234) $70.30 */}
-                    <div className="mt-1 flex items-baseline gap-2">
-                      <span className="text-[11px] text-muted-foreground">
-                        {sizeTokens > 0 ? `(${sizeTokens.toFixed(3)})` : "(—)"}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground">
-                        {formatMoneyNoCode(positionValueLocal, displayCurrency)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* RIGHT (stacked: T/H on top, P&L directly under) */}
-                  <div className="shrink-0 text-right flex flex-col items-end">
-                    {/* top line */}
-                    <div className="inline-flex items-baseline gap-2">
-                      <span className="text-[11px] text-muted-foreground">
+                    {/* RIGHT */}
+                    <div className="shrink-0 text-right">
+                      <div className="text-[11px] text-muted-foreground">
                         T/H
-                      </span>
-                      <span className="text-[13px] font-semibold text-foreground">
+                      </div>
+                      <div className="text-sm font-semibold text-foreground">
                         {formatMoneyNoCode(rowTakeHomeLocal, displayCurrency)}
-                      </span>
-                    </div>
+                      </div>
 
-                    {/* under it */}
-                    <div className="mt-2 inline-flex items-baseline gap-2">
-                      <span className="text-[11px] text-muted-foreground">
-                        P&amp;L
-                      </span>
-                      <span
-                        className={["text-[13px] font-semibold", pnlClass].join(
-                          " "
-                        )}
-                      >
-                        {pnlLocal >= 0 ? "+" : ""}
-                        {formatMoneyNoCode(pnlLocal, displayCurrency)}
-                      </span>
+                      <div className="mt-1 flex items-baseline justify-end gap-2">
+                        <span className="text-[11px] text-muted-foreground">
+                          P&amp;L
+                        </span>
+                        <span
+                          className={[
+                            "text-[12px] font-semibold",
+                            pnlClass,
+                          ].join(" ")}
+                        >
+                          {pnlLocal >= 0 ? "+" : ""}
+                          {formatMoneyNoCode(pnlLocal, displayCurrency)}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+
+            {/* Footer hint */}
+            <div className="px-4 pb-4 pt-1">
+              <div className="text-[11px] text-muted-foreground">
+                Tap to manage positions in Amplify.
+              </div>
+            </div>
           </div>
-        </button>
-      )}
+        )}
+      </button>
     </div>
   );
 };

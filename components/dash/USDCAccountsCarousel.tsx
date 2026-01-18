@@ -11,14 +11,10 @@ import React, {
 } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
-import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import DepositAccountCard from "@/components/accounts/DepositAccountCard";
-import SpendingAccountCard from "@/components/accounts/SpendingAccountCard";
-import FlexSavingsAccountCard from "@/components/accounts/FlexSavingsAccountCard";
 import PlusSavingsAccountCard from "@/components/accounts/PlusSavingsAccountCard";
 import DepositFlex from "@/components/accounts/flex/Deposit";
-import DevEmailGate from "../shared/DevEmailGate";
 
 type SlideKey = "deposit" | "flex" | "plus" | "spending";
 type FxPayload = { base?: string; target?: string; rate?: number };
@@ -287,22 +283,7 @@ const USDCAccountsCarousel: React.FC = () => {
     { key: "plus", label: "Plus", index: 1 },
   ];
 
-  const goPrev = () =>
-    scrollToIndex(activeIndex === 0 ? slides.length - 1 : activeIndex - 1);
-  const goNext = () =>
-    scrollToIndex(activeIndex === slides.length - 1 ? 0 : activeIndex + 1);
-
   const mainWallet = user?.walletAddress || "";
-
-  const flexAccount = useMemo(() => {
-    if (!savingsFlex?.walletAddress) return undefined;
-    if (!savingsFlex.marginfiAccountPk) return undefined;
-    const base = d128ToNumber(savingsFlex.principalDeposited);
-    return {
-      walletAddress: savingsFlex.walletAddress,
-      totalDeposited: base * fxRate,
-    };
-  }, [savingsFlex, fxRate]);
 
   const plusAccount = useMemo(() => {
     if (!savingsPlus?.walletAddress) return undefined;

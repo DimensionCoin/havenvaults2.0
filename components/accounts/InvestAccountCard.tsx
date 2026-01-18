@@ -3,6 +3,7 @@
 
 import React, { useMemo } from "react";
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { useBalance } from "@/providers/BalanceProvider";
 
 const USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || ""; // build-time constant
@@ -26,26 +27,22 @@ const InvestAccountCard: React.FC = () => {
     boosterPositionsCount,
   } = useBalance();
 
-  // 🔹 Filter out USDC (by mint + symbol, same pattern as HoldingsTable)
+  // Filter out USDC (mint + symbol)
   const nonUsdcTokens = useMemo(() => {
     return (tokens || []).filter((t) => {
-      const mintLower = t.mint.toLowerCase();
+      const mintLower = (t.mint ?? "").toLowerCase();
       const isUsdcMint =
         USDC_MINT !== "" && mintLower === USDC_MINT.toLowerCase();
-
       const isUsdcSymbol = (t.symbol ?? "").toUpperCase() === "USDC";
-
       return !(isUsdcMint || isUsdcSymbol);
     });
   }, [tokens]);
 
-  // non-USDC side = invest portfolio (spot investments)
   const investSpotUsd = useMemo(
     () => nonUsdcTokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0),
     [nonUsdcTokens]
   );
 
-  // ✅ add boosted “take-home” equity to invest total
   const investTotalUsd = useMemo(() => {
     const b = Number.isFinite(boosterTakeHomeUsd) ? boosterTakeHomeUsd : 0;
     return investSpotUsd + b;
@@ -74,11 +71,16 @@ const InvestAccountCard: React.FC = () => {
     }
 
     if (boosterCount > 0) {
-      return `${boosterCount} Multiplied position${boosterCount === 1 ? "" : "s"}`;
+      return `${boosterCount} Multiplied position${
+        boosterCount === 1 ? "" : "s"
+      }`;
     }
 
     return `${spotCount} Asset${spotCount === 1 ? "" : "s"} in your portfolio`;
   }, [hasAssets, nonUsdcTokens.length, boosterPositionsCount]);
+
+  // Small, always-present “this opens” affordance
+  const ctaLabel = hasAssets ? "View portfolio" : "Explore investments";
 
   return (
     <Link
@@ -86,10 +88,30 @@ const InvestAccountCard: React.FC = () => {
       className="block h-full w-full"
       aria-label="Open Invest page"
     >
-      <div className="haven-card flex h-full w-full flex-col justify-between p-4 sm:p-6 transition hover:shadow-fintech-lg">
-        {/* Header + value (same layout) */}
+      <div
+        className={[
+          "haven-card group flex h-full w-full flex-col justify-between p-4 sm:p-6",
+          "transition-all duration-200",
+          "hover:shadow-fintech-lg hover:border-primary/15",
+          "active:scale-[0.99]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        ].join(" ")}
+      >
+        {/* Header + value */}
         <div>
-          <p className="haven-kicker">Invest Account</p>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="haven-kicker">Invest Account</p>
+
+              {/* subtle CTA under the kicker */}
+              <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                <span className="group-hover:text-foreground transition-colors">
+                  {ctaLabel}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 opacity-70 group-hover:opacity-100 transition" />
+              </div>
+            </div>
+          </div>
 
           <div className="mt-4">
             <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
@@ -101,7 +123,7 @@ const InvestAccountCard: React.FC = () => {
           </div>
         </div>
 
-        {/* Footer: logos + meta (same layout) */}
+        {/* Footer: logos + meta */}
         <div className="mt-5 flex items-center justify-between gap-3">
           <div className="flex flex-col">
             <span className="text-[11px] text-muted-foreground">
@@ -112,11 +134,12 @@ const InvestAccountCard: React.FC = () => {
                   : "No invest assets yet."}
             </span>
 
-            {!hasAssets && (
-              <span className="text-[10px] text-muted-foreground">
-                You&apos;ll see your assets here after you invest.
-              </span>
-            )}
+            {/* keep the helper line, but make it feel like a next step */}
+            <span className="text-[10px] text-muted-foreground">
+              {hasAssets
+                ? "Tap to see full breakdown and performance."
+                : "Tap to browse assets and build your portfolio."}
+            </span>
           </div>
 
           <div className="flex items-center gap-1">
@@ -126,7 +149,7 @@ const InvestAccountCard: React.FC = () => {
                   {visibleTokens.map((t, idx) => (
                     <div
                       key={t.mint ?? `${t.symbol}-${idx}`}
-                      className="h-7 w-7 overflow-hidden rounded-full border bg-card shadow-fintech-sm flex items-center justify-center"
+                      className="h-7 w-7 overflow-hidden rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center"
                     >
                       {t.logoURI ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -153,11 +176,11 @@ const InvestAccountCard: React.FC = () => {
                 )}
               </>
             ) : boosterPositionsCount > 0 ? (
-              <div className="h-7 w-7 rounded-full border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
+              <div className="h-7 w-7 rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
                 B
               </div>
             ) : (
-              <div className="h-7 w-7 rounded-full border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
+              <div className="h-7 w-7 rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
                 —
               </div>
             )}

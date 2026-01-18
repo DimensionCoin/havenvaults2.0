@@ -6,9 +6,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
-  LineChart, // Portfolio
+  ChartCandlestick, // Portfolio
+  Bitcoin, //crypto
   Zap, // Multiply
-  ArrowDownUp, // Markets
   Layers, // Bundles
 } from "lucide-react";
 
@@ -25,8 +25,8 @@ const navItems: NavItem[] = [
 
   // ✅ Same order as bottom bar (after Home):
   // Markets, Portfolio, Bundles, Multiply
-  { href: "/exchange", label: "Markets", Icon: ArrowDownUp, isHome: false },
-  { href: "/invest", label: "Portfolio", Icon: LineChart, isHome: false },
+  { href: "/stocks", label: "Stocks", Icon: ChartCandlestick, isHome: false },
+  { href: "/crypto", label: "Crypto", Icon: Bitcoin, isHome: false },
   { href: "/bundles", label: "Bundles", Icon: Layers, isHome: false },
   { href: "/amplify", label: "Amplify", Icon: Zap, isHome: false },
 ];

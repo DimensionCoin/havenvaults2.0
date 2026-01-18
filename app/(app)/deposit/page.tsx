@@ -1,12 +1,6 @@
 "use client";
 
-import React, {
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-  useRef,
-} from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -34,12 +28,15 @@ import {
    CONSTANTS
 ========================= */
 
-const FLEX_SAVINGS_ADDR = "3uxNepDbmkDNq6JhRja5Z8QwbTrfmkKP8AKZV5chYDGG";
 const DEFAULT_AVATAR = "/logos/user.png";
 
 const USE_DICEBEAR = true;
 const dicebearAvatar = (addr: string) =>
   `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(addr)}`;
+
+const JUPUSD_MINT = (process.env.NEXT_PUBLIC_JUPUSD_MINT || "")
+  .trim()
+  .toLowerCase();
 
 /* =========================
    TYPES
@@ -47,24 +44,23 @@ const dicebearAvatar = (addr: string) =>
 
 type DrawerMode = "deposit" | "withdraw" | null;
 
+type TxKind = "transfer" | "swap" | "perp" | "plus";
+
 type TxRow = {
   signature: string;
   blockTime: number | null;
   status: "success" | "failed";
 
-  kind?: "transfer" | "swap" | "perp";
+  kind?: TxKind;
   direction?: "in" | "out" | "neutral";
 
   swapDirection?: "buy" | "sell" | null;
   amountUsdc?: number | null;
 
-  // wallet (owner) for transfers; null for swaps/perps
+  // transfers only
   counterparty?: string | null;
-
-  // ✅ owner wallet (same as counterparty for transfers in new API)
   counterpartyOwner?: string | null;
 
-  // ✅ API now returns mapped values when available
   counterpartyLabel?: string | null;
   counterpartyAvatarUrl?: string | null;
 
@@ -92,6 +88,19 @@ type TxResponse = {
 
 const normAddr = (a?: string | null) => (a || "").trim();
 const normLower = (a?: string | null) => normAddr(a).toLowerCase();
+
+const isJupUsdMint = (m?: string | null) =>
+  !!JUPUSD_MINT && (m || "").trim().toLowerCase() === JUPUSD_MINT;
+
+// ✅ Treat any JUPUSD-touching swap as "Plus-like" so we never show it as a trade
+const isPlusLikeRow = (t: TxRow) => {
+  if (t.kind === "plus") return true;
+  if (t.kind === "swap") {
+    if (isJupUsdMint(t.swapSoldMint) || isJupUsdMint(t.swapBoughtMint))
+      return true;
+  }
+  return false;
+};
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -224,13 +233,8 @@ export default function DepositAccountPage() {
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
-
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
-
-  // ✅ Frontend no longer needs extra resolve-wallets calls,
-  // because the API now returns counterpartyLabel + counterpartyAvatarUrl.
-  // Keeping these refs/state removed to avoid conflicting labels.
 
   const mintIndex = useMemo(() => {
     const map = new Map<string, TokenMeta>();
@@ -345,9 +349,25 @@ export default function DepositAccountPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, loadFx]);
 
+  const plus = useMemo(
+    () => txs.filter((t) => isPlusLikeRow(t) && (t.amountUsdc ?? 0) > 0),
+    [txs]
+  );
+
+  const transfers = useMemo(
+    () => txs.filter((t) => t.kind === "transfer" && (t.amountUsdc ?? 0) > 0),
+    [txs]
+  );
+
+  const perps = useMemo(
+    () => txs.filter((t) => t.kind === "perp" && (t.amountUsdc ?? 0) > 0),
+    [txs]
+  );
+
   const swaps = useMemo(() => {
     return txs.filter((t) => {
       if (t.kind !== "swap") return false;
+      if (isPlusLikeRow(t)) return false; // ✅ hides JUPUSD swaps
 
       const tokenToToken =
         !t.swapDirection &&
@@ -378,19 +398,11 @@ export default function DepositAccountPage() {
     });
   }, [txs]);
 
-  const transfers = useMemo(() => {
-    return txs.filter((t) => t.kind === "transfer" && (t.amountUsdc ?? 0) > 0);
-  }, [txs]);
-
-  const perps = useMemo(() => {
-    return txs.filter((t) => t.kind === "perp" && (t.amountUsdc ?? 0) > 0);
-  }, [txs]);
-
   const activity = useMemo(() => {
-    const rows = [...swaps, ...transfers, ...perps];
+    const rows = [...plus, ...swaps, ...transfers, ...perps];
     rows.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return rows;
-  }, [swaps, transfers, perps]);
+  }, [plus, swaps, transfers, perps]);
 
   const hasMore = !exhausted;
 
@@ -402,21 +414,9 @@ export default function DepositAccountPage() {
   const loading = userLoading || balanceLoading;
 
   const resolveTransferParty = useCallback((tx: TxRow) => {
-    const cpRaw = normAddr(tx.counterparty);
     const ownerRaw = normAddr(tx.counterpartyOwner);
+    const cpRaw = normAddr(tx.counterparty);
 
-    const isFlexSavings =
-      cpRaw === FLEX_SAVINGS_ADDR || ownerRaw === FLEX_SAVINGS_ADDR;
-
-    if (isFlexSavings) {
-      return {
-        label: "Flex Savings Account",
-        avatarUrl: null,
-        isFlexSavings: true,
-      };
-    }
-
-    // ✅ Prefer mapped label/avatar from API; fallback to short address
     const label =
       (tx.counterpartyLabel && tx.counterpartyLabel.trim()) ||
       shortAddress(ownerRaw || cpRaw) ||
@@ -429,7 +429,7 @@ export default function DepositAccountPage() {
         : null) ||
       DEFAULT_AVATAR;
 
-    return { label, avatarUrl, isFlexSavings: false };
+    return { label, avatarUrl };
   }, []);
 
   if (!user && !userLoading) {
@@ -544,8 +544,10 @@ export default function DepositAccountPage() {
             ) : (
               <div className="space-y-2">
                 {activity.map((tx) => {
-                  const isSwap = tx.kind === "swap";
+                  const isPlus = isPlusLikeRow(tx);
+                  const isSwap = tx.kind === "swap" && !isPlus;
                   const isPerp = tx.kind === "perp";
+
                   const isBuy = tx.swapDirection === "buy";
                   const isSell = tx.swapDirection === "sell";
 
@@ -569,10 +571,6 @@ export default function DepositAccountPage() {
 
                   const tokenMeta = isSwap ? resolveMeta(tokenMint) : null;
 
-                  const party =
-                    !isSwap && !isPerp ? resolveTransferParty(tx) : null;
-                  const isSavings = !!party?.isFlexSavings;
-
                   const soldMeta = isTokenToToken
                     ? resolveMeta(soldMint)
                     : null;
@@ -586,50 +584,59 @@ export default function DepositAccountPage() {
 
                   const localAbs = (tx.amountUsdc ?? 0) * rate;
 
+                  const party =
+                    !isSwap && !isPerp && !isPlus
+                      ? resolveTransferParty(tx)
+                      : null;
+
                   const title = isPerp
                     ? toMultiplierLabel(tx.counterpartyLabel) || "Multiplier"
-                    : isSwap
-                      ? isTokenToToken
-                        ? `Swap ${soldName} → ${boughtName}`
-                        : isSell
-                          ? `Sold ${tokenName}`
-                          : `Bought ${tokenName}`
-                      : isSavings
-                        ? tx.direction === "out"
-                          ? "Savings deposit"
-                          : "Savings withdrawal"
+                    : isPlus
+                      ? tx.direction === "out"
+                        ? "Plus deposit"
+                        : "Plus withdrawal"
+                      : isSwap
+                        ? isTokenToToken
+                          ? `Swap ${soldName} → ${boughtName}`
+                          : isSell
+                            ? `Sold ${tokenName}`
+                            : `Bought ${tokenName}`
                         : tx.direction === "in"
                           ? "Received money"
                           : "Sent money";
 
-                  const rightTop = isPerp
+                  const rightTop = isPlus
                     ? tx.direction === "in"
                       ? `+${formatCurrency(localAbs, displayCurrency)}`
                       : `-${formatCurrency(localAbs, displayCurrency)}`
-                    : isSwap
-                      ? isTokenToToken
-                        ? "—"
-                        : (() => {
-                            const usdcDeltaAbs = Math.abs(tx.amountUsdc ?? 0);
-                            const local = usdcDeltaAbs * rate;
-                            if (!local) return "—";
-                            return isSell
-                              ? `+${formatCurrency(local, displayCurrency)}`
-                              : `-${formatCurrency(local, displayCurrency)}`;
-                          })()
-                      : tx.direction === "in"
+                    : isPerp
+                      ? tx.direction === "in"
                         ? `+${formatCurrency(localAbs, displayCurrency)}`
-                        : `-${formatCurrency(localAbs, displayCurrency)}`;
+                        : `-${formatCurrency(localAbs, displayCurrency)}`
+                      : isSwap
+                        ? isTokenToToken
+                          ? "—"
+                          : (() => {
+                              const usdcDeltaAbs = Math.abs(tx.amountUsdc ?? 0);
+                              const local = usdcDeltaAbs * rate;
+                              if (!local) return "—";
+                              return isSell
+                                ? `+${formatCurrency(local, displayCurrency)}`
+                                : `-${formatCurrency(local, displayCurrency)}`;
+                            })()
+                        : tx.direction === "in"
+                          ? `+${formatCurrency(localAbs, displayCurrency)}`
+                          : `-${formatCurrency(localAbs, displayCurrency)}`;
 
                   const detailLine = isPerp
                     ? "Multiplier"
-                    : isSwap
-                      ? isTokenToToken
-                        ? `${soldName} → ${boughtName}`
-                        : ""
-                      : `${tx.direction === "in" ? "From" : "To"} ${
-                          party?.label ?? "—"
-                        }`;
+                    : isPlus
+                      ? "Plus Savings vault"
+                      : isSwap
+                        ? isTokenToToken
+                          ? `${soldName} → ${boughtName}`
+                          : ""
+                        : `${tx.direction === "in" ? "From" : "To"} ${party?.label ?? "—"}`;
 
                   const tokenToTokenAmounts =
                     isTokenToToken &&
@@ -637,10 +644,7 @@ export default function DepositAccountPage() {
                     boughtAmount &&
                     (soldAmount ?? 0) > 0 &&
                     (boughtAmount ?? 0) > 0
-                      ? `${fmtTokenAmt(
-                          soldAmount,
-                          soldMeta?.decimals ?? 6
-                        )} ${soldName} → ${fmtTokenAmt(
+                      ? `${fmtTokenAmt(soldAmount, soldMeta?.decimals ?? 6)} ${soldName} → ${fmtTokenAmt(
                           boughtAmount,
                           boughtMeta?.decimals ?? 6
                         )} ${boughtName}`
@@ -648,15 +652,12 @@ export default function DepositAccountPage() {
 
                   const usdcSwapTokenAmount =
                     isSwap && !isTokenToToken && tokenAmount
-                      ? `${fmtTokenAmt(
-                          tokenAmount,
-                          tokenMeta?.decimals ?? 6
-                        )} ${tokenName}`
+                      ? `${fmtTokenAmt(tokenAmount, tokenMeta?.decimals ?? 6)} ${tokenName}`
                       : "";
 
                   const leftIcon = (() => {
                     if (isPerp) return <PerpAvatar />;
-                    if (isSavings) return <SavingsAvatar />;
+                    if (isPlus) return <SavingsAvatar />;
 
                     if (isSwap) {
                       const logo =
@@ -666,7 +667,6 @@ export default function DepositAccountPage() {
                       return <AssetIcon logo={logo} alt={alt} />;
                     }
 
-                    // ✅ Transfers: if API returned an avatar, show it; otherwise fallback icon
                     if (party?.avatarUrl) {
                       return (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -723,9 +723,7 @@ export default function DepositAccountPage() {
 
                         {tx.signature ? (
                           <a
-                            href={`https://orbmarkets.io/tx/${encodeURIComponent(
-                              tx.signature
-                            )}`}
+                            href={`https://orbmarkets.io/tx/${encodeURIComponent(tx.signature)}`}
                             target="_blank"
                             rel="noreferrer"
                             className="mt-1 inline-flex items-center justify-end text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"

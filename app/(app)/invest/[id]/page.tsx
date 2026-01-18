@@ -1,4 +1,4 @@
-// app/(app)/exchange/[id]/page.tsx
+// app/(app)/invest/[id]/page.tsx
 "use client";
 
 import React, {
