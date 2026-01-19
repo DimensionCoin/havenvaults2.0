@@ -82,6 +82,17 @@ type ActivityTx = ApiTx & {
   _amountUsdc: number;
 };
 
+type FxPayload = {
+  base?: string;
+  target?: string;
+  rate?: number;
+};
+
+const toFxRate = (p: FxPayload | null) => {
+  const r = Number(p?.rate);
+  return Number.isFinite(r) && r > 0 ? r : 1;
+};
+
 /* =========================
    UI helpers
 ========================= */
@@ -274,6 +285,8 @@ function parsePlusEvent(owner: string, tx: ApiTx) {
 export default function PlusSavingsAccountPage() {
   const router = useRouter();
   const { user, loading: userLoading } = useUser();
+  const [fx, setFx] = useState<FxPayload | null>(null);
+  const fxRate = useMemo(() => toFxRate(fx), [fx]);
 
   const {
     loading: balanceLoading,
@@ -386,6 +399,32 @@ export default function PlusSavingsAccountPage() {
     mapped.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
     return mapped;
   }, [txs, walletAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFx() {
+      try {
+        const res = await fetch("/api/fx", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok) throw new Error(`FX (${res.status})`);
+        const data = (await res.json()) as FxPayload;
+        if (!cancelled) setFx(data);
+      } catch {
+        // If FX fails, we safely fall back to rate=1 (USD)
+        if (!cancelled) setFx({ base: "USD", target: "USD", rate: 1 });
+      }
+    }
+
+    loadFx();
+    return () => {
+      cancelled = true;
+    };
+  }, [displayCurrency]);
 
   const hasMore = !exhausted;
 
@@ -529,14 +568,21 @@ export default function PlusSavingsAccountPage() {
                       <PiggyBank className="h-4 w-4 text-foreground/80" />
                     );
 
+                  const amountDisplay =
+                    amountUsdc > 0 ? amountUsdc * fxRate : 0;
+
                   const amountText =
                     amountUsdc > 0
                       ? direction === "in"
-                        ? `+${formatCurrency(amountUsdc, displayCurrency || "USD")}`
+                        ? `+${formatCurrency(amountDisplay, displayCurrency || "USD")}`
                         : direction === "out"
-                          ? `-${formatCurrency(amountUsdc, displayCurrency || "USD")}`
-                          : formatCurrency(amountUsdc, displayCurrency || "USD")
+                          ? `-${formatCurrency(amountDisplay, displayCurrency || "USD")}`
+                          : formatCurrency(
+                              amountDisplay,
+                              displayCurrency || "USD",
+                            )
                       : "—";
+
 
                   return (
                     <div

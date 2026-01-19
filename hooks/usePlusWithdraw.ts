@@ -44,11 +44,28 @@ export type PlusWithdrawResult = {
   usdcOutUnits?: string;
   slippageBps?: number;
 
+  // Fee info (matching flex structure)
+  amountUi: number;
+  feeUi: number;
+  netUi: number;
+  feeRate?: number;
+
   fx: {
     targetCurrency: string;
     rateBaseToTarget: number;
     amountBase: number; // USD amount
     amountDisplay: number;
+  };
+
+  // Accounting from send response
+  accounting?: {
+    direction: "withdraw";
+    accountType: "plus";
+    amountUi: string;
+    feeUi: string;
+    netUi: string;
+    principalUi: string;
+    interestUi: string;
   };
 };
 
@@ -82,7 +99,18 @@ type BuildResponse = {
   usdcOutUnits?: string;
   slippageBps?: number;
 
+  // Fee info from build
+  decimals?: number;
+  amountUi?: string | number;
+  feeUi?: string | number;
+  netUi?: string | number;
+  feeRate?: number;
+
   payer?: string;
+  userUsdcAta?: string;
+  treasuryUsdcAta?: string;
+  treasuryOwner?: string;
+
   quote?: {
     inAmount?: string;
     outAmount?: string;
@@ -92,9 +120,20 @@ type BuildResponse = {
 };
 
 type SendResponse = {
+  ok: boolean;
   signature: string;
   sendTimeMs?: number;
   traceId?: string;
+  recorded?: boolean;
+  accounting?: {
+    direction: string;
+    accountType: string;
+    amountUi: string;
+    feeUi: string;
+    netUi: string;
+    principalUi: string;
+    interestUi: string;
+  };
 };
 
 type ApiErrorShape = {
@@ -122,6 +161,15 @@ function isJsonObject(value: unknown): value is JsonObject {
 
 function floor6(n: number): number {
   return Math.floor(n * 1e6) / 1e6;
+}
+
+function parseNumericField(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
 function isUserRejection(e: unknown): boolean {
@@ -181,7 +229,7 @@ function pickErrorMessage(e: unknown): string {
 async function postJSON<T>(
   url: string,
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
@@ -342,7 +390,7 @@ export function usePlusWithdraw() {
 
       return signedTransaction;
     },
-    [selectedWallet, signTransaction]
+    [selectedWallet, signTransaction],
   );
 
   // ───────── Main withdraw ─────────
@@ -423,7 +471,7 @@ export function usePlusWithdraw() {
                 amountUi: amountBase.toFixed(6),
                 slippageBps,
               },
-              signal
+              signal,
             );
             break;
           } catch (e) {
@@ -435,11 +483,28 @@ export function usePlusWithdraw() {
         if (!buildResp?.transaction)
           throw new Error("Failed to build withdrawal transaction");
 
+        // Parse fee info from build response
+        const buildAmountUi =
+          parseNumericField(buildResp.amountUi) || amountBase;
+        const buildFeeUi = parseNumericField(buildResp.feeUi);
+        const buildNetUi =
+          parseNumericField(buildResp.netUi) || buildAmountUi - buildFeeUi;
+        const buildFeeRate = parseNumericField(buildResp.feeRate);
+
+        console.log("[PlusWithdraw] Build response:", {
+          amountUi: buildAmountUi,
+          feeUi: buildFeeUi,
+          netUi: buildNetUi,
+          feeRate: buildFeeRate,
+          jupUsdWithdrawUnits: buildResp.jupUsdWithdrawUnits,
+          usdcOutUnits: buildResp.usdcOutUnits,
+        });
+
         /* ══════════ PHASE 2: SIGN ══════════ */
         setStatus("signing");
 
         const unsignedBytes = new Uint8Array(
-          Buffer.from(buildResp.transaction, "base64")
+          Buffer.from(buildResp.transaction, "base64"),
         );
 
         let signedBytes: Uint8Array;
@@ -458,7 +523,7 @@ export function usePlusWithdraw() {
         const sendResp = await postJSON<SendResponse>(
           SEND_URL,
           { transaction: signedTxB64 },
-          signal
+          signal,
         );
 
         if (!sendResp?.signature)
@@ -472,6 +537,10 @@ export function usePlusWithdraw() {
 
         const totalTime = Date.now() - startTime;
 
+        console.log(
+          `[PlusWithdraw] ${sendResp.signature.slice(0, 8)}... ${totalTime}ms | gross=${buildAmountUi} fee=${buildFeeUi} net=${buildNetUi}`,
+        );
+
         return {
           signature: sendResp.signature,
           totalTimeMs: totalTime,
@@ -479,12 +548,32 @@ export function usePlusWithdraw() {
           jupUsdWithdrawUnits: buildResp.jupUsdWithdrawUnits,
           usdcOutUnits: buildResp.usdcOutUnits,
           slippageBps: buildResp.slippageBps ?? slippageBps,
+
+          // Fee info (matching flex structure)
+          amountUi: buildAmountUi,
+          feeUi: buildFeeUi,
+          netUi: buildNetUi,
+          feeRate: buildFeeRate,
+
           fx: {
             targetCurrency: fx.target,
             rateBaseToTarget: fx.rate,
             amountBase,
             amountDisplay,
           },
+
+          // Accounting from send response (if available)
+          accounting: sendResp.accounting
+            ? {
+                direction: "withdraw" as const,
+                accountType: "plus" as const,
+                amountUi: sendResp.accounting.amountUi,
+                feeUi: sendResp.accounting.feeUi,
+                netUi: sendResp.accounting.netUi,
+                principalUi: sendResp.accounting.principalUi,
+                interestUi: sendResp.accounting.interestUi,
+              }
+            : undefined,
         };
       } catch (e) {
         const err = e as Error & {
@@ -525,7 +614,7 @@ export function usePlusWithdraw() {
         abortRef.current = null;
       }
     },
-    [connectedWallet58, getFx, selectedWallet, signWithWallet]
+    [connectedWallet58, getFx, selectedWallet, signWithWallet],
   );
 
   // ───────── Reset ─────────
@@ -558,6 +647,6 @@ export function usePlusWithdraw() {
       isDone: status === "done",
       isError: status === "error",
     }),
-    [withdraw, reset, status, error, signature, connectedWallet58]
+    [withdraw, reset, status, error, signature, connectedWallet58],
   );
 }

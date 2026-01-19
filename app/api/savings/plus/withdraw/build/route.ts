@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
+  ComputeBudgetProgram,
   Connection,
   PublicKey,
   TransactionInstruction,
@@ -15,6 +16,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
 } from "@solana/spl-token";
 import { Buffer } from "buffer";
+import BN from "bn.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,6 +105,10 @@ const JUP_API_KEY = required("JUP_API_KEY");
 const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
 
+// Treasury for fees (same as flex)
+const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
+const TREASURY_OWNER = new PublicKey(TREASURY_OWNER_STR);
+
 /* ───────── Jupiter endpoints ───────── */
 
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
@@ -117,14 +123,17 @@ const JUP_EARN_POSITIONS = "https://api.jup.ag/lend/v1/earn/positions";
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 // JupUSD mint - what we withdraw from the vault
 const JUPUSD_MINT = new PublicKey(
-  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD"
+  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",
 );
+
+// USDC decimals
+const USDC_DECIMALS = 6;
 
 // v0 raw tx size limit
 const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
 
 /* ───────── Connection + caches ───────── */
@@ -148,6 +157,82 @@ const altCache = new Map<
 >();
 const ALT_CACHE_TTL = 5 * 60 * 1000;
 
+/* ───────── Fee Helpers (matching flex) ───────── */
+
+/**
+ * Get withdraw fee rate from env (same env var as flex for consistency)
+ * Returns fee as a decimal (e.g., 0.001 = 0.1%)
+ */
+function getWithdrawFeeRate(): number {
+  const raw = Number(process.env.NEXT_PUBLIC_FLEX_WITHDRAW_FEE_UI ?? "0");
+  return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+}
+
+/**
+ * Calculate fee from amount using parts-per-million for precision
+ */
+function feeFromAmountBase(amountBase: BN, feeRate: number): BN {
+  if (!feeRate) return new BN(0);
+  const ppm = Math.max(0, Math.round(feeRate * 1_000_000));
+  if (!ppm) return new BN(0);
+  return amountBase.muln(ppm).divn(1_000_000);
+}
+
+/**
+ * Convert BN to UI string with decimals
+ */
+function bnToUiString(amountBn: BN, decimals: number): string {
+  const raw = amountBn.toString(10);
+  if (decimals === 0) return raw;
+
+  const pad = raw.padStart(decimals + 1, "0");
+  const i = pad.length - decimals;
+  const whole = pad.slice(0, i);
+  const frac = pad.slice(i).replace(/0+$/, "");
+  return frac.length ? `${whole}.${frac}` : whole;
+}
+
+/**
+ * Build TransferChecked instruction for fee transfer (no BigInt, uses BN)
+ */
+function makeTransferCheckedIx(opts: {
+  tokenProgramId: PublicKey;
+  source: PublicKey;
+  mint: PublicKey;
+  destination: PublicKey;
+  authority: PublicKey;
+  amountBase: BN;
+  decimals: number;
+}): TransactionInstruction {
+  const {
+    tokenProgramId,
+    source,
+    mint,
+    destination,
+    authority,
+    amountBase,
+    decimals,
+  } = opts;
+
+  // SPL Token instruction enum: TransferChecked = 12
+  const data = Buffer.concat([
+    Buffer.from([12]),
+    amountBase.toArrayLike(Buffer, "le", 8),
+    Buffer.from([decimals & 0xff]),
+  ]);
+
+  return new TransactionInstruction({
+    programId: tokenProgramId,
+    keys: [
+      { pubkey: source, isSigner: false, isWritable: true },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: authority, isSigner: true, isWritable: false },
+    ],
+    data,
+  });
+}
+
 /* ───────── Errors ───────── */
 
 function jsonError(
@@ -160,14 +245,14 @@ function jsonError(
     stage?: string;
     traceId?: string;
     debug?: Record<string, unknown>;
-  }
+  },
 ) {
   console.error(
     "[/api/savings/plus/withdraw/build]",
     status,
     payload.code,
     payload.error,
-    payload.debug ? { debug: payload.debug } : ""
+    payload.debug ? { debug: payload.debug } : "",
   );
   return NextResponse.json(payload, { status });
 }
@@ -176,7 +261,7 @@ function jsonError(
 
 async function getTokenProgramId(
   conn: Connection,
-  mint: PublicKey
+  mint: PublicKey,
 ): Promise<PublicKey> {
   const key = mint.toBase58();
   const cached = tokenProgramCache.get(key);
@@ -211,7 +296,7 @@ async function getDecimals(conn: Connection, mint: PublicKey): Promise<number> {
 
 async function getAltCached(
   conn: Connection,
-  key: string
+  key: string,
 ): Promise<AddressLookupTableAccount | null> {
   const now = Date.now();
   const cached = altCache.get(key);
@@ -277,7 +362,7 @@ function safePreview(v: unknown) {
           return val.slice(0, 180) + "…";
         return val;
       },
-      2
+      2,
     );
     return s.length > 2000 ? s.slice(0, 2000) + "…(truncated)" : s;
   } catch {
@@ -316,7 +401,7 @@ function toIx(obj: unknown): TransactionInstruction {
           : null;
 
   const accountsRaw: (AccountMetaJson | string)[] | null = Array.isArray(
-    rec.keys
+    rec.keys,
   )
     ? rec.keys
     : Array.isArray(rec.accounts)
@@ -327,7 +412,7 @@ function toIx(obj: unknown): TransactionInstruction {
 
   if (!programId || data === null || !accountsRaw) {
     throw new Error(
-      "Invalid instruction object (missing programId/data/accounts)"
+      "Invalid instruction object (missing programId/data/accounts)",
     );
   }
 
@@ -382,18 +467,18 @@ function safeToIx(
   obj: unknown,
   label: string,
   index: number,
-  traceId: string
+  traceId: string,
 ): TransactionInstruction {
   try {
     return toIx(obj);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} bad ix in ${label}[${index}]: ${msg}`
+      `[PLUS/WITHDRAW/BUILD] ${traceId} bad ix in ${label}[${index}]: ${msg}`,
     );
     console.error(
       `[PLUS/WITHDRAW/BUILD] ${traceId} ${label}[${index}] preview:`,
-      safePreview(obj)
+      safePreview(obj),
     );
     throw e;
   }
@@ -403,7 +488,7 @@ function safeToIx(
 
 function collectAndSponsorAtas(
   allIxs: TransactionInstruction[],
-  traceId: string
+  traceId: string,
 ): {
   sponsoredAtaIxs: TransactionInstruction[];
   otherIxs: TransactionInstruction[];
@@ -437,7 +522,7 @@ function collectAndSponsorAtas(
     const dedupeKey = ata.toBase58();
     if (seenAtas.has(dedupeKey)) {
       console.log(
-        `[PLUS/WITHDRAW/BUILD] ${traceId} skipping duplicate ATA: ${dedupeKey.slice(0, 8)}...`
+        `[PLUS/WITHDRAW/BUILD] ${traceId} skipping duplicate ATA: ${dedupeKey.slice(0, 8)}...`,
       );
       continue;
     }
@@ -449,13 +534,13 @@ function collectAndSponsorAtas(
         ata,
         owner,
         mint,
-        tokenProgram
-      )
+        tokenProgram,
+      ),
     );
   }
 
   console.log(
-    `[PLUS/WITHDRAW/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other instructions`
+    `[PLUS/WITHDRAW/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other instructions`,
   );
 
   return { sponsoredAtaIxs: sponsored, otherIxs: other };
@@ -535,6 +620,23 @@ export async function POST(req: Request) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // FEE CALCULATION (same logic as flex)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    stage = "feeCalculation";
+    const feeRate = getWithdrawFeeRate();
+
+    // We calculate fee based on expected USDC output (will be refined after quote)
+    // For now, use withdrawAmountUnits as estimate since JupUSD ≈ USDC
+    const estimatedUsdcOut = new BN(withdrawAmountUnits.toString());
+    const feeBase = feeFromAmountBase(estimatedUsdcOut, feeRate);
+    const hasFee = !feeBase.isZero();
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} fee: rate=${feeRate}, estimated=${bnToUiString(feeBase, USDC_DECIMALS)} USDC`,
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // STEP 1: Check user's position in JupUSD vault
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -557,7 +659,7 @@ export async function POST(req: Request) {
 
     const positions = (await posRes.json()) as EarnPosition[];
     const jupUsdPosition = positions.find(
-      (p) => p.token?.assetAddress === JUPUSD_MINT.toBase58()
+      (p) => p.token?.assetAddress === JUPUSD_MINT.toBase58(),
     );
 
     if (!jupUsdPosition) {
@@ -573,7 +675,7 @@ export async function POST(req: Request) {
 
     const availableUnits = BigInt(jupUsdPosition.underlyingAssets || "0");
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} position: available=${availableUnits.toString()}, requested=${withdrawAmountUnits.toString()}`
+      `[PLUS/WITHDRAW/BUILD] ${traceId} position: available=${availableUnits.toString()}, requested=${withdrawAmountUnits.toString()}`,
     );
 
     if (availableUnits < withdrawAmountUnits) {
@@ -620,7 +722,7 @@ export async function POST(req: Request) {
 
     console.log(
       `[PLUS/WITHDRAW/BUILD] ${traceId} withdrawJson keys:`,
-      withdrawJson ? Object.keys(withdrawJson) : []
+      withdrawJson ? Object.keys(withdrawJson) : [],
     );
 
     const withdrawList: unknown[] = Array.isArray(withdrawJson?.instructions)
@@ -690,7 +792,20 @@ export async function POST(req: Request) {
     }
 
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} quote: ${withdrawAmountUnits.toString()} JupUSD -> ${usdcOutAmount} USDC`
+      `[PLUS/WITHDRAW/BUILD] ${traceId} quote: ${withdrawAmountUnits.toString()} JupUSD -> ${usdcOutAmount} USDC`,
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RECALCULATE FEE based on actual USDC output from quote
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const actualUsdcOutBn = new BN(usdcOutAmount);
+    const actualFeeBase = feeFromAmountBase(actualUsdcOutBn, feeRate);
+    const netBase = BN.max(new BN(0), actualUsdcOutBn.sub(actualFeeBase));
+    const actualHasFee = !actualFeeBase.isZero();
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} final fee: gross=${bnToUiString(actualUsdcOutBn, USDC_DECIMALS)}, fee=${bnToUiString(actualFeeBase, USDC_DECIMALS)}, net=${bnToUiString(netBase, USDC_DECIMALS)}`,
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -756,20 +871,20 @@ export async function POST(req: Request) {
 
     // Decode withdraw instructions (these come FIRST - withdraw from vault)
     const withdrawIxs = withdrawList.map((x, i) =>
-      safeToIx(x, "withdraw", i, traceId)
+      safeToIx(x, "withdraw", i, traceId),
     );
 
     // Decode swap instructions (swap JupUSD → USDC)
     const swapSetupIxs = (swapData.setupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapSetup", i, traceId)
+      (x: InstructionJson, i: number) => safeToIx(x, "swapSetup", i, traceId),
     );
     const swapIx = safeToIx(swapData.swapInstruction, "swap", 0, traceId);
     const swapCleanupIxs = (swapData.cleanupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapCleanup", i, traceId)
+      (x: InstructionJson, i: number) => safeToIx(x, "swapCleanup", i, traceId),
     );
 
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} raw ix counts: withdraw=${withdrawIxs.length}, swapSetup=${swapSetupIxs.length}, swap=1, swapCleanup=${swapCleanupIxs.length}`
+      `[PLUS/WITHDRAW/BUILD] ${traceId} raw ix counts: withdraw=${withdrawIxs.length}, swapSetup=${swapSetupIxs.length}, swap=1, swapCleanup=${swapCleanupIxs.length}`,
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -786,20 +901,81 @@ export async function POST(req: Request) {
 
     const { sponsoredAtaIxs, otherIxs } = collectAndSponsorAtas(
       allInstructionsInOrder,
-      traceId
-    );
-
-    // Final instruction order:
-    // 1. All sponsored ATA creates (Haven pays rent, deduplicated)
-    // 2. All other instructions in original order (withdraw -> swap)
-    const ixs: TransactionInstruction[] = [...sponsoredAtaIxs, ...otherIxs];
-
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} final ix count: ${ixs.length} (${sponsoredAtaIxs.length} ATAs + ${otherIxs.length} other)`
+      traceId,
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 8: Compile transaction
+    // STEP 8: Derive ATAs and build fee instruction
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    stage = "feeInstruction";
+
+    // User's USDC ATA (where they receive USDC from swap)
+    const userUsdcAta = getAssociatedTokenAddressSync(
+      USDC_MINT,
+      userOwner,
+      false,
+      usdcProgId,
+    );
+
+    // Treasury's USDC ATA (where fee goes)
+    const treasuryUsdcAta = getAssociatedTokenAddressSync(
+      USDC_MINT,
+      TREASURY_OWNER,
+      false,
+      usdcProgId,
+    );
+
+    // Build final instruction list
+    const ixs: TransactionInstruction[] = [];
+
+    // 1. Compute budget (add extra CU if fee transfer is included)
+    const computeUnits = actualHasFee ? 350_000 : 300_000;
+    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
+    ixs.push(
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+    );
+
+    // 2. All sponsored ATA creates (Haven pays rent, deduplicated)
+    ixs.push(...sponsoredAtaIxs);
+
+    // 3. Ensure treasury ATA exists if we have a fee
+    if (actualHasFee) {
+      ixs.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          HAVEN_FEEPAYER,
+          treasuryUsdcAta,
+          TREASURY_OWNER,
+          USDC_MINT,
+          usdcProgId,
+        ),
+      );
+    }
+
+    // 4. All other instructions in original order (withdraw -> swap)
+    ixs.push(...otherIxs);
+
+    // 5. Fee transfer instruction (AFTER swap completes, user has USDC)
+    if (actualHasFee) {
+      ixs.push(
+        makeTransferCheckedIx({
+          tokenProgramId: usdcProgId,
+          source: userUsdcAta,
+          mint: USDC_MINT,
+          destination: treasuryUsdcAta,
+          authority: userOwner,
+          amountBase: actualFeeBase,
+          decimals: USDC_DECIMALS,
+        }),
+      );
+    }
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} final ix count: ${ixs.length} (${sponsoredAtaIxs.length} ATAs + ${otherIxs.length} other + ${actualHasFee ? 1 : 0} fee transfer)`,
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 9: Compile transaction
     // ═══════════════════════════════════════════════════════════════════════════
 
     stage = "compile";
@@ -810,7 +986,7 @@ export async function POST(req: Request) {
         payerKey: HAVEN_FEEPAYER,
         recentBlockhash: blockhash,
         instructions: ixs,
-      }).compileToV0Message(altAccounts)
+      }).compileToV0Message(altAccounts),
     );
 
     const rawLen = tx.serialize().length;
@@ -829,16 +1005,8 @@ export async function POST(req: Request) {
     const b64 = Buffer.from(tx.serialize()).toString("base64");
     const buildTime = Date.now() - startTime;
 
-    // User's USDC ATA (where they'll receive the USDC)
-    const userUsdcAta = getAssociatedTokenAddressSync(
-      USDC_MINT,
-      userOwner,
-      false,
-      usdcProgId
-    );
-
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} ${buildTime}ms jupUsdWithdraw=${withdrawAmountUnits.toString()} usdcOut=${usdcOutAmount}`
+      `[PLUS/WITHDRAW/BUILD] ${traceId} ${buildTime}ms jupUsdWithdraw=${withdrawAmountUnits.toString()} usdcOut=${usdcOutAmount} fee=${bnToUiString(actualFeeBase, USDC_DECIMALS)} net=${bnToUiString(netBase, USDC_DECIMALS)}`,
     );
 
     return NextResponse.json({
@@ -851,14 +1019,27 @@ export async function POST(req: Request) {
       usdcOutUnits: usdcOutAmount,
       slippageBps,
 
+      // Fee info (matching flex response structure)
+      decimals: USDC_DECIMALS,
+      amountUi: bnToUiString(actualUsdcOutBn, USDC_DECIMALS),
+      feeUi: bnToUiString(actualFeeBase, USDC_DECIMALS),
+      netUi: bnToUiString(netBase, USDC_DECIMALS),
+      feeRate,
+
       payer: HAVEN_FEEPAYER.toBase58(),
       userUsdcAta: userUsdcAta.toBase58(),
+      treasuryUsdcAta: treasuryUsdcAta.toBase58(),
+      treasuryOwner: TREASURY_OWNER.toBase58(),
+
       quote: {
         inAmount: quoteResponse?.inAmount,
         outAmount: quoteResponse?.outAmount,
         otherAmountThreshold: quoteResponse?.otherAmountThreshold,
         priceImpactPct: quoteResponse?.priceImpactPct,
       },
+
+      computeUnits,
+      buildTimeMs: buildTime,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
