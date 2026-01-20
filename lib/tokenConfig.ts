@@ -687,6 +687,17 @@ export const STOCK_TOKENS: TokenMeta[] = [
     decimals: 8,
     mints: { mainnet: "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p" },
   },
+  {
+    name: "Coca-Cola",
+    symbol: "KO",
+    id: "coca-cola-xstock",
+    logo: "/logos/ko.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ" },
+  },
 
   // ---------------- PreMarket (tokenized)
   {
