@@ -1,4 +1,3 @@
-// app/(app)/invest/[id]/page.tsx
 "use client";
 
 import React, {
@@ -8,651 +7,47 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import {
-  ArrowLeft,
-  ArrowDownRight,
-  ArrowUpRight,
-  Info,
-  Loader2,
-  CheckCircle2,
-  XCircle,
-  X,
-  ChevronDown,
-  ChevronUp,
-  ExternalLink,
-  Wallet,
-  Copy,
-  Check,
-  AlertTriangle,
-  QrCode,
-  Landmark,
-  TrendingUp,
-} from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
-import {
-  TOKENS,
-  getCluster,
-  getMintFor,
-  type TokenMeta,
-  type TokenCategory,
-} from "@/lib/tokenConfig";
-
+import { getCluster } from "@/lib/tokenConfig";
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
-import {
-  useServerSponsoredUsdcSwap,
-  type UsdcSwapStatus,
-} from "@/hooks/useServerSponsoredUsdcSwap";
+import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
 import { useServerSponsoredJLJupUSDSwap } from "@/hooks/Useserversponsoredjljupusdswap";
 import { useServerSponsoredToJLJupUSDSwap } from "@/hooks/Useserversponsoredtojljupusdswap";
 
+import {
+  // Types
+  type PaymentAccount,
+  type ReceiveAccount,
+  type ModalState,
+  type TimeframeKey,
+  type SleekPoint,
+  type HistoricalPoint,
+  type HistoricalApiResponse,
+  type SpotResp,
+  type JupPriceResp,
+  type TokenCategory,
+  // Constants
+  SWAP_FEE_PCT,
+  TIMEFRAMES,
+  STAGE_CONFIG,
+  // Utils
+  resolveTokenFromSlug,
+  clampNumber,
+  safeParse,
+  grossUpForFee,
+  formatPct,
+  // Components
+  TradeModal,
+  PriceChartSection,
+  TradePanel,
+  DepositSection,
+  NotFoundView,
+} from "@/components/coinPage";
+
 const CLUSTER = getCluster();
-
-const SWAP_FEE_PCT =
-  Number(process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0") || 0;
-const SWAP_FEE_PCT_DISPLAY = SWAP_FEE_PCT * 100;
-
-/* ───────── Types ───────── */
-
-type ResolvedToken = {
-  meta: TokenMeta;
-  mint: string;
-};
-
-type HistoricalPoint = { t: number; price: number };
-type HistoricalApiResponse = { id: string; prices: HistoricalPoint[] };
-
-type SpotResp = {
-  prices: Record<
-    string,
-    { priceUsd: number; priceChange24hPct: number | null }
-  >;
-};
-
-// Jupiter price API response type
-type JupPriceResp = {
-  prices: Record<
-    string,
-    {
-      price: number;
-      priceChange24hPct: number | null;
-      mcap: number | null;
-      fdv: number | null;
-      liquidity: number | null;
-      volume24h: number | null;
-      marketCapRank: number | null;
-    }
-  >;
-};
-
-type TimeframeKey = "1D" | "7D" | "30D" | "90D";
-
-const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
-  "1D": { label: "24H", days: "1" },
-  "7D": { label: "7D", days: "7" },
-  "30D": { label: "30D", days: "30" },
-  "90D": { label: "90D", days: "90" },
-};
-
-/* ───────── Account Types ───────── */
-
-type PaymentAccount = "cash" | "plus";
-type ReceiveAccount = "cash" | "plus";
-
-/* ───────── Stage Config (matches MultiplierPanel) ───────── */
-
-const STAGE_CONFIG: Record<
-  UsdcSwapStatus,
-  {
-    title: string;
-    subtitle: string;
-    progress: number;
-    icon: "spinner" | "wallet" | "success" | "error";
-  }
-> = {
-  idle: {
-    title: "",
-    subtitle: "",
-    progress: 0,
-    icon: "spinner",
-  },
-  building: {
-    title: "Preparing order",
-    subtitle: "Finding best route...",
-    progress: 15,
-    icon: "spinner",
-  },
-  signing: {
-    title: "Approving the transaction",
-    subtitle: "approving the order with exchange",
-    progress: 30,
-    icon: "wallet",
-  },
-  sending: {
-    title: "Submitting",
-    subtitle: "Broadcasting to network...",
-    progress: 60,
-    icon: "spinner",
-  },
-  confirming: {
-    title: "Confirming",
-    subtitle: "Waiting for network...",
-    progress: 85,
-    icon: "spinner",
-  },
-  done: {
-    title: "Order complete!",
-    subtitle: "Your trade was successful",
-    progress: 100,
-    icon: "success",
-  },
-  error: {
-    title: "Order failed",
-    subtitle: "Something went wrong",
-    progress: 0,
-    icon: "error",
-  },
-};
-
-/* ───────── Modal Types ───────── */
-
-type ModalKind = "processing" | "success" | "error";
-
-type ModalState = {
-  kind: ModalKind;
-  signature?: string | null;
-  errorMessage?: string;
-  side?: "buy" | "sell";
-  symbol?: string;
-} | null;
-
-/* ───────── Helpers ───────── */
-
-const resolveTokenFromSlug = (slug: string): ResolvedToken | null => {
-  const normalized = slug.toLowerCase();
-
-  for (const meta of TOKENS) {
-    const mint = getMintFor(meta, CLUSTER);
-    if (!mint) continue;
-
-    const symbol = meta?.symbol?.toLowerCase();
-    const id = meta?.id?.toLowerCase();
-    const mintLower = mint.toLowerCase();
-
-    if (
-      normalized === id ||
-      normalized === symbol ||
-      normalized === mintLower
-    ) {
-      return { meta, mint };
-    }
-  }
-
-  return null;
-};
-
-const formatMoneyNoCode = (v?: number | null) => {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
-  return n.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    currencyDisplay: "narrowSymbol",
-    maximumFractionDigits: n < 1 ? 6 : 2,
-  });
-};
-
-const formatPct = (v?: number | null) => {
-  if (v === null || v === undefined || Number.isNaN(v)) return "0.00%";
-  const sign = v > 0 ? "+" : "";
-  return `${sign}${v.toFixed(2)}%`;
-};
-
-const formatQty = (v?: number | null, maxFrac = 6) => {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
-  return n.toLocaleString("en-US", { maximumFractionDigits: maxFrac });
-};
-
-const clampNumber = (n: number) => (Number.isFinite(n) ? n : 0);
-
-const safeParse = (s: string) => {
-  const n = parseFloat((s || "").replace(/,/g, ""));
-  return Number.isFinite(n) ? n : 0;
-};
-
-function explorerUrl(sig: string) {
-  return `https://solscan.io/tx/${sig}`;
-}
-
-function grossUpForFee(netAmount: number, feeRate: number): number {
-  if (feeRate <= 0 || feeRate >= 1) return netAmount;
-  return netAmount / (1 - feeRate);
-}
-
-/* ───────── QR Code Component ───────── */
-
-function WalletQRCode({ value, size = 140 }: { value: string; size?: number }) {
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (!value) return;
-
-    const generateQR = async () => {
-      try {
-        const QRCode = (await import("qrcode")).default;
-        const dataUrl = await QRCode.toDataURL(value, {
-          width: size * 2,
-          margin: 1,
-          color: { dark: "#000000", light: "#ffffff" },
-          errorCorrectionLevel: "M",
-        });
-        setQrDataUrl(dataUrl);
-        setError(false);
-      } catch (err) {
-        console.error("QR generation failed:", err);
-        setError(true);
-      }
-    };
-
-    generateQR();
-  }, [value, size]);
-
-  if (error) {
-    return (
-      <div
-        className="flex items-center justify-center rounded-xl border bg-muted/20"
-        style={{ width: size, height: size }}
-      >
-        <span className="text-[11px] text-muted-foreground">
-          QR unavailable
-        </span>
-      </div>
-    );
-  }
-
-  if (!qrDataUrl) {
-    return (
-      <div
-        className="flex items-center justify-center rounded-xl border bg-muted/20"
-        style={{ width: size, height: size }}
-      >
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={qrDataUrl}
-      alt="Wallet QR Code"
-      width={size}
-      height={size}
-      className="rounded-xl"
-    />
-  );
-}
-
-/* ───────── Chart Components ───────── */
-
-type SleekPoint = { t: number; y: number };
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function formatTimeLabel(t: number, tf: TimeframeKey) {
-  const d = new Date(t);
-  if (tf === "1D") {
-    return d.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function SleekLineChart({
-  data,
-  height = 210,
-  timeframe,
-}: {
-  data: SleekPoint[];
-  height?: number;
-  displayCurrency: string;
-  timeframe: TimeframeKey;
-}) {
-  const width = 640;
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const [isHovering, setIsHovering] = useState(false);
-
-  const computed = useMemo(() => {
-    if (!data || data.length < 2) {
-      return {
-        pathD: "",
-        minY: 0,
-        maxY: 0,
-        min: 0,
-        max: 1,
-        scaleX: () => 0,
-        scaleY: () => height,
-      };
-    }
-
-    const ys = data.map((d) => d.y);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-
-    const pad = (maxY - minY) * 0.15 || 1;
-    const min = minY - pad;
-    const max = maxY + pad;
-
-    const scaleX = (i: number) => (i / (data.length - 1)) * width;
-    const scaleY = (y: number) => {
-      const t = (y - min) / (max - min);
-      return height - t * height;
-    };
-
-    const pathD = data
-      .map((p, i) => {
-        const x = scaleX(i);
-        const y = scaleY(p.y);
-        return `${i === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-      })
-      .join(" ");
-
-    return { pathD, minY, maxY, min, max, scaleX, scaleY };
-  }, [data, height]);
-
-  const activeIdx =
-    hoverIdx === null ? null : clamp(hoverIdx, 0, Math.max(0, data.length - 1));
-  const activePoint = activeIdx !== null ? data[activeIdx] : null;
-
-  const activeX = activeIdx !== null ? computed.scaleX(activeIdx) : null;
-  const activeY = activePoint ? computed.scaleY(activePoint.y) : null;
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!wrapRef.current || data.length < 2) return;
-
-    const rect = wrapRef.current.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const frac = rect.width > 0 ? px / rect.width : 0;
-    const idx = Math.round(frac * (data.length - 1));
-
-    setIsHovering(true);
-    setHoverIdx(clamp(idx, 0, data.length - 1));
-  };
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    onPointerMove(e);
-  };
-
-  const onPointerUp = (e: React.PointerEvent) => {
-    try {
-      (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
-    } catch {}
-  };
-
-  const onLeave = () => {
-    setIsHovering(false);
-    setHoverIdx(null);
-  };
-
-  const tooltip = useMemo(() => {
-    if (!activePoint || activeX === null || activeY === null) return null;
-
-    const leftPct = (activeX / width) * 100;
-    const topPct = (activeY / height) * 100;
-
-    const clampedLeft = clamp(leftPct, 6, 78);
-    const clampedTop = clamp(topPct - 18, 4, 72);
-
-    return {
-      boxLeftPct: clampedLeft,
-      boxTopPct: clampedTop,
-      priceText: formatMoneyNoCode(activePoint.y),
-      timeText: formatTimeLabel(activePoint.t, timeframe),
-    };
-  }, [activePoint, activeX, activeY, timeframe, height]);
-
-  return (
-    <div ref={wrapRef} className="relative w-full select-none">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-[210px] w-full"
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <linearGradient id="havenLineFade" x1="0" x2="0" y1="0" y2="1">
-            <stop
-              offset="0%"
-              stopColor="var(--chart-1, rgb(16 185 129))"
-              stopOpacity="0.22"
-            />
-            <stop
-              offset="100%"
-              stopColor="var(--chart-1, rgb(16 185 129))"
-              stopOpacity="0.02"
-            />
-          </linearGradient>
-        </defs>
-
-        {[0.2, 0.4, 0.6, 0.8].map((t) => (
-          <line
-            key={t}
-            x1="0"
-            x2={width}
-            y1={height * t}
-            y2={height * t}
-            stroke="currentColor"
-            strokeOpacity="0.10"
-            strokeWidth="1"
-          />
-        ))}
-
-        {computed.pathD && (
-          <path
-            d={`${computed.pathD} L ${width} ${height} L 0 ${height} Z`}
-            fill="url(#havenLineFade)"
-          />
-        )}
-
-        {computed.pathD && (
-          <path
-            d={computed.pathD}
-            fill="none"
-            stroke="var(--chart-1, rgb(16 185 129))"
-            strokeOpacity="0.9"
-            strokeWidth="2.2"
-          />
-        )}
-
-        {isHovering && activeX !== null && activeY !== null && (
-          <>
-            <line
-              x1={activeX}
-              x2={activeX}
-              y1={0}
-              y2={height}
-              stroke="currentColor"
-              strokeOpacity="0.12"
-              strokeWidth="1"
-            />
-            <circle
-              cx={activeX}
-              cy={activeY}
-              r="4.5"
-              fill="var(--background)"
-              fillOpacity="0.95"
-              stroke="var(--chart-1, rgb(16 185 129))"
-              strokeWidth="2"
-            />
-          </>
-        )}
-
-        <rect
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          fill="transparent"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onLeave}
-          onPointerCancel={onLeave}
-        />
-      </svg>
-
-      {tooltip && isHovering && (
-        <div
-          className="pointer-events-none absolute rounded-2xl border bg-popover/80 px-3 py-2 text-popover-foreground shadow-fintech-lg backdrop-blur"
-          style={{
-            left: `${tooltip.boxLeftPct}%`,
-            top: `${tooltip.boxTopPct}%`,
-            maxWidth: "72%",
-          }}
-        >
-          <div className="text-sm font-semibold">{tooltip.priceText}</div>
-          <div className="mt-0.5 text-[11px] text-muted-foreground">
-            {tooltip.timeText}
-          </div>
-        </div>
-      )}
-
-      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>
-          Low: {computed.minY ? formatMoneyNoCode(computed.minY) : "—"}
-        </span>
-        <span>
-          High: {computed.maxY ? formatMoneyNoCode(computed.maxY) : "—"}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/* ───────── Price Display Overlay (for tokens without chart data) ───────── */
-
-function PriceDisplayOverlay({
-  price,
-  priceChange24hPct,
-  symbol,
-  loading,
-}: {
-  price: number | null;
-  priceChange24hPct: number | null;
-  symbol: string;
-  loading: boolean;
-}) {
-  const isUp = (priceChange24hPct ?? 0) >= 0;
-
-  return (
-    <div className="flex h-[210px] flex-col items-center justify-center rounded-2xl border border-dashed border-border/50 bg-muted/10">
-      {loading ? (
-        <div className="flex flex-col items-center gap-2">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">
-            Loading price...
-          </span>
-        </div>
-      ) : price !== null ? (
-        <div className="flex flex-col items-center gap-3">
-          <div className="text-4xl font-bold tracking-tight text-foreground">
-            {formatMoneyNoCode(price)}
-          </div>
-          {priceChange24hPct !== null && (
-            <div
-              className={[
-                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold",
-                isUp
-                  ? "bg-primary/10 text-primary"
-                  : "bg-destructive/10 text-destructive",
-              ].join(" ")}
-            >
-              {isUp ? (
-                <ArrowUpRight className="h-4 w-4" />
-              ) : (
-                <ArrowDownRight className="h-4 w-4" />
-              )}
-              {formatPct(priceChange24hPct)}
-              <span className="text-xs opacity-70">(24h)</span>
-            </div>
-          )}
-          <div className="mt-1 text-xs text-muted-foreground">
-            {symbol} · Live price from Jupiter
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col items-center gap-2 text-muted-foreground">
-          <Info className="h-5 w-5" />
-          <span className="text-xs">Price unavailable</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ───────── Modal Sub-Components ───────── */
-
-function ProgressBar({ progress }: { progress: number }) {
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
-      <div
-        className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
-        style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-      />
-    </div>
-  );
-}
-
-function StageIcon({
-  icon,
-}: {
-  icon: "spinner" | "wallet" | "success" | "error";
-}) {
-  const base =
-    "flex h-14 w-14 items-center justify-center rounded-2xl border shadow-fintech-sm";
-
-  if (icon === "success") {
-    return (
-      <div className={`${base} border-primary/30 bg-primary/10`}>
-        <CheckCircle2 className="h-7 w-7 text-primary" />
-      </div>
-    );
-  }
-
-  if (icon === "error") {
-    return (
-      <div className={`${base} border-destructive/30 bg-destructive/10`}>
-        <XCircle className="h-7 w-7 text-destructive" />
-      </div>
-    );
-  }
-
-  if (icon === "wallet") {
-    return (
-      <div
-        className={`${base} animate-pulse border-amber-500/30 bg-amber-500/10`}
-      >
-        <Wallet className="h-7 w-7 text-amber-500" />
-      </div>
-    );
-  }
-
-  return (
-    <div className={`${base} border-border bg-card/60`}>
-      <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
-    </div>
-  );
-}
-
-/* ───────── Page Component ───────── */
 
 const CoinPage: React.FC = () => {
   const params = useParams<{ id: string }>();
@@ -687,7 +82,6 @@ const CoinPage: React.FC = () => {
     isBusy: jlJupUsdSwapBusy,
   } = useServerSponsoredJLJupUSDSwap();
 
-  // ToJLJupUSD swap hook (for selling to Plus account)
   const {
     swap: toJlJupUsdSwap,
     status: toJlJupUsdSwapStatus,
@@ -696,11 +90,15 @@ const CoinPage: React.FC = () => {
     isBusy: toJlJupUsdSwapBusy,
   } = useServerSponsoredToJLJupUSDSwap();
 
+  /* ───────── Token Resolution ───────── */
+
   const slug = (params?.id || "").toString();
   const resolved = useMemo(() => resolveTokenFromSlug(slug), [slug]);
   const tokenFound = !!resolved;
   const meta = resolved?.meta;
   const mint = resolved?.mint ?? "";
+
+  /* ───────── State ───────── */
 
   const [timeframe, setTimeframe] = useState<TimeframeKey>("7D");
   const [history, setHistory] = useState<HistoricalPoint[]>([]);
@@ -730,11 +128,11 @@ const CoinPage: React.FC = () => {
   const [modal, setModal] = useState<ModalState>(null);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
-
   const [showDeposit, setShowDeposit] = useState(false);
-  const [addressCopied, setAddressCopied] = useState(false);
 
   const tradeStartedRef = useRef(false);
+
+  /* ───────── Derived Token Info ───────── */
 
   const name = meta?.name || meta?.symbol || "Unknown asset";
   const symbol = meta?.symbol || "";
@@ -742,10 +140,11 @@ const CoinPage: React.FC = () => {
     | TokenCategory
     | string;
   const logo = meta?.logo || null;
-
   const ownerBase58 = user?.walletAddress ?? "";
   const coingeckoId = (meta?.id || "").trim();
   const hasCoingeckoId = coingeckoId.length > 0;
+
+  /* ───────── Swap Status Logic ───────── */
 
   const swapStatus = useMemo(() => {
     if (side === "buy") {
@@ -810,12 +209,10 @@ const CoinPage: React.FC = () => {
 
   const tokenBalance = clampNumber(tokenPosition.amount);
   const tokenValueDisplay = clampNumber(tokenPosition.valueDisplay);
-
   const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0));
   const cashBalanceDisplay = clampNumber(
     typeof usdcUsd === "number" ? usdcUsd : 0,
   );
-
   const plusBalanceInternal = clampNumber(savingsPlusAmount);
   const plusBalanceDisplay = clampNumber(savingsPlusUsd);
 
@@ -829,7 +226,7 @@ const CoinPage: React.FC = () => {
       ? meta.decimals
       : 0;
 
-  /* ───────── Fetch spot price (CoinGecko or Jupiter fallback) ───────── */
+  /* ───────── Fetch Spot Price ───────── */
 
   useEffect(() => {
     const controller = new AbortController();
@@ -838,7 +235,6 @@ const CoinPage: React.FC = () => {
       try {
         setPriceLoading(true);
 
-        // If we have a CoinGecko ID, use CoinGecko first
         if (hasCoingeckoId) {
           const res = await fetch("/api/prices/coingecko", {
             method: "POST",
@@ -866,7 +262,6 @@ const CoinPage: React.FC = () => {
           }
         }
 
-        // Fallback to Jupiter price API using mint address
         if (mint) {
           const res = await fetch("/api/prices/jup", {
             method: "POST",
@@ -894,7 +289,6 @@ const CoinPage: React.FC = () => {
           }
         }
 
-        // No price available
         setSpotPriceUsd(null);
         setPriceChange24hPct(null);
         setPriceSource(null);
@@ -910,10 +304,9 @@ const CoinPage: React.FC = () => {
     return () => controller.abort();
   }, [coingeckoId, hasCoingeckoId, mint]);
 
-  /* ───────── Fetch history (only if CoinGecko ID exists) ───────── */
+  /* ───────── Fetch History ───────── */
 
   useEffect(() => {
-    // If no CoinGecko ID, skip chart loading entirely
     if (!hasCoingeckoId) {
       setHistory([]);
       setHistoryError(null);
@@ -958,7 +351,7 @@ const CoinPage: React.FC = () => {
     return () => controller.abort();
   }, [coingeckoId, hasCoingeckoId, timeframe]);
 
-  /* ───────── Derived values ───────── */
+  /* ───────── Derived Values ───────── */
 
   const spotPriceDisplay =
     spotPriceUsd && fxRate ? spotPriceUsd * fxRate : null;
@@ -968,9 +361,6 @@ const CoinPage: React.FC = () => {
     if (!fxRate || fxRate <= 0) return [];
     return history.map((p) => ({ t: p.t, y: p.price * fxRate }));
   }, [history, fxRate]);
-
-  const showChart = hasCoingeckoId && chartData.length > 0;
-  const showPriceOverlay = !hasCoingeckoId || (!historyLoading && !showChart);
 
   const cashNum = safeParse(cashAmount);
   const assetNum = safeParse(assetAmount);
@@ -1043,18 +433,10 @@ const CoinPage: React.FC = () => {
     };
   }, [spotPriceUsd, fxRate, side, lastEdited, cashUsd, assetUsd]);
 
-  const {
-    grossUsd,
-    feeDisplay,
-    netDisplay,
-    receiveAsset,
-    receiveCashDisplay,
-    payCashDisplay,
-  } = tradeCalculations;
-
+  const { grossUsd, payCashDisplay } = tradeCalculations;
   const grossUsdSafe = grossUsd > 0 && Number.isFinite(grossUsd) ? grossUsd : 0;
 
-  /* ───────── Sync fields ───────── */
+  /* ───────── Sync Fields ───────── */
 
   useEffect(() => {
     if (!fxRate || fxRate <= 0) return;
@@ -1110,7 +492,7 @@ const CoinPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fxRate, spotPriceUsd, lastEdited, side]);
 
-  /* ───────── Modal stage config ───────── */
+  /* ───────── Modal Stage Config ───────── */
 
   const currentStage = modal?.kind === "processing" ? swapStatus : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
@@ -1157,11 +539,23 @@ const CoinPage: React.FC = () => {
     setIsMaxSell(false);
   };
 
-  const handleUnitChange = (next: "cash" | "asset") => {
+  const handleInputUnitChange = (next: "cash" | "asset") => {
     setLocalErr(null);
     setIsMaxSell(false);
     setInputUnit(next);
     setLastEdited(next);
+  };
+
+  const handleAmountChange = (value: string, unit: "cash" | "asset") => {
+    setLocalErr(null);
+    setIsMaxSell(false);
+    if (unit === "cash") {
+      setLastEdited("cash");
+      setCashAmount(value);
+    } else {
+      setLastEdited("asset");
+      setAssetAmount(value);
+    }
   };
 
   const setQuickCash = (pct: number) => {
@@ -1242,7 +636,6 @@ const CoinPage: React.FC = () => {
           sig = result.signature;
         }
       } else {
-        // SELL side
         const sellAmountUi =
           lastEdited === "asset"
             ? assetNum
@@ -1256,7 +649,6 @@ const CoinPage: React.FC = () => {
         }
 
         if (receiveAccount === "cash") {
-          // Sell to USDC (Cash account)
           const result = await usdcSwap({
             kind: "sell",
             fromOwnerBase58: ownerBase58,
@@ -1268,7 +660,6 @@ const CoinPage: React.FC = () => {
           });
           sig = result.signature;
         } else {
-          // Sell to JLJupUSD (Plus account)
           const result = await toJlJupUsdSwap({
             fromOwnerBase58: ownerBase58,
             inputMint: mint,
@@ -1328,23 +719,7 @@ const CoinPage: React.FC = () => {
     resetInputs,
   ]);
 
-  const copyAddress = useCallback(async () => {
-    if (!ownerBase58) return;
-    try {
-      await navigator.clipboard.writeText(ownerBase58);
-      setAddressCopied(true);
-      setTimeout(() => setAddressCopied(false), 2000);
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = ownerBase58;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      setAddressCopied(true);
-      setTimeout(() => setAddressCopied(false), 2000);
-    }
-  }, [ownerBase58]);
+  /* ───────── Derived UI State ───────── */
 
   const inputsDisabled = swapBusy;
 
@@ -1364,178 +739,24 @@ const CoinPage: React.FC = () => {
     grossUsdSafe <= 0 ||
     (side === "buy" ? activeBalanceInternal <= 0 : tokenBalance <= 0);
 
-  const errorToShow = localErr || swapError?.message;
-
-  const assetLine = `You own: ${formatQty(tokenBalance, 6)} ${symbol || "ASSET"} · ${formatMoneyNoCode(tokenValueDisplay)}`;
+  const errorToShow = modal ? null : localErr || swapError?.message;
 
   /* ───────── Not Found ───────── */
 
   if (!tokenFound) {
-    return (
-      <main className="haven-app">
-        <div className="mx-auto w-full max-w-[520px] px-3 pb-10 pt-4 sm:px-4">
-          <div className="haven-card overflow-hidden">
-            <div className="flex items-center gap-2 border-b bg-card/60 px-3 py-3 backdrop-blur-xl sm:px-4">
-              <button
-                type="button"
-                onClick={() => router.back()}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border bg-card/80 shadow-fintech-sm transition-colors hover:bg-secondary active:scale-[0.98]"
-                aria-label="Back"
-              >
-                <ArrowLeft className="h-4 w-4 text-foreground/70" />
-              </button>
-
-              <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
-                  Exchange
-                </h1>
-                <p className="truncate text-[11px] text-muted-foreground">
-                  Asset not found on {CLUSTER}.
-                </p>
-              </div>
-            </div>
-
-            <div className="p-3 sm:p-4">
-              <div className="rounded-3xl border border-destructive/30 bg-destructive/10 px-4 py-4 text-sm text-foreground">
-                This asset isn&apos;t available for the current network. Go back
-                and select an asset from Exchange.
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
+    return <NotFoundView />;
   }
-
-  const pct = typeof priceChange24hPct === "number" ? priceChange24hPct : null;
-  const isUp = (pct ?? 0) >= 0;
 
   /* ───────── Render ───────── */
 
   return (
     <main className="haven-app">
-      {/* ───────── MODAL ───────── */}
-      {modal && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-background/80 px-4 backdrop-blur"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && modal.kind !== "processing") {
-              closeModal();
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-sm rounded-3xl border bg-card p-5 shadow-fintech-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {modal.kind !== "processing" && (
-              <div className="mb-2 flex justify-end">
-                <button
-                  onClick={closeModal}
-                  className="rounded-xl border bg-card/60 p-2 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            )}
-
-            <div className="flex flex-col items-center text-center pt-2">
-              {modal.kind === "processing" && stageConfig ? (
-                <>
-                  <StageIcon icon={stageConfig.icon} />
-                  <div className="mt-4">
-                    <div className="text-base font-semibold text-foreground">
-                      {stageConfig.title}
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {stageConfig.subtitle}
-                    </div>
-                  </div>
-                  <div className="mt-5 w-full max-w-[200px]">
-                    <ProgressBar progress={stageConfig.progress} />
-                  </div>
-                </>
-              ) : modal.kind === "success" ? (
-                <>
-                  <StageIcon icon="success" />
-                  <div className="mt-4">
-                    <div className="text-base font-semibold text-foreground">
-                      {modal.side === "buy"
-                        ? "Purchase complete!"
-                        : "Sale complete!"}
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      Your {modal.symbol || "asset"}{" "}
-                      {modal.side === "buy" ? "purchase" : "sale"} was
-                      successful
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <StageIcon icon="error" />
-                  <div className="mt-4">
-                    <div className="text-base font-semibold text-foreground">
-                      Order failed
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      Something went wrong
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {modal.kind === "error" && modal.errorMessage && (
-              <div className="mt-4 rounded-2xl border border-destructive/20 bg-destructive/10 p-3">
-                <div className="text-xs text-foreground text-center">
-                  {modal.errorMessage}
-                </div>
-              </div>
-            )}
-
-            {modal.kind === "success" && modal.signature && (
-              <div className="mt-5">
-                <a
-                  href={explorerUrl(modal.signature)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center justify-between rounded-2xl border bg-card/60 px-4 py-3 text-sm text-foreground/80 transition hover:bg-secondary"
-                >
-                  <span>View transaction</span>
-                  <ExternalLink className="h-4 w-4 opacity-60" />
-                </a>
-              </div>
-            )}
-
-            {modal.kind !== "processing" && (
-              <div className="mt-5 flex gap-2">
-                <button
-                  onClick={closeModal}
-                  className="haven-btn-secondary flex-1 rounded-2xl px-4 py-3 text-sm font-semibold"
-                >
-                  Close
-                </button>
-
-                {modal.kind === "success" && (
-                  <Link
-                    href="/invest"
-                    className="flex-1 rounded-2xl border border-primary/30 bg-primary/10 px-4 py-3 text-center text-sm font-semibold text-foreground transition hover:bg-primary/15"
-                  >
-                    View assets
-                  </Link>
-                )}
-              </div>
-            )}
-
-            {modal.kind === "processing" && (
-              <div className="mt-6 text-center text-xs text-muted-foreground">
-                Please don&apos;t close this window
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Modal */}
+      <TradeModal
+        modal={modal}
+        stageConfig={stageConfig}
+        onClose={closeModal}
+      />
 
       <div className="mx-auto w-full max-w-[520px] px-3 pb-10 pt-4 sm:max-w-[720px] sm:px-4 xl:max-w-5xl">
         <div className="haven-card overflow-hidden">
@@ -1566,894 +787,78 @@ const CoinPage: React.FC = () => {
           <div className="p-3 sm:p-4">
             <div className="grid gap-3 xl:grid-cols-2 xl:gap-4">
               {/* LEFT: Price + Chart */}
-              <section className="min-w-0 space-y-3">
-                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
-                  <div className="flex items-center gap-3">
-                    {logo ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={logo}
-                        alt={name}
-                        className="h-10 w-10 rounded-full border bg-card/60 object-cover"
-                      />
-                    ) : (
-                      <div className="h-10 w-10 rounded-full border bg-card/60" />
-                    )}
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-foreground">
-                          {name}
-                        </p>
-                        {!!category && (
-                          <span className="haven-pill">{category}</span>
-                        )}
-                        {priceSource === "jupiter" && (
-                          <span className="haven-pill bg-amber-500/10 text-amber-600">
-                            Jupiter
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-1 flex items-baseline gap-2">
-                        <span className="text-3xl font-semibold tracking-tight text-foreground">
-                          {priceLoading && spotPriceDisplay === null
-                            ? "…"
-                            : formatMoneyNoCode(spotPriceDisplay)}
-                        </span>
-
-                        <span
-                          className={[
-                            "inline-flex items-center gap-1 text-sm font-semibold",
-                            pct === null
-                              ? "text-muted-foreground"
-                              : isUp
-                                ? "text-primary"
-                                : "text-destructive",
-                          ].join(" ")}
-                        >
-                          {pct === null ? null : isUp ? (
-                            <ArrowUpRight className="h-4 w-4" />
-                          ) : (
-                            <ArrowDownRight className="h-4 w-4" />
-                          )}
-                          {pct === null ? "—" : `${pct.toFixed(2)}%`}
-                        </span>
-
-                        <span className="text-xs text-muted-foreground">
-                          (24h)
-                        </span>
-                      </div>
-
-                      {hasCoingeckoId && chartData.length > 0 && (
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          {TIMEFRAMES[timeframe].label} perf{" "}
-                          <span
-                            className={
-                              perfPct > 0
-                                ? "text-primary"
-                                : perfPct < 0
-                                  ? "text-destructive"
-                                  : "text-muted-foreground"
-                            }
-                          >
-                            {formatPct(perfPct)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Chart or Price Overlay */}
-                  <div className="mt-3 overflow-hidden rounded-3xl border bg-card/60">
-                    {hasCoingeckoId && (
-                      <div className="flex items-center justify-between border-b bg-card/60 px-3 py-2">
-                        <p className="text-[11px] font-medium text-muted-foreground">
-                          {showChart ? "Price chart" : "Price"}
-                        </p>
-
-                        {showChart && (
-                          <div className="flex gap-1 rounded-full border bg-card/60 p-0.5 text-[11px]">
-                            {(Object.keys(TIMEFRAMES) as TimeframeKey[]).map(
-                              (tf) => {
-                                const active = tf === timeframe;
-                                return (
-                                  <button
-                                    key={tf}
-                                    type="button"
-                                    disabled={swapBusy}
-                                    onClick={() => setTimeframe(tf)}
-                                    className={[
-                                      "rounded-full px-2.5 py-1 font-semibold transition disabled:opacity-50",
-                                      active
-                                        ? "bg-primary text-primary-foreground"
-                                        : "text-foreground/80 hover:bg-secondary",
-                                    ].join(" ")}
-                                  >
-                                    {TIMEFRAMES[tf].label}
-                                  </button>
-                                );
-                              },
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {!hasCoingeckoId && (
-                      <div className="flex items-center justify-between border-b bg-card/60 px-3 py-2">
-                        <p className="text-[11px] font-medium text-muted-foreground">
-                          Live price
-                        </p>
-                        <span className="text-[10px] text-amber-600">
-                          Chart unavailable
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="px-3 pb-3 pt-3 sm:px-4">
-                      {showChart ? (
-                        <SleekLineChart
-                          data={chartData}
-                          displayCurrency={displayCurrency}
-                          timeframe={timeframe}
-                        />
-                      ) : historyLoading && hasCoingeckoId ? (
-                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-                          Loading chart…
-                        </div>
-                      ) : historyError && hasCoingeckoId ? (
-                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-                          {historyError}
-                        </div>
-                      ) : (
-                        <PriceDisplayOverlay
-                          price={spotPriceDisplay}
-                          priceChange24hPct={priceChange24hPct}
-                          symbol={symbol}
-                          loading={priceLoading}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </section>
+              <PriceChartSection
+                name={name}
+                symbol={symbol}
+                logo={logo}
+                category={category}
+                priceSource={priceSource}
+                spotPriceDisplay={spotPriceDisplay}
+                priceChange24hPct={priceChange24hPct}
+                priceLoading={priceLoading}
+                hasCoingeckoId={hasCoingeckoId}
+                chartData={chartData}
+                historyLoading={historyLoading}
+                historyError={historyError}
+                timeframe={timeframe}
+                onTimeframeChange={setTimeframe}
+                displayCurrency={displayCurrency}
+                perfPct={perfPct}
+                swapBusy={swapBusy}
+              />
 
               {/* RIGHT: Trade */}
-              <section className="min-w-0 space-y-3">
-                <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">
-                        Trade
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
-                        Buy or sell {symbol || name}.
-                      </p>
-                    </div>
-
-                    <div className="inline-flex rounded-full border bg-card/60 p-0.5 text-[11px]">
-                      <button
-                        type="button"
-                        disabled={swapBusy}
-                        onClick={() => handleSideChange("buy")}
-                        className={[
-                          "rounded-full px-3 py-1 font-semibold transition disabled:opacity-50",
-                          side === "buy"
-                            ? "bg-primary text-primary-foreground"
-                            : "text-foreground/80 hover:bg-secondary",
-                        ].join(" ")}
-                      >
-                        Buy
-                      </button>
-                      <button
-                        type="button"
-                        disabled={swapBusy}
-                        onClick={() => handleSideChange("sell")}
-                        className={[
-                          "rounded-full px-3 py-1 font-semibold transition disabled:opacity-50",
-                          side === "sell"
-                            ? "bg-destructive text-destructive-foreground"
-                            : "text-foreground/80 hover:bg-secondary",
-                        ].join(" ")}
-                      >
-                        Sell
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Payment Account Selector (only for BUY) */}
-                  {side === "buy" && (
-                    <div className="mt-3">
-                      <p className="mb-2 text-[11px] text-muted-foreground">
-                        Pay from
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          disabled={swapBusy || cashBalanceInternal <= 0}
-                          onClick={() => handlePaymentAccountChange("cash")}
-                          className={[
-                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
-                            paymentAccount === "cash"
-                              ? "border-primary/50 bg-primary/10"
-                              : "border-border bg-card/60 hover:bg-secondary",
-                            (swapBusy || cashBalanceInternal <= 0) &&
-                              "opacity-50",
-                          ].join(" ")}
-                        >
-                          <div
-                            className={[
-                              "flex h-8 w-8 items-center justify-center rounded-xl",
-                              paymentAccount === "cash"
-                                ? "bg-primary/20"
-                                : "bg-muted/40",
-                            ].join(" ")}
-                          >
-                            <Landmark
-                              className={[
-                                "h-4 w-4",
-                                paymentAccount === "cash"
-                                  ? "text-primary"
-                                  : "text-muted-foreground",
-                              ].join(" ")}
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-semibold text-foreground">
-                              Cash
-                            </p>
-                            <p className="text-[11px] text-muted-foreground">
-                              {formatMoneyNoCode(cashBalanceDisplay)}
-                            </p>
-                          </div>
-                          {paymentAccount === "cash" && (
-                            <div className="h-2 w-2 rounded-full bg-primary" />
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={
-                            swapBusy || !plusReady || plusBalanceInternal <= 0
-                          }
-                          onClick={() => handlePaymentAccountChange("plus")}
-                          className={[
-                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
-                            paymentAccount === "plus"
-                              ? "border-primary/50 bg-primary/10"
-                              : "border-border bg-card/60 hover:bg-secondary",
-                            (swapBusy ||
-                              !plusReady ||
-                              plusBalanceInternal <= 0) &&
-                              "opacity-50",
-                          ].join(" ")}
-                        >
-                          <div
-                            className={[
-                              "flex h-8 w-8 items-center justify-center rounded-xl",
-                              paymentAccount === "plus"
-                                ? "bg-primary/20"
-                                : "bg-muted/40",
-                            ].join(" ")}
-                          >
-                            <TrendingUp
-                              className={[
-                                "h-4 w-4",
-                                paymentAccount === "plus"
-                                  ? "text-primary"
-                                  : "text-muted-foreground",
-                              ].join(" ")}
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-semibold text-foreground">
-                              Plus
-                            </p>
-                            <p className="text-[11px] text-muted-foreground">
-                              {!plusReady
-                                ? "Loading..."
-                                : formatMoneyNoCode(plusBalanceDisplay)}
-                            </p>
-                          </div>
-                          {paymentAccount === "plus" && (
-                            <div className="h-2 w-2 rounded-full bg-primary" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Receive Account Selector (only for SELL) */}
-                  {side === "sell" && (
-                    <div className="mt-3">
-                      <p className="mb-2 text-[11px] text-muted-foreground">
-                        Receive to
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          disabled={swapBusy}
-                          onClick={() => handleReceiveAccountChange("cash")}
-                          className={[
-                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
-                            receiveAccount === "cash"
-                              ? "border-primary/50 bg-primary/10"
-                              : "border-border bg-card/60 hover:bg-secondary",
-                            swapBusy && "opacity-50",
-                          ].join(" ")}
-                        >
-                          <div
-                            className={[
-                              "flex h-8 w-8 items-center justify-center rounded-xl",
-                              receiveAccount === "cash"
-                                ? "bg-primary/20"
-                                : "bg-muted/40",
-                            ].join(" ")}
-                          >
-                            <Landmark
-                              className={[
-                                "h-4 w-4",
-                                receiveAccount === "cash"
-                                  ? "text-primary"
-                                  : "text-muted-foreground",
-                              ].join(" ")}
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-semibold text-foreground">
-                              Cash
-                            </p>
-                            <p className="text-[11px] text-muted-foreground">
-                              USDC
-                            </p>
-                          </div>
-                          {receiveAccount === "cash" && (
-                            <div className="h-2 w-2 rounded-full bg-primary" />
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={swapBusy || !plusReady}
-                          onClick={() => handleReceiveAccountChange("plus")}
-                          className={[
-                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
-                            receiveAccount === "plus"
-                              ? "border-primary/50 bg-primary/10"
-                              : "border-border bg-card/60 hover:bg-secondary",
-                            (swapBusy || !plusReady) && "opacity-50",
-                          ].join(" ")}
-                        >
-                          <div
-                            className={[
-                              "flex h-8 w-8 items-center justify-center rounded-xl",
-                              receiveAccount === "plus"
-                                ? "bg-primary/20"
-                                : "bg-muted/40",
-                            ].join(" ")}
-                          >
-                            <TrendingUp
-                              className={[
-                                "h-4 w-4",
-                                receiveAccount === "plus"
-                                  ? "text-primary"
-                                  : "text-muted-foreground",
-                              ].join(" ")}
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-semibold text-foreground">
-                              Plus
-                            </p>
-                            <p className="text-[11px] text-muted-foreground">
-                              Earn yield
-                            </p>
-                          </div>
-                          {receiveAccount === "plus" && (
-                            <div className="h-2 w-2 rounded-full bg-primary" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Context (for sell side) */}
-                  {side === "sell" && (
-                    <div className="mt-3 rounded-2xl border bg-card/60 px-3 py-2 text-[12px]">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-muted-foreground">
-                          Asset balance
-                        </span>
-                        <span className="font-medium text-foreground">
-                          {assetLine}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Amount input + unit toggle */}
-                  <div className="mt-3">
-                    <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span>
-                        {side === "buy"
-                          ? "Choose how you want to buy"
-                          : "Choose how you want to sell"}
-                      </span>
-
-                      <button
-                        type="button"
-                        disabled={inputsDisabled}
-                        onClick={() => setShowBreakdown((v) => !v)}
-                        className="inline-flex items-center gap-1 text-[11px] text-foreground/80 hover:text-foreground disabled:opacity-50"
-                      >
-                        Fees
-                        {showBreakdown ? (
-                          <ChevronUp className="h-3 w-3" />
-                        ) : (
-                          <ChevronDown className="h-3 w-3" />
-                        )}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2 overflow-hidden rounded-2xl border bg-card/60 px-3 py-2 sm:px-3.5 sm:py-2.5">
-                      <input
-                        value={inputUnit === "cash" ? cashAmount : assetAmount}
-                        disabled={inputsDisabled}
-                        onChange={(e) => {
-                          setLocalErr(null);
-                          setIsMaxSell(false);
-                          const v = e.target.value;
-                          if (inputUnit === "cash") {
-                            setLastEdited("cash");
-                            setCashAmount(v);
-                          } else {
-                            setLastEdited("asset");
-                            setAssetAmount(v);
-                          }
-                        }}
-                        type="text"
-                        inputMode="decimal"
-                        autoComplete="off"
-                        placeholder="0.00"
-                        className="min-w-0 flex-1 bg-transparent text-right text-xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
-                      />
-
-                      {side === "sell" &&
-                        inputUnit === "asset" &&
-                        tokenBalance > 0 && (
-                          <button
-                            type="button"
-                            disabled={inputsDisabled}
-                            onClick={setSellMax}
-                            className="shrink-0 rounded-full border bg-card/80 px-2.5 py-1 text-[11px] font-semibold text-foreground transition hover:bg-secondary disabled:opacity-50"
-                          >
-                            Max
-                          </button>
-                        )}
-
-                      <div className="inline-flex rounded-full border bg-card/60 p-0.5 text-[11px]">
-                        <button
-                          type="button"
-                          disabled={inputsDisabled}
-                          onClick={() => handleUnitChange("cash")}
-                          className={[
-                            "rounded-full px-2.5 py-1 font-semibold transition disabled:opacity-50",
-                            inputUnit === "cash"
-                              ? "bg-secondary text-foreground"
-                              : "text-foreground/80 hover:bg-secondary",
-                          ].join(" ")}
-                        >
-                          Cash
-                        </button>
-                        <button
-                          type="button"
-                          disabled={inputsDisabled}
-                          onClick={() => handleUnitChange("asset")}
-                          className={[
-                            "rounded-full px-2.5 py-1 font-semibold transition disabled:opacity-50",
-                            inputUnit === "asset"
-                              ? "bg-secondary text-foreground"
-                              : "text-foreground/80 hover:bg-secondary",
-                          ].join(" ")}
-                        >
-                          {symbol || "Asset"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Quick actions for buys */}
-                    {side === "buy" && inputUnit === "cash" && (
-                      <div className="mt-2 flex gap-2">
-                        {[0.25, 0.5, 0.75, 1].map((p) => (
-                          <button
-                            key={p}
-                            type="button"
-                            disabled={
-                              inputsDisabled || activeBalanceDisplay <= 0
-                            }
-                            onClick={() => setQuickCash(p)}
-                            className="flex-1 rounded-2xl border bg-card/60 px-3 py-2 text-[11px] font-semibold text-foreground transition hover:bg-secondary disabled:opacity-50"
-                          >
-                            {p === 1 ? "Max" : `${Math.round(p * 100)}%`}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Bank-style preview */}
-                  <div className="mt-3 rounded-2xl border bg-card/60 px-3 py-3 text-[12px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">
-                        {side === "buy" ? "You pay" : "You sell"}
-                      </span>
-                      <span className="font-semibold text-foreground">
-                        {side === "buy"
-                          ? formatMoneyNoCode(payCashDisplay)
-                          : `${formatQty(lastEdited === "asset" ? assetNum : tradeCalculations.payAsset, 6)} ${symbol || "ASSET"}`}
-                      </span>
-                    </div>
-
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="text-muted-foreground">
-                        You receive
-                        {lastEdited === "asset" && side === "buy"
-                          ? ""
-                          : " (approx.)"}
-                        {side === "sell" && (
-                          <span className="ml-1 text-[10px]">
-                            → {receiveAccount === "cash" ? "Cash" : "Plus"}
-                          </span>
-                        )}
-                      </span>
-                      <span className="font-semibold text-foreground">
-                        {side === "buy"
-                          ? `${formatQty(receiveAsset, 6)} ${symbol || "ASSET"}`
-                          : formatMoneyNoCode(receiveCashDisplay)}
-                      </span>
-                    </div>
-
-                    {side === "buy" &&
-                      lastEdited === "asset" &&
-                      assetNum > 0 && (
-                        <div className="mt-2 text-[11px] text-primary">
-                          ✓ You&apos;ll receive exactly {formatQty(assetNum, 6)}{" "}
-                          {symbol}
-                        </div>
-                      )}
-
-                    {side === "sell" &&
-                      receiveAccount === "plus" &&
-                      receiveCashDisplay > 0 && (
-                        <div className="mt-2 text-[11px] text-primary">
-                          ✓ Proceeds will be deposited to Plus and start earning
-                          yield
-                        </div>
-                      )}
-
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span>Rate</span>
-                      <span>
-                        1 {symbol || "ASSET"} ≈{" "}
-                        {formatMoneyNoCode(spotPriceDisplay)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Fee breakdown */}
-                  {showBreakdown && (
-                    <div className="mt-2 rounded-2xl border bg-card/60 px-3 py-2 text-[12px]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Haven fee</span>
-                        <span className="font-medium text-foreground">
-                          {formatMoneyNoCode(feeDisplay)}{" "}
-                          <span className="text-muted-foreground">
-                            ({SWAP_FEE_PCT_DISPLAY.toFixed(2)}%)
-                          </span>
-                        </span>
-                      </div>
-
-                      <div className="mt-1 flex items-center justify-between">
-                        <span className="text-muted-foreground">
-                          Net amount
-                        </span>
-                        <span className="font-semibold text-foreground">
-                          {formatMoneyNoCode(netDisplay)}
-                        </span>
-                      </div>
-
-                      <div className="mt-2 text-[11px] text-muted-foreground">
-                        {side === "buy" && lastEdited === "asset"
-                          ? "Fee is added to your payment to ensure you receive the exact amount."
-                          : "Fees are taken from the order amount."}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* CTA */}
-                  <div className="mt-4 space-y-2">
-                    <button
-                      type="button"
-                      className="haven-btn-primary w-full rounded-2xl py-3 text-sm font-semibold"
-                      disabled={primaryDisabled}
-                      onClick={() => void executeTrade()}
-                    >
-                      {swapBusy ? (
-                        <span className="flex items-center justify-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Processing...
-                        </span>
-                      ) : side === "buy" ? (
-                        `Buy ${symbol || "asset"}`
-                      ) : (
-                        `Sell ${symbol || "asset"}`
-                      )}
-                    </button>
-
-                    {errorToShow && !modal && (
-                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-foreground">
-                        {errorToShow}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Details toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setShowDetails((v) => !v)}
-                    className="mt-4 inline-flex items-center gap-2 text-[11px] text-muted-foreground hover:text-foreground"
-                  >
-                    <Info className="h-3 w-3" />
-                    {showDetails ? "Hide details" : "Show details"}
-                    {showDetails ? (
-                      <ChevronUp className="h-3 w-3" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
-                  </button>
-
-                  {showDetails && (
-                    <div className="mt-2 rounded-2xl border bg-card/60 px-3 py-3 text-[12px]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Mint</span>
-                        <span className="max-w-[220px] truncate font-mono text-[11px] text-foreground">
-                          {mint}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-muted-foreground">Fee</span>
-                        <span className="font-medium text-foreground">
-                          {SWAP_FEE_PCT_DISPLAY.toFixed(2)}%
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-muted-foreground">Cluster</span>
-                        <span className="font-medium text-foreground">
-                          {CLUSTER}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-muted-foreground">
-                          Price source
-                        </span>
-                        <span className="font-medium text-foreground">
-                          {priceSource === "jupiter"
-                            ? "Jupiter"
-                            : priceSource === "coingecko"
-                              ? "CoinGecko"
-                              : "—"}
-                        </span>
-                      </div>
-                      {side === "buy" && (
-                        <div className="mt-2 flex items-center justify-between">
-                          <span className="text-muted-foreground">
-                            Payment source
-                          </span>
-                          <span className="font-medium text-foreground">
-                            {paymentAccount === "cash"
-                              ? "Cash (USDC)"
-                              : "Plus (JLJupUSD)"}
-                          </span>
-                        </div>
-                      )}
-                      {side === "sell" && (
-                        <div className="mt-2 flex items-center justify-between">
-                          <span className="text-muted-foreground">
-                            Receive to
-                          </span>
-                          <span className="font-medium text-foreground">
-                            {receiveAccount === "cash"
-                              ? "Cash (USDC)"
-                              : "Plus (JLJupUSD)"}
-                          </span>
-                        </div>
-                      )}
-
-                      {hasCoingeckoId ? (
-                        <div className="mt-2 flex items-center justify-between">
-                          <span className="text-muted-foreground">
-                            CoinGecko
-                          </span>
-                          <span className="font-medium text-foreground">
-                            {coingeckoId}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-[11px] text-amber-500">
-                          This token has no CoinGecko id — price via Jupiter,
-                          chart unavailable.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </section>
+              <TradePanel
+                name={name}
+                symbol={symbol}
+                mint={mint}
+                coingeckoId={coingeckoId}
+                hasCoingeckoId={hasCoingeckoId}
+                priceSource={priceSource}
+                side={side}
+                onSideChange={handleSideChange}
+                paymentAccount={paymentAccount}
+                onPaymentAccountChange={handlePaymentAccountChange}
+                receiveAccount={receiveAccount}
+                onReceiveAccountChange={handleReceiveAccountChange}
+                inputUnit={inputUnit}
+                onInputUnitChange={handleInputUnitChange}
+                cashAmount={cashAmount}
+                assetAmount={assetAmount}
+                onAmountChange={handleAmountChange}
+                lastEdited={lastEdited}
+                cashBalanceDisplay={cashBalanceDisplay}
+                cashBalanceInternal={cashBalanceInternal}
+                plusBalanceDisplay={plusBalanceDisplay}
+                plusBalanceInternal={plusBalanceInternal}
+                plusReady={plusReady}
+                tokenBalance={tokenBalance}
+                tokenValueDisplay={tokenValueDisplay}
+                activeBalanceDisplay={activeBalanceDisplay}
+                tradeCalculations={tradeCalculations}
+                spotPriceDisplay={spotPriceDisplay}
+                assetNum={assetNum}
+                swapBusy={swapBusy}
+                inputsDisabled={inputsDisabled}
+                primaryDisabled={primaryDisabled}
+                showBreakdown={showBreakdown}
+                onShowBreakdownChange={setShowBreakdown}
+                showDetails={showDetails}
+                onShowDetailsChange={setShowDetails}
+                errorToShow={errorToShow}
+                onSetQuickCash={setQuickCash}
+                onSetSellMax={setSellMax}
+                onExecuteTrade={() => void executeTrade()}
+              />
             </div>
 
-            {/* ───────── DEPOSIT SECTION ───────── */}
-            <section className="mt-4">
-              <div className="haven-card-soft px-3 py-3 sm:px-4 sm:py-4">
-                <button
-                  type="button"
-                  onClick={() => setShowDeposit((v) => !v)}
-                  className="flex w-full items-center justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl border bg-primary/10">
-                      <QrCode className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold text-foreground">
-                        Deposit {symbol || "tokens"}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        Transfer from another wallet or exchange
-                      </p>
-                    </div>
-                  </div>
-                  {showDeposit ? (
-                    <ChevronUp className="h-5 w-5 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                  )}
-                </button>
-
-                {showDeposit && (
-                  <div className="mt-4 space-y-4">
-                    {/* Warning banner */}
-                    <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-3">
-                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-                      <div className="text-[12px]">
-                        <p className="font-semibold text-foreground">
-                          Important
-                        </p>
-                        <p className="mt-1 text-muted-foreground">
-                          Only send{" "}
-                          <span className="font-semibold text-foreground">
-                            {symbol || "this token"}
-                          </span>{" "}
-                          to this address. Sending other tokens or using the
-                          wrong network will result in{" "}
-                          <span className="font-semibold text-destructive">
-                            permanent loss
-                          </span>
-                          .
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* QR Code and Address */}
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {/* QR Code */}
-                      <div className="flex flex-col items-center rounded-2xl border bg-card/60 px-4 py-4">
-                        <p className="mb-3 text-[11px] font-medium text-muted-foreground">
-                          Scan with your wallet app
-                        </p>
-                        {ownerBase58 ? (
-                          <div className="rounded-xl bg-white p-3">
-                            <WalletQRCode value={ownerBase58} size={140} />
-                          </div>
-                        ) : (
-                          <div className="flex h-[164px] w-[164px] items-center justify-center rounded-xl border bg-muted/20">
-                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                          </div>
-                        )}
-                        <p className="mt-3 text-[11px] text-muted-foreground">
-                          Works with Phantom, Solflare, and others
-                        </p>
-                      </div>
-
-                      {/* Address details */}
-                      <div className="space-y-3">
-                        <div className="rounded-2xl border bg-card/60 px-3 py-3">
-                          <div className="flex items-center justify-between">
-                            <p className="text-[11px] font-medium text-muted-foreground">
-                              Your deposit address
-                            </p>
-                            <button
-                              type="button"
-                              onClick={copyAddress}
-                              disabled={!ownerBase58}
-                              className="inline-flex items-center gap-1.5 rounded-full border bg-card/80 px-2.5 py-1 text-[11px] font-semibold text-foreground transition hover:bg-secondary disabled:opacity-50"
-                            >
-                              {addressCopied ? (
-                                <>
-                                  <Check className="h-3 w-3 text-primary" />
-                                  Copied!
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="h-3 w-3" />
-                                  Copy
-                                </>
-                              )}
-                            </button>
-                          </div>
-                          <div className="mt-2 rounded-xl border bg-muted/20 px-3 py-2">
-                            <p className="break-all font-mono text-[11px] text-foreground">
-                              {ownerBase58 || "Loading..."}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border bg-card/60 px-3 py-3">
-                          <p className="text-[11px] font-semibold text-foreground">
-                            How to deposit
-                          </p>
-                          <ol className="mt-2 space-y-1.5 text-[11px] text-muted-foreground">
-                            <li className="flex items-start gap-2">
-                              <span className="font-semibold text-primary">
-                                1.
-                              </span>
-                              <span>Open your wallet app or exchange</span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                              <span className="font-semibold text-primary">
-                                2.
-                              </span>
-                              <span>
-                                Select{" "}
-                                <span className="font-semibold text-foreground">
-                                  {symbol || "the token"}
-                                </span>{" "}
-                                and tap Send
-                              </span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                              <span className="font-semibold text-primary">
-                                3.
-                              </span>
-                              <span>
-                                Scan the QR code or paste the address above
-                              </span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                              <span className="font-semibold text-primary">
-                                4.
-                              </span>
-                              <span>Confirm and wait a few seconds</span>
-                            </li>
-                          </ol>
-                        </div>
-
-                        {ownerBase58 && (
-                          <a
-                            href={`https://solscan.io/account/${ownerBase58}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center justify-center gap-2 rounded-2xl border bg-card/60 px-4 py-2.5 text-[11px] font-medium text-foreground transition hover:bg-secondary"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5 opacity-60" />
-                            View transaction history
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </section>
+            {/* Deposit Section */}
+            <DepositSection
+              symbol={symbol}
+              ownerBase58={ownerBase58}
+              showDeposit={showDeposit}
+              onShowDepositChange={setShowDeposit}
+            />
           </div>
         </div>
       </div>
