@@ -46,6 +46,7 @@ import {
   type UsdcSwapStatus,
 } from "@/hooks/useServerSponsoredUsdcSwap";
 import { useServerSponsoredJLJupUSDSwap } from "@/hooks/Useserversponsoredjljupusdswap";
+import { useServerSponsoredToJLJupUSDSwap } from "@/hooks/Useserversponsoredtojljupusdswap";
 
 const CLUSTER = getCluster();
 
@@ -70,6 +71,22 @@ type SpotResp = {
   >;
 };
 
+// Jupiter price API response type
+type JupPriceResp = {
+  prices: Record<
+    string,
+    {
+      price: number;
+      priceChange24hPct: number | null;
+      mcap: number | null;
+      fdv: number | null;
+      liquidity: number | null;
+      volume24h: number | null;
+      marketCapRank: number | null;
+    }
+  >;
+};
+
 type TimeframeKey = "1D" | "7D" | "30D" | "90D";
 
 const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
@@ -82,6 +99,7 @@ const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
 /* ───────── Account Types ───────── */
 
 type PaymentAccount = "cash" | "plus";
+type ReceiveAccount = "cash" | "plus";
 
 /* ───────── Stage Config (matches MultiplierPanel) ───────── */
 
@@ -175,9 +193,6 @@ const resolveTokenFromSlug = (slug: string): ResolvedToken | null => {
   return null;
 };
 
-/**
- * "$1.00" style everywhere (no "CA$")
- */
 const formatMoneyNoCode = (v?: number | null) => {
   const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
   return n.toLocaleString("en-US", {
@@ -210,11 +225,6 @@ function explorerUrl(sig: string) {
   return `https://solscan.io/tx/${sig}`;
 }
 
-/**
- * Given a desired net amount and fee rate, calculate the gross amount needed.
- * gross = net / (1 - feeRate)
- * This ensures: gross - (gross * feeRate) = net
- */
 function grossUpForFee(netAmount: number, feeRate: number): number {
   if (feeRate <= 0 || feeRate >= 1) return netAmount;
   return netAmount / (1 - feeRate);
@@ -235,10 +245,7 @@ function WalletQRCode({ value, size = 140 }: { value: string; size?: number }) {
         const dataUrl = await QRCode.toDataURL(value, {
           width: size * 2,
           margin: 1,
-          color: {
-            dark: "#000000",
-            light: "#ffffff",
-          },
+          color: { dark: "#000000", light: "#ffffff" },
           errorCorrectionLevel: "M",
         });
         setQrDataUrl(dataUrl);
@@ -530,6 +537,67 @@ function SleekLineChart({
   );
 }
 
+/* ───────── Price Display Overlay (for tokens without chart data) ───────── */
+
+function PriceDisplayOverlay({
+  price,
+  priceChange24hPct,
+  symbol,
+  loading,
+}: {
+  price: number | null;
+  priceChange24hPct: number | null;
+  symbol: string;
+  loading: boolean;
+}) {
+  const isUp = (priceChange24hPct ?? 0) >= 0;
+
+  return (
+    <div className="flex h-[210px] flex-col items-center justify-center rounded-2xl border border-dashed border-border/50 bg-muted/10">
+      {loading ? (
+        <div className="flex flex-col items-center gap-2">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">
+            Loading price...
+          </span>
+        </div>
+      ) : price !== null ? (
+        <div className="flex flex-col items-center gap-3">
+          <div className="text-4xl font-bold tracking-tight text-foreground">
+            {formatMoneyNoCode(price)}
+          </div>
+          {priceChange24hPct !== null && (
+            <div
+              className={[
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold",
+                isUp
+                  ? "bg-primary/10 text-primary"
+                  : "bg-destructive/10 text-destructive",
+              ].join(" ")}
+            >
+              {isUp ? (
+                <ArrowUpRight className="h-4 w-4" />
+              ) : (
+                <ArrowDownRight className="h-4 w-4" />
+              )}
+              {formatPct(priceChange24hPct)}
+              <span className="text-xs opacity-70">(24h)</span>
+            </div>
+          )}
+          <div className="mt-1 text-xs text-muted-foreground">
+            {symbol} · Live price from Jupiter
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+          <Info className="h-5 w-5" />
+          <span className="text-xs">Price unavailable</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ───────── Modal Sub-Components ───────── */
 
 function ProgressBar({ progress }: { progress: number }) {
@@ -603,7 +671,6 @@ const CoinPage: React.FC = () => {
     refresh: refreshBalances,
   } = useBalance();
 
-  // USDC swap hook (for Cash account)
   const {
     swap: usdcSwap,
     status: usdcSwapStatus,
@@ -612,16 +679,22 @@ const CoinPage: React.FC = () => {
     isBusy: usdcSwapBusy,
   } = useServerSponsoredUsdcSwap();
 
-  // JLJupUSD swap hook (for Plus account)
   const {
     swap: jlJupUsdSwap,
     status: jlJupUsdSwapStatus,
     error: jlJupUsdSwapError,
     reset: resetJlJupUsdSwap,
     isBusy: jlJupUsdSwapBusy,
-    inputMint: JLJUPUSD_MINT,
-    inputDecimals: JLJUPUSD_DECIMALS,
   } = useServerSponsoredJLJupUSDSwap();
+
+  // ToJLJupUSD swap hook (for selling to Plus account)
+  const {
+    swap: toJlJupUsdSwap,
+    status: toJlJupUsdSwapStatus,
+    error: toJlJupUsdSwapError,
+    reset: resetToJlJupUsdSwap,
+    isBusy: toJlJupUsdSwapBusy,
+  } = useServerSponsoredToJLJupUSDSwap();
 
   const slug = (params?.id || "").toString();
   const resolved = useMemo(() => resolveTokenFromSlug(slug), [slug]);
@@ -639,9 +712,13 @@ const CoinPage: React.FC = () => {
     null,
   );
   const [priceLoading, setPriceLoading] = useState(false);
+  const [priceSource, setPriceSource] = useState<
+    "coingecko" | "jupiter" | null
+  >(null);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [paymentAccount, setPaymentAccount] = useState<PaymentAccount>("cash");
+  const [receiveAccount, setReceiveAccount] = useState<ReceiveAccount>("cash");
   const [inputUnit, setInputUnit] = useState<"cash" | "asset">("cash");
   const [cashAmount, setCashAmount] = useState<string>("");
   const [assetAmount, setAssetAmount] = useState<string>("");
@@ -668,18 +745,58 @@ const CoinPage: React.FC = () => {
 
   const ownerBase58 = user?.walletAddress ?? "";
   const coingeckoId = (meta?.id || "").trim();
+  const hasCoingeckoId = coingeckoId.length > 0;
 
-  // Determine which hook is active based on payment account
-  const swapStatus =
-    paymentAccount === "cash" ? usdcSwapStatus : jlJupUsdSwapStatus;
-  const swapError =
-    paymentAccount === "cash" ? usdcSwapError : jlJupUsdSwapError;
-  const swapBusy = paymentAccount === "cash" ? usdcSwapBusy : jlJupUsdSwapBusy;
+  const swapStatus = useMemo(() => {
+    if (side === "buy") {
+      return paymentAccount === "cash" ? usdcSwapStatus : jlJupUsdSwapStatus;
+    } else {
+      return receiveAccount === "cash" ? usdcSwapStatus : toJlJupUsdSwapStatus;
+    }
+  }, [
+    side,
+    paymentAccount,
+    receiveAccount,
+    usdcSwapStatus,
+    jlJupUsdSwapStatus,
+    toJlJupUsdSwapStatus,
+  ]);
+
+  const swapError = useMemo(() => {
+    if (side === "buy") {
+      return paymentAccount === "cash" ? usdcSwapError : jlJupUsdSwapError;
+    } else {
+      return receiveAccount === "cash" ? usdcSwapError : toJlJupUsdSwapError;
+    }
+  }, [
+    side,
+    paymentAccount,
+    receiveAccount,
+    usdcSwapError,
+    jlJupUsdSwapError,
+    toJlJupUsdSwapError,
+  ]);
+
+  const swapBusy = useMemo(() => {
+    if (side === "buy") {
+      return paymentAccount === "cash" ? usdcSwapBusy : jlJupUsdSwapBusy;
+    } else {
+      return receiveAccount === "cash" ? usdcSwapBusy : toJlJupUsdSwapBusy;
+    }
+  }, [
+    side,
+    paymentAccount,
+    receiveAccount,
+    usdcSwapBusy,
+    jlJupUsdSwapBusy,
+    toJlJupUsdSwapBusy,
+  ]);
 
   const resetSwap = useCallback(() => {
     resetUsdcSwap();
     resetJlJupUsdSwap();
-  }, [resetUsdcSwap, resetJlJupUsdSwap]);
+    resetToJlJupUsdSwap();
+  }, [resetUsdcSwap, resetJlJupUsdSwap, resetToJlJupUsdSwap]);
 
   /* ───────── Balances ───────── */
 
@@ -694,17 +811,14 @@ const CoinPage: React.FC = () => {
   const tokenBalance = clampNumber(tokenPosition.amount);
   const tokenValueDisplay = clampNumber(tokenPosition.valueDisplay);
 
-  // Cash account balance (USDC)
   const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0));
   const cashBalanceDisplay = clampNumber(
     typeof usdcUsd === "number" ? usdcUsd : 0,
   );
 
-  // Plus account balance (from BalanceProvider - already in display currency)
   const plusBalanceInternal = clampNumber(savingsPlusAmount);
   const plusBalanceDisplay = clampNumber(savingsPlusUsd);
 
-  // Active balance based on selected payment account
   const activeBalanceInternal =
     paymentAccount === "cash" ? cashBalanceInternal : plusBalanceInternal;
   const activeBalanceDisplay =
@@ -715,7 +829,7 @@ const CoinPage: React.FC = () => {
       ? meta.decimals
       : 0;
 
-  /* ───────── Fetch spot price ───────── */
+  /* ───────── Fetch spot price (CoinGecko or Jupiter fallback) ───────── */
 
   useEffect(() => {
     const controller = new AbortController();
@@ -724,34 +838,66 @@ const CoinPage: React.FC = () => {
       try {
         setPriceLoading(true);
 
-        if (!coingeckoId) {
-          setSpotPriceUsd(null);
-          setPriceChange24hPct(null);
-          return;
+        // If we have a CoinGecko ID, use CoinGecko first
+        if (hasCoingeckoId) {
+          const res = await fetch("/api/prices/coingecko", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: [coingeckoId] }),
+            cache: "no-store",
+          });
+
+          if (res.ok) {
+            const data = (await res.json()) as SpotResp;
+            const entry = data?.prices?.[coingeckoId];
+            if (entry) {
+              setSpotPriceUsd(
+                typeof entry.priceUsd === "number" ? entry.priceUsd : null,
+              );
+              setPriceChange24hPct(
+                typeof entry.priceChange24hPct === "number"
+                  ? entry.priceChange24hPct
+                  : null,
+              );
+              setPriceSource("coingecko");
+              return;
+            }
+          }
         }
 
-        const res = await fetch("/api/prices/coingecko", {
-          method: "POST",
-          signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: [coingeckoId] }),
-          cache: "no-store",
-        });
+        // Fallback to Jupiter price API using mint address
+        if (mint) {
+          const res = await fetch("/api/prices/jup", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mints: [mint] }),
+            cache: "no-store",
+          });
 
-        if (!res.ok) return;
+          if (res.ok) {
+            const data = (await res.json()) as JupPriceResp;
+            const entry = data?.prices?.[mint];
+            if (entry) {
+              setSpotPriceUsd(
+                typeof entry.price === "number" ? entry.price : null,
+              );
+              setPriceChange24hPct(
+                typeof entry.priceChange24hPct === "number"
+                  ? entry.priceChange24hPct
+                  : null,
+              );
+              setPriceSource("jupiter");
+              return;
+            }
+          }
+        }
 
-        const data = (await res.json()) as SpotResp;
-        const entry = data?.prices?.[coingeckoId];
-        if (!entry) return;
-
-        setSpotPriceUsd(
-          typeof entry.priceUsd === "number" ? entry.priceUsd : null,
-        );
-        setPriceChange24hPct(
-          typeof entry.priceChange24hPct === "number"
-            ? entry.priceChange24hPct
-            : null,
-        );
+        // No price available
+        setSpotPriceUsd(null);
+        setPriceChange24hPct(null);
+        setPriceSource(null);
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return;
@@ -762,14 +908,15 @@ const CoinPage: React.FC = () => {
 
     loadSpotPrice();
     return () => controller.abort();
-  }, [coingeckoId]);
+  }, [coingeckoId, hasCoingeckoId, mint]);
 
-  /* ───────── Fetch history ───────── */
+  /* ───────── Fetch history (only if CoinGecko ID exists) ───────── */
 
   useEffect(() => {
-    if (!coingeckoId) {
+    // If no CoinGecko ID, skip chart loading entirely
+    if (!hasCoingeckoId) {
       setHistory([]);
-      setHistoryError("No CoinGecko id for this asset.");
+      setHistoryError(null);
       return;
     }
 
@@ -781,9 +928,7 @@ const CoinPage: React.FC = () => {
         setHistoryLoading(true);
         setHistoryError(null);
 
-        const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(
-          coingeckoId,
-        )}&days=${encodeURIComponent(cfg.days)}`;
+        const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(coingeckoId)}&days=${encodeURIComponent(cfg.days)}`;
 
         const res = await fetch(url, {
           method: "GET",
@@ -811,7 +956,7 @@ const CoinPage: React.FC = () => {
 
     loadHistory();
     return () => controller.abort();
-  }, [coingeckoId, timeframe]);
+  }, [coingeckoId, hasCoingeckoId, timeframe]);
 
   /* ───────── Derived values ───────── */
 
@@ -824,23 +969,15 @@ const CoinPage: React.FC = () => {
     return history.map((p) => ({ t: p.t, y: p.price * fxRate }));
   }, [history, fxRate]);
 
+  const showChart = hasCoingeckoId && chartData.length > 0;
+  const showPriceOverlay = !hasCoingeckoId || (!historyLoading && !showChart);
+
   const cashNum = safeParse(cashAmount);
   const assetNum = safeParse(assetAmount);
 
   const cashUsd = fxRate && fxRate > 0 && cashNum > 0 ? cashNum / fxRate : 0;
   const assetUsd = spotPriceUsd && assetNum > 0 ? assetNum * spotPriceUsd : 0;
 
-  /**
-   * Calculate gross/fee/net based on input mode and side
-   *
-   * For BUY:
-   * - If user enters cash amount: that's the gross, fee is deducted, they receive less asset
-   * - If user enters asset amount: we need to gross up the cash to ensure they receive exactly that amount
-   *
-   * For SELL:
-   * - If user enters asset amount: that's what they sell, fee is deducted from proceeds
-   * - If user enters cash amount: we calculate how much asset needed to receive that cash
-   */
   const tradeCalculations = useMemo(() => {
     if (!spotPriceUsd || spotPriceUsd <= 0 || !fxRate || fxRate <= 0) {
       return {
@@ -863,27 +1000,20 @@ const CoinPage: React.FC = () => {
 
     if (side === "buy") {
       if (lastEdited === "cash") {
-        // User entered cash amount - this is the gross
         grossUsd = cashUsd;
         feeUsd = grossUsd * SWAP_FEE_PCT;
         netUsd = Math.max(grossUsd - feeUsd, 0);
       } else {
-        // User entered asset amount - they want exactly this much asset
-        // We need to gross up: net = assetUsd, gross = net / (1 - feeRate)
         netUsd = assetUsd;
         grossUsd = grossUpForFee(netUsd, SWAP_FEE_PCT);
         feeUsd = grossUsd - netUsd;
       }
     } else {
-      // SELL side
       if (lastEdited === "asset") {
-        // User entered asset amount to sell
         grossUsd = assetUsd;
         feeUsd = grossUsd * SWAP_FEE_PCT;
         netUsd = Math.max(grossUsd - feeUsd, 0);
       } else {
-        // User entered cash amount they want to receive
-        // net = cashUsd, gross = net / (1 - feeRate)
         netUsd = cashUsd;
         grossUsd = grossUpForFee(netUsd, SWAP_FEE_PCT);
         feeUsd = grossUsd - netUsd;
@@ -894,7 +1024,6 @@ const CoinPage: React.FC = () => {
     const feeDisplay = feeUsd * fxRate;
     const netDisplay = netUsd * fxRate;
 
-    // What user receives/pays
     const receiveAsset = side === "buy" ? netUsd / spotPriceUsd : 0;
     const receiveCashDisplay = side === "sell" ? netDisplay : 0;
     const payAsset = side === "sell" ? grossUsd / spotPriceUsd : 0;
@@ -923,13 +1052,7 @@ const CoinPage: React.FC = () => {
     payCashDisplay,
   } = tradeCalculations;
 
-  // For balance checks
   const grossUsdSafe = grossUsd > 0 && Number.isFinite(grossUsd) ? grossUsd : 0;
-
-  const impliedAssetFromCash =
-    spotPriceUsd && cashUsd > 0 ? cashUsd / spotPriceUsd : 0;
-  const impliedCashFromAssetDisplay =
-    fxRate && fxRate > 0 && assetUsd > 0 ? assetUsd * fxRate : 0;
 
   /* ───────── Sync fields ───────── */
 
@@ -944,17 +1067,14 @@ const CoinPage: React.FC = () => {
         return;
       }
 
-      // When user enters cash, calculate asset they'll receive (after fees for buy)
       const usd = n / fxRate;
       let computed: number;
 
       if (side === "buy") {
-        // For buy: cash is gross, asset received is net/price
         const fee = usd * SWAP_FEE_PCT;
         const net = usd - fee;
         computed = net / spotPriceUsd;
       } else {
-        // For sell: cash is what they want to receive (net), asset is gross/price
         const gross = grossUpForFee(usd, SWAP_FEE_PCT);
         computed = gross / spotPriceUsd;
       }
@@ -970,16 +1090,13 @@ const CoinPage: React.FC = () => {
         return;
       }
 
-      // When user enters asset, calculate cash
       const assetValueUsd = n * spotPriceUsd;
       let computed: number;
 
       if (side === "buy") {
-        // For buy: user wants exact asset, cash needed is grossed up
         const gross = grossUpForFee(assetValueUsd, SWAP_FEE_PCT);
         computed = gross * fxRate;
       } else {
-        // For sell: asset is gross, cash received is net
         const fee = assetValueUsd * SWAP_FEE_PCT;
         const net = assetValueUsd - fee;
         computed = net * fxRate;
@@ -1026,7 +1143,15 @@ const CoinPage: React.FC = () => {
     setPaymentAccount(next);
     resetSwap();
     setLocalErr(null);
-    // Reset amounts when switching accounts
+    setCashAmount("");
+    setAssetAmount("");
+    setIsMaxSell(false);
+  };
+
+  const handleReceiveAccountChange = (next: ReceiveAccount) => {
+    setReceiveAccount(next);
+    resetSwap();
+    setLocalErr(null);
     setCashAmount("");
     setAssetAmount("");
     setIsMaxSell(false);
@@ -1079,7 +1204,6 @@ const CoinPage: React.FC = () => {
       let sig: string;
 
       if (side === "buy") {
-        // Check balance based on selected payment account
         if (grossUsdSafe > activeBalanceInternal + 0.000001) {
           throw new Error(
             paymentAccount === "cash"
@@ -1088,20 +1212,15 @@ const CoinPage: React.FC = () => {
           );
         }
 
-        // Calculate the amount to send based on what was edited
         let amountDisplay: number;
 
         if (lastEdited === "cash") {
-          // User entered cash amount directly
           amountDisplay = cashNum;
         } else {
-          // User entered asset amount - we need to gross up to ensure they get exact amount
-          // The payCashDisplay already accounts for this
           amountDisplay = payCashDisplay;
         }
 
         if (paymentAccount === "cash") {
-          // Use USDC swap
           const result = await usdcSwap({
             kind: "buy",
             fromOwnerBase58: ownerBase58,
@@ -1112,9 +1231,7 @@ const CoinPage: React.FC = () => {
           });
           sig = result.signature;
         } else {
-          // Use JLJupUSD swap
-          // Convert display amount to JLJupUSD amount (roughly 1:1 with USD)
-          const jlJupUsdAmount = amountDisplay / fxRate; // Convert from display currency to USD
+          const jlJupUsdAmount = amountDisplay / fxRate;
 
           const result = await jlJupUsdSwap({
             fromOwnerBase58: ownerBase58,
@@ -1125,7 +1242,7 @@ const CoinPage: React.FC = () => {
           sig = result.signature;
         }
       } else {
-        // SELL side - always sells to USDC regardless of payment account setting
+        // SELL side
         const sellAmountUi =
           lastEdited === "asset"
             ? assetNum
@@ -1138,18 +1255,30 @@ const CoinPage: React.FC = () => {
           throw new Error("Not enough balance to sell that amount.");
         }
 
-        // Sell always goes through USDC swap (receive USDC)
-        const result = await usdcSwap({
-          kind: "sell",
-          fromOwnerBase58: ownerBase58,
-          inputMint: mint,
-          amountUi: sellAmountUi,
-          inputDecimals: tokenDecimals,
-          slippageBps: 50,
-          isMax: isMaxSell,
-        });
-
-        sig = result.signature;
+        if (receiveAccount === "cash") {
+          // Sell to USDC (Cash account)
+          const result = await usdcSwap({
+            kind: "sell",
+            fromOwnerBase58: ownerBase58,
+            inputMint: mint,
+            amountUi: sellAmountUi,
+            inputDecimals: tokenDecimals,
+            slippageBps: 50,
+            isMax: isMaxSell,
+          });
+          sig = result.signature;
+        } else {
+          // Sell to JLJupUSD (Plus account)
+          const result = await toJlJupUsdSwap({
+            fromOwnerBase58: ownerBase58,
+            inputMint: mint,
+            inputDecimals: tokenDecimals,
+            amountUi: sellAmountUi,
+            slippageBps: 50,
+            isMax: isMaxSell,
+          });
+          sig = result.signature;
+        }
       }
 
       await refreshBalances();
@@ -1182,12 +1311,14 @@ const CoinPage: React.FC = () => {
     grossUsdSafe,
     activeBalanceInternal,
     paymentAccount,
+    receiveAccount,
     lastEdited,
     cashNum,
     payCashDisplay,
     usdcSwap,
     mint,
     jlJupUsdSwap,
+    toJlJupUsdSwap,
     assetNum,
     tradeCalculations.payAsset,
     isMaxSell,
@@ -1235,12 +1366,7 @@ const CoinPage: React.FC = () => {
 
   const errorToShow = localErr || swapError?.message;
 
-  // Balance display strings
-  const cashLine = `Cash: ${formatMoneyNoCode(cashBalanceDisplay)}`;
-  const plusLine = `Plus: ${formatMoneyNoCode(plusBalanceDisplay)}`;
-  const assetLine = `You own: ${formatQty(tokenBalance, 6)} ${
-    symbol || "ASSET"
-  } · ${formatMoneyNoCode(tokenValueDisplay)}`;
+  const assetLine = `You own: ${formatQty(tokenBalance, 6)} ${symbol || "ASSET"} · ${formatMoneyNoCode(tokenValueDisplay)}`;
 
   /* ───────── Not Found ───────── */
 
@@ -1462,6 +1588,11 @@ const CoinPage: React.FC = () => {
                         {!!category && (
                           <span className="haven-pill">{category}</span>
                         )}
+                        {priceSource === "jupiter" && (
+                          <span className="haven-pill bg-amber-500/10 text-amber-600">
+                            Jupiter
+                          </span>
+                        )}
                       </div>
 
                       <div className="mt-1 flex items-baseline gap-2">
@@ -1494,73 +1625,93 @@ const CoinPage: React.FC = () => {
                         </span>
                       </div>
 
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        {TIMEFRAMES[timeframe].label} perf{" "}
-                        <span
-                          className={
-                            perfPct > 0
-                              ? "text-primary"
-                              : perfPct < 0
-                                ? "text-destructive"
-                                : "text-muted-foreground"
-                          }
-                        >
-                          {formatPct(perfPct)}
-                        </span>
-                      </div>
+                      {hasCoingeckoId && chartData.length > 0 && (
+                        <div className="mt-1 text-[11px] text-muted-foreground">
+                          {TIMEFRAMES[timeframe].label} perf{" "}
+                          <span
+                            className={
+                              perfPct > 0
+                                ? "text-primary"
+                                : perfPct < 0
+                                  ? "text-destructive"
+                                  : "text-muted-foreground"
+                            }
+                          >
+                            {formatPct(perfPct)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Chart */}
+                  {/* Chart or Price Overlay */}
                   <div className="mt-3 overflow-hidden rounded-3xl border bg-card/60">
-                    <div className="flex items-center justify-between border-b bg-card/60 px-3 py-2">
-                      <p className="text-[11px] font-medium text-muted-foreground">
-                        Price chart
-                      </p>
+                    {hasCoingeckoId && (
+                      <div className="flex items-center justify-between border-b bg-card/60 px-3 py-2">
+                        <p className="text-[11px] font-medium text-muted-foreground">
+                          {showChart ? "Price chart" : "Price"}
+                        </p>
 
-                      <div className="flex gap-1 rounded-full border bg-card/60 p-0.5 text-[11px]">
-                        {(Object.keys(TIMEFRAMES) as TimeframeKey[]).map(
-                          (tf) => {
-                            const active = tf === timeframe;
-                            return (
-                              <button
-                                key={tf}
-                                type="button"
-                                disabled={swapBusy}
-                                onClick={() => setTimeframe(tf)}
-                                className={[
-                                  "rounded-full px-2.5 py-1 font-semibold transition disabled:opacity-50",
-                                  active
-                                    ? "bg-primary text-primary-foreground"
-                                    : "text-foreground/80 hover:bg-secondary",
-                                ].join(" ")}
-                              >
-                                {TIMEFRAMES[tf].label}
-                              </button>
-                            );
-                          },
+                        {showChart && (
+                          <div className="flex gap-1 rounded-full border bg-card/60 p-0.5 text-[11px]">
+                            {(Object.keys(TIMEFRAMES) as TimeframeKey[]).map(
+                              (tf) => {
+                                const active = tf === timeframe;
+                                return (
+                                  <button
+                                    key={tf}
+                                    type="button"
+                                    disabled={swapBusy}
+                                    onClick={() => setTimeframe(tf)}
+                                    className={[
+                                      "rounded-full px-2.5 py-1 font-semibold transition disabled:opacity-50",
+                                      active
+                                        ? "bg-primary text-primary-foreground"
+                                        : "text-foreground/80 hover:bg-secondary",
+                                    ].join(" ")}
+                                  >
+                                    {TIMEFRAMES[tf].label}
+                                  </button>
+                                );
+                              },
+                            )}
+                          </div>
                         )}
                       </div>
-                    </div>
+                    )}
+
+                    {!hasCoingeckoId && (
+                      <div className="flex items-center justify-between border-b bg-card/60 px-3 py-2">
+                        <p className="text-[11px] font-medium text-muted-foreground">
+                          Live price
+                        </p>
+                        <span className="text-[10px] text-amber-600">
+                          Chart unavailable
+                        </span>
+                      </div>
+                    )}
 
                     <div className="px-3 pb-3 pt-3 sm:px-4">
-                      {historyLoading && !chartData.length ? (
-                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-                          Loading chart…
-                        </div>
-                      ) : historyError ? (
-                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-                          {historyError}
-                        </div>
-                      ) : !chartData.length ? (
-                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-                          No chart data.
-                        </div>
-                      ) : (
+                      {showChart ? (
                         <SleekLineChart
                           data={chartData}
                           displayCurrency={displayCurrency}
                           timeframe={timeframe}
+                        />
+                      ) : historyLoading && hasCoingeckoId ? (
+                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
+                          Loading chart…
+                        </div>
+                      ) : historyError && hasCoingeckoId ? (
+                        <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
+                          {historyError}
+                        </div>
+                      ) : (
+                        <PriceDisplayOverlay
+                          price={spotPriceDisplay}
+                          priceChange24hPct={priceChange24hPct}
+                          symbol={symbol}
+                          loading={priceLoading}
                         />
                       )}
                     </div>
@@ -1713,6 +1864,100 @@ const CoinPage: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Receive Account Selector (only for SELL) */}
+                  {side === "sell" && (
+                    <div className="mt-3">
+                      <p className="mb-2 text-[11px] text-muted-foreground">
+                        Receive to
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={swapBusy}
+                          onClick={() => handleReceiveAccountChange("cash")}
+                          className={[
+                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
+                            receiveAccount === "cash"
+                              ? "border-primary/50 bg-primary/10"
+                              : "border-border bg-card/60 hover:bg-secondary",
+                            swapBusy && "opacity-50",
+                          ].join(" ")}
+                        >
+                          <div
+                            className={[
+                              "flex h-8 w-8 items-center justify-center rounded-xl",
+                              receiveAccount === "cash"
+                                ? "bg-primary/20"
+                                : "bg-muted/40",
+                            ].join(" ")}
+                          >
+                            <Landmark
+                              className={[
+                                "h-4 w-4",
+                                receiveAccount === "cash"
+                                  ? "text-primary"
+                                  : "text-muted-foreground",
+                              ].join(" ")}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[12px] font-semibold text-foreground">
+                              Cash
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              USDC
+                            </p>
+                          </div>
+                          {receiveAccount === "cash" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={swapBusy || !plusReady}
+                          onClick={() => handleReceiveAccountChange("plus")}
+                          className={[
+                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
+                            receiveAccount === "plus"
+                              ? "border-primary/50 bg-primary/10"
+                              : "border-border bg-card/60 hover:bg-secondary",
+                            (swapBusy || !plusReady) && "opacity-50",
+                          ].join(" ")}
+                        >
+                          <div
+                            className={[
+                              "flex h-8 w-8 items-center justify-center rounded-xl",
+                              receiveAccount === "plus"
+                                ? "bg-primary/20"
+                                : "bg-muted/40",
+                            ].join(" ")}
+                          >
+                            <TrendingUp
+                              className={[
+                                "h-4 w-4",
+                                receiveAccount === "plus"
+                                  ? "text-primary"
+                                  : "text-muted-foreground",
+                              ].join(" ")}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[12px] font-semibold text-foreground">
+                              Plus
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              Earn yield
+                            </p>
+                          </div>
+                          {receiveAccount === "plus" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Context (for sell side) */}
                   {side === "sell" && (
                     <div className="mt-3 rounded-2xl border bg-card/60 px-3 py-2 text-[12px]">
@@ -1799,9 +2044,7 @@ const CoinPage: React.FC = () => {
                               : "text-foreground/80 hover:bg-secondary",
                           ].join(" ")}
                         >
-                          {paymentAccount === "plus" && side === "buy"
-                            ? "Cash"
-                            : "Cash"}
+                          Cash
                         </button>
                         <button
                           type="button"
@@ -1848,12 +2091,7 @@ const CoinPage: React.FC = () => {
                       <span className="font-semibold text-foreground">
                         {side === "buy"
                           ? formatMoneyNoCode(payCashDisplay)
-                          : `${formatQty(
-                              lastEdited === "asset"
-                                ? assetNum
-                                : tradeCalculations.payAsset,
-                              6,
-                            )} ${symbol || "ASSET"}`}
+                          : `${formatQty(lastEdited === "asset" ? assetNum : tradeCalculations.payAsset, 6)} ${symbol || "ASSET"}`}
                       </span>
                     </div>
 
@@ -1863,6 +2101,11 @@ const CoinPage: React.FC = () => {
                         {lastEdited === "asset" && side === "buy"
                           ? ""
                           : " (approx.)"}
+                        {side === "sell" && (
+                          <span className="ml-1 text-[10px]">
+                            → {receiveAccount === "cash" ? "Cash" : "Plus"}
+                          </span>
+                        )}
                       </span>
                       <span className="font-semibold text-foreground">
                         {side === "buy"
@@ -1871,13 +2114,21 @@ const CoinPage: React.FC = () => {
                       </span>
                     </div>
 
-                    {/* Show note when user enters exact asset amount */}
                     {side === "buy" &&
                       lastEdited === "asset" &&
                       assetNum > 0 && (
                         <div className="mt-2 text-[11px] text-primary">
                           ✓ You&apos;ll receive exactly {formatQty(assetNum, 6)}{" "}
                           {symbol}
+                        </div>
+                      )}
+
+                    {side === "sell" &&
+                      receiveAccount === "plus" &&
+                      receiveCashDisplay > 0 && (
+                        <div className="mt-2 text-[11px] text-primary">
+                          ✓ Proceeds will be deposited to Plus and start earning
+                          yield
                         </div>
                       )}
 
@@ -1982,6 +2233,18 @@ const CoinPage: React.FC = () => {
                           {CLUSTER}
                         </span>
                       </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="text-muted-foreground">
+                          Price source
+                        </span>
+                        <span className="font-medium text-foreground">
+                          {priceSource === "jupiter"
+                            ? "Jupiter"
+                            : priceSource === "coingecko"
+                              ? "CoinGecko"
+                              : "—"}
+                        </span>
+                      </div>
                       {side === "buy" && (
                         <div className="mt-2 flex items-center justify-between">
                           <span className="text-muted-foreground">
@@ -1994,8 +2257,20 @@ const CoinPage: React.FC = () => {
                           </span>
                         </div>
                       )}
+                      {side === "sell" && (
+                        <div className="mt-2 flex items-center justify-between">
+                          <span className="text-muted-foreground">
+                            Receive to
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {receiveAccount === "cash"
+                              ? "Cash (USDC)"
+                              : "Plus (JLJupUSD)"}
+                          </span>
+                        </div>
+                      )}
 
-                      {coingeckoId ? (
+                      {hasCoingeckoId ? (
                         <div className="mt-2 flex items-center justify-between">
                           <span className="text-muted-foreground">
                             CoinGecko
@@ -2006,8 +2281,8 @@ const CoinPage: React.FC = () => {
                         </div>
                       ) : (
                         <div className="mt-2 text-[11px] text-amber-500">
-                          This token has no CoinGecko id, so chart/price may be
-                          unavailable.
+                          This token has no CoinGecko id — price via Jupiter,
+                          chart unavailable.
                         </div>
                       )}
                     </div>
@@ -2091,7 +2366,6 @@ const CoinPage: React.FC = () => {
 
                       {/* Address details */}
                       <div className="space-y-3">
-                        {/* Your wallet address */}
                         <div className="rounded-2xl border bg-card/60 px-3 py-3">
                           <div className="flex items-center justify-between">
                             <p className="text-[11px] font-medium text-muted-foreground">
@@ -2123,7 +2397,6 @@ const CoinPage: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Simple instructions */}
                         <div className="rounded-2xl border bg-card/60 px-3 py-3">
                           <p className="text-[11px] font-semibold text-foreground">
                             How to deposit
@@ -2164,7 +2437,6 @@ const CoinPage: React.FC = () => {
                           </ol>
                         </div>
 
-                        {/* View transactions link */}
                         {ownerBase58 && (
                           <a
                             href={`https://solscan.io/account/${ownerBase58}`}
