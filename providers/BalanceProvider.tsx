@@ -79,7 +79,7 @@ type BalanceContextValue = {
 };
 
 const BalanceContext = createContext<BalanceContextValue | undefined>(
-  undefined
+  undefined,
 );
 
 export const useBalance = () => {
@@ -133,19 +133,13 @@ type BoosterApiResponse = {
   }>;
 };
 
-// ✅ Plus API actually returns base units + decimals (per your logs)
 type PlusBalanceResponse = {
   owner?: string;
   hasPosition?: boolean;
-
-  // from your log:
-  shares?: string; // base units string
-  underlyingAssets?: string; // base units string
-  decimals?: number; // e.g. 6
-
-  // sometimes APIs also include ui string; accept if present
+  shares?: string;
+  underlyingAssets?: string;
+  decimals?: number;
   underlyingAssetsUi?: string;
-
   error?: string;
   code?: string;
 };
@@ -247,7 +241,18 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }>
   >([]);
 
+  // Dedupe refreshes
   const refreshInflight = useRef<Promise<void> | null>(null);
+
+  // Abort stale refreshes (so old responses don't overwrite newer ones)
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cache FX for a short period to avoid re-fetching every refresh
+  const fxCacheRef = useRef<{
+    ts: number;
+    rate: number;
+    target: string;
+  } | null>(null);
 
   /* ───────── Booster computed ───────── */
 
@@ -281,14 +286,14 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const boosterTakeHomeUsd = useMemo(() => {
     const baseSum = boosterPositions.reduce(
       (sum, p) => sum + (Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0),
-      0
+      0,
     );
     return baseSum * fxRateState;
   }, [boosterPositions, fxRateState]);
 
   const totalUsd = useMemo(
     () => baseTotalUsdDisplay + boosterTakeHomeUsd,
-    [baseTotalUsdDisplay, boosterTakeHomeUsd]
+    [baseTotalUsdDisplay, boosterTakeHomeUsd],
   );
 
   /* ───────── Refresh ───────── */
@@ -300,10 +305,15 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       const p = (async () => {
         if (!opts?.bypassUserLoading && userLoading) return;
 
+        // Abort any previous in-flight refresh so stale responses can't "win"
+        abortRef.current?.abort();
+        const ac = new AbortController();
+        abortRef.current = ac;
+
         const owner = user?.walletAddress || "";
 
         const flexSubdoc = user?.savingsAccounts?.find(
-          (a: { type?: string }) => a?.type === "flex"
+          (a: { type?: string }) => a?.type === "flex",
         );
         const flexMarginfiPk =
           typeof (flexSubdoc as { marginfiAccountPk?: string })
@@ -343,43 +353,60 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
         setLoading(true);
 
-        // ✅ force UI to wait for fresh Plus response
+        // Force Plus section to wait for a fresh response
         setPlusReady(false);
         setPlusError(null);
 
         try {
-          const [walletRes, fxRes, flexRes, plusRes, boosterRes] =
-            await Promise.all([
-              fetch(
-                `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
-                { method: "GET", cache: "no-store" }
-              ),
-              fetch("/api/fx", {
-                method: "GET",
-                cache: "no-store",
-                credentials: "include",
-              }),
-              hasLinkedFlexAccount
-                ? fetch("/api/savings/flex/balance", {
-                    method: "GET",
-                    cache: "no-store",
-                    credentials: "include",
-                  })
-                : Promise.resolve(null),
-              fetch("/api/savings/plus/balance", {
-                method: "GET",
-                cache: "no-store",
-                credentials: "include",
-              }),
-              fetch("/api/booster/positions", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ownerBase58: owner }),
-                cache: "no-store",
-              }),
-            ]);
+          // Start all requests immediately (parallel),
+          // but we will APPLY wallet+fx first, and extras later.
+          const walletP = fetch(
+            `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
+            { method: "GET", cache: "no-store", signal: ac.signal },
+          );
 
-          // ---------- Wallet ----------
+          // FX: use short cache (e.g. 5 minutes) to reduce load
+          const now = Date.now();
+          const fxCached = fxCacheRef.current;
+          const fxIsFresh = fxCached && now - fxCached.ts < 5 * 60 * 1000;
+
+          const fxP = fxIsFresh
+            ? Promise.resolve(null)
+            : fetch("/api/fx", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "include",
+                signal: ac.signal,
+              });
+
+          const flexP = hasLinkedFlexAccount
+            ? fetch("/api/savings/flex/balance", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "include",
+                signal: ac.signal,
+              })
+            : Promise.resolve(null);
+
+          const plusP = fetch("/api/savings/plus/balance", {
+            method: "GET",
+            cache: "no-store",
+            credentials: "include",
+            signal: ac.signal,
+          });
+
+          const boosterP = fetch("/api/booster/positions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerBase58: owner }),
+            cache: "no-store",
+            signal: ac.signal,
+          });
+
+          // 1) Apply WALLET first (fastest and most important)
+          const walletRes = await walletP;
+          if (ac.signal.aborted) return;
+
           if (!walletRes.ok) {
             setLastUpdated(Date.now());
             return;
@@ -404,7 +431,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                   : undefined,
               usdChange24h:
                 typeof t.usdChange24h === "number" ? t.usdChange24h : undefined,
-            })
+            }),
           );
 
           const usdcToken = mappedUsd.find((t) => t.mint === USDC_MINT);
@@ -412,28 +439,48 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           const usdcAmtWallet = safeNumber(usdcToken?.amount, 0);
 
           const nonUsdcTokensUsd = mappedUsd.filter(
-            (t) => t.mint !== USDC_MINT
+            (t) => t.mint !== USDC_MINT,
           );
           nonUsdcTokensUsd.sort(
-            (a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0)
+            (a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0),
           );
 
           const walletTotalUsdBase = safeNumber(walletJson.totalUsd, 0);
           const walletChangeUsdBase = safeNumber(
             walletJson.totalChange24hUsd,
-            0
+            0,
           );
 
-          // ---------- FX ----------
-          let fxRate = 1;
-          let fxTarget = "USD";
+          // 2) Apply FX next (or use cached)
+          let fxRate = fxIsFresh ? fxCached!.rate : 1;
+          let fxTarget = fxIsFresh ? fxCached!.target : "USD";
 
-          if (fxRes.ok) {
-            const fxData = (await fxRes.json().catch(() => ({}))) as FxResponse;
-            const rateNum = safeNumber(fxData.rate, 1);
-            fxRate = rateNum > 0 ? rateNum : 1;
-            if (typeof fxData.target === "string" && fxData.target.trim()) {
-              fxTarget = fxData.target.trim().toUpperCase();
+          if (!fxIsFresh && fxP) {
+            const fxRes = await fxP;
+            if (ac.signal.aborted) return;
+
+            if (fxRes && fxRes.ok) {
+              const fxData = (await fxRes
+                .json()
+                .catch(() => ({}))) as FxResponse;
+
+              const rateNum = safeNumber(fxData.rate, 1);
+              fxRate = rateNum > 0 ? rateNum : 1;
+
+              if (typeof fxData.target === "string" && fxData.target.trim()) {
+                fxTarget = fxData.target.trim().toUpperCase();
+              }
+
+              if (!Number.isFinite(fxRate) || fxRate <= 0) {
+                fxRate = 1;
+                fxTarget = "USD";
+              }
+
+              fxCacheRef.current = {
+                ts: Date.now(),
+                rate: fxRate,
+                target: fxTarget,
+              };
             }
           }
 
@@ -442,125 +489,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             fxTarget = "USD";
           }
 
-          // ---------- Flex ----------
-          let flexAmount = 0;
-          let flexUsdBase = 0;
-
-          if (hasLinkedFlexAccount && flexRes) {
-            if (flexRes.status === 204) {
-              flexAmount = 0;
-              flexUsdBase = 0;
-            } else if (flexRes.ok) {
-              const flexJson = (await flexRes
-                .json()
-                .catch(() => ({}))) as FlexBalanceResponse;
-              const amountUiStr =
-                typeof flexJson.amountUi === "string" ? flexJson.amountUi : "0";
-              flexAmount = safeNumber(amountUiStr, 0);
-              flexUsdBase = flexAmount;
-            }
-          }
-
-          // ---------- Plus (✅ definitive) ----------
-          let plusBaseUi = 0;
-
-          if (plusRes.ok) {
-            const pj = (await plusRes
-              .json()
-              .catch(() => ({}))) as PlusBalanceResponse;
-
-            // priority: underlyingAssetsUi if API provides it
-            const uiStr = safeStr(pj.underlyingAssetsUi);
-            if (uiStr) {
-              plusBaseUi = clampNonNeg(safeNumber(uiStr, 0));
-            } else {
-              // else compute from base units + decimals (matches your logs)
-              const underlyingBase = safeNumber(pj.underlyingAssets, 0);
-              const decimals = Number.isFinite(pj.decimals as number)
-                ? Number(pj.decimals)
-                : 6;
-              plusBaseUi =
-                underlyingBase > 0
-                  ? underlyingBase / Math.pow(10, Math.max(0, decimals))
-                  : 0;
-              plusBaseUi = clampNonNeg(plusBaseUi);
-            }
-
-            setSavingsPlusAmount(plusBaseUi);
-            setSavingsPlusUsd(plusBaseUi * fxRate);
-            setPlusReady(true);
-          } else {
-            setSavingsPlusAmount(0);
-            setSavingsPlusUsd(0);
-            setPlusError(`Plus balance fetch failed: ${plusRes.status}`);
-            setPlusReady(true);
-          }
-
-          // ---------- Booster raw ----------
-          const boosterRaw: typeof boosterPositionsRaw = [];
-
-          if (boosterRes.ok) {
-            const bj = (await boosterRes
-              .json()
-              .catch(() => null)) as BoosterApiResponse | null;
-            const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
-
-            for (const p of raw) {
-              const symbol = safeSymbol(p?.symbol);
-              if (!symbol) continue;
-
-              const pk = safeStr(p?.publicKey);
-              if (!pk) continue;
-
-              const entryUsd = usdFrom6Str(p?.account?.price);
-              const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
-              const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
-
-              if (!(sizeUsd > 0) || !(entryUsd > 0)) continue;
-
-              const isLong = p?.side === "long";
-
-              const openSecs = Number(safeStr(p?.account?.openTime || "0"));
-              const createdAt =
-                Number.isFinite(openSecs) &&
-                openSecs > 0 &&
-                openSecs < 10_000_000_000
-                  ? new Date(openSecs * 1000).toISOString()
-                  : new Date().toISOString();
-
-              boosterRaw.push({
-                id: pk,
-                publicKey: pk,
-                symbol,
-                isLong,
-                createdAt,
-                entryUsd,
-                sizeUsd,
-                collateralUsd,
-              });
-            }
-          }
-
-          setBoosterPositionsRaw(boosterRaw);
-
-          // ---------- Totals ----------
-          const plusUsdBase = plusBaseUi;
-
-          const combinedBaseUsd =
-            walletTotalUsdBase +
-            (hasLinkedFlexAccount ? flexUsdBase : 0) +
-            plusUsdBase;
-
-          const prevBaseUsd =
-            walletTotalUsdBase -
-            walletChangeUsdBase +
-            (hasLinkedFlexAccount ? flexUsdBase : 0) +
-            plusUsdBase;
-
-          const changePct =
-            prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
-
-          // ---------- Convert wallet tokens to display ----------
           const convertOpt = (n?: number): number | undefined =>
             typeof n === "number" && !Number.isNaN(n) ? n * fxRate : undefined;
 
@@ -570,31 +498,183 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               usdPrice: convertOpt(t.usdPrice),
               usdValue: convertOpt(t.usdValue),
               usdChange24h: convertOpt(t.usdChange24h),
-            })
+            }),
           );
 
+          // Apply wallet-derived state immediately (fast UI)
           setTokens(nonUsdcTokensDisplay);
-
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
 
-          setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
-          setSavingsFlexUsd((hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate);
-
-          setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
+          // Keep totals "wallet-only" for the moment;
+          // extras (flex/plus) will adjust baseTotalUsdDisplay once they arrive.
+          setBaseTotalUsdDisplay(walletTotalUsdBase * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
+
+          const prevWalletBaseUsd = walletTotalUsdBase - walletChangeUsdBase;
+          const changePct =
+            prevWalletBaseUsd > 0 ? walletChangeUsdBase / prevWalletBaseUsd : 0;
           setTotalChange24hPct(changePct);
+
           setDisplayCurrency(fxTarget);
           setFxRateState(fxRate);
           setLastUpdated(Date.now());
+
+          // 3) Load EXTRAS (flex/plus/booster) without blocking the main UI
+          void (async () => {
+            try {
+              const [flexRes, plusRes, boosterRes] = await Promise.all([
+                flexP,
+                plusP,
+                boosterP,
+              ]);
+              if (ac.signal.aborted) return;
+
+              // ---------- Flex ----------
+              let flexAmount = 0;
+              let flexUsdBase = 0;
+
+              if (hasLinkedFlexAccount && flexRes) {
+                if (flexRes.status === 204) {
+                  flexAmount = 0;
+                  flexUsdBase = 0;
+                } else if (flexRes.ok) {
+                  const flexJson = (await flexRes
+                    .json()
+                    .catch(() => ({}))) as FlexBalanceResponse;
+                  const amountUiStr =
+                    typeof flexJson.amountUi === "string"
+                      ? flexJson.amountUi
+                      : "0";
+                  flexAmount = safeNumber(amountUiStr, 0);
+                  flexUsdBase = flexAmount;
+                }
+              }
+
+              // ---------- Plus ----------
+              let plusBaseUi = 0;
+
+              if (plusRes.ok) {
+                const pj = (await plusRes
+                  .json()
+                  .catch(() => ({}))) as PlusBalanceResponse;
+
+                const uiStr = safeStr(pj.underlyingAssetsUi);
+                if (uiStr) {
+                  plusBaseUi = clampNonNeg(safeNumber(uiStr, 0));
+                } else {
+                  const underlyingBase = safeNumber(pj.underlyingAssets, 0);
+                  const decimals = Number.isFinite(pj.decimals as number)
+                    ? Number(pj.decimals)
+                    : 6;
+                  plusBaseUi =
+                    underlyingBase > 0
+                      ? underlyingBase / Math.pow(10, Math.max(0, decimals))
+                      : 0;
+                  plusBaseUi = clampNonNeg(plusBaseUi);
+                }
+
+                setSavingsPlusAmount(plusBaseUi);
+                setSavingsPlusUsd(plusBaseUi * fxRate);
+                setPlusReady(true);
+              } else {
+                setSavingsPlusAmount(0);
+                setSavingsPlusUsd(0);
+                setPlusError(`Plus balance fetch failed: ${plusRes.status}`);
+                setPlusReady(true);
+              }
+
+              // ---------- Booster raw ----------
+              const boosterRaw: typeof boosterPositionsRaw = [];
+
+              if (boosterRes.ok) {
+                const bj = (await boosterRes
+                  .json()
+                  .catch(() => null)) as BoosterApiResponse | null;
+                const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
+
+                for (const p of raw) {
+                  const symbol = safeSymbol(p?.symbol);
+                  if (!symbol) continue;
+
+                  const pk = safeStr(p?.publicKey);
+                  if (!pk) continue;
+
+                  const entryUsd = usdFrom6Str(p?.account?.price);
+                  const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
+                  const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
+
+                  if (!(sizeUsd > 0) || !(entryUsd > 0)) continue;
+
+                  const isLong = p?.side === "long";
+                  const openSecs = Number(safeStr(p?.account?.openTime || "0"));
+                  const createdAt =
+                    Number.isFinite(openSecs) &&
+                    openSecs > 0 &&
+                    openSecs < 10_000_000_000
+                      ? new Date(openSecs * 1000).toISOString()
+                      : new Date().toISOString();
+
+                  boosterRaw.push({
+                    id: pk,
+                    publicKey: pk,
+                    symbol,
+                    isLong,
+                    createdAt,
+                    entryUsd,
+                    sizeUsd,
+                    collateralUsd,
+                  });
+                }
+              }
+
+              setBoosterPositionsRaw(boosterRaw);
+
+              // ---------- Totals recompute (wallet + extras) ----------
+              // NOTE: totalChange24h is still sourced from wallet endpoint, same as before.
+              const combinedBaseUsd =
+                walletTotalUsdBase +
+                (hasLinkedFlexAccount ? flexUsdBase : 0) +
+                plusBaseUi;
+
+              const prevBaseUsd =
+                walletTotalUsdBase -
+                walletChangeUsdBase +
+                (hasLinkedFlexAccount ? flexUsdBase : 0) +
+                plusBaseUi;
+
+              const combinedChangePct =
+                prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
+
+              setSavingsFlexAmount(hasLinkedFlexAccount ? flexAmount : 0);
+              setSavingsFlexUsd(
+                (hasLinkedFlexAccount ? flexUsdBase : 0) * fxRate,
+              );
+
+              setBaseTotalUsdDisplay(combinedBaseUsd * fxRate);
+              setTotalChange24hPct(combinedChangePct);
+
+              setLastUpdated(Date.now());
+            } catch {
+              if (ac.signal.aborted) return;
+              // Do not nuke wallet state; only mark plus as resolved with an error like before
+              setLastUpdated(Date.now());
+              setSavingsPlusAmount(0);
+              setSavingsPlusUsd(0);
+              setPlusError("Plus refresh error");
+              setPlusReady(true);
+            }
+          })();
         } catch {
+          if (ac.signal.aborted) return;
           setLastUpdated(Date.now());
           setSavingsPlusAmount(0);
           setSavingsPlusUsd(0);
           setPlusError("Plus refresh error");
           setPlusReady(true);
         } finally {
-          setLoading(false);
+          // loading represents "wallet/primary" load; extras continue in background
+          if (!ac.signal.aborted) setLoading(false);
         }
       })();
 
@@ -605,7 +685,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         refreshInflight.current = null;
       }
     },
-    [user, userLoading, priceMap]
+    [user, userLoading],
   );
 
   const refresh = useCallback(async () => {
@@ -622,39 +702,65 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerReady, ownerAddress]);
 
-  const value: BalanceContextValue = {
-    loading,
-    tokens,
+  const value: BalanceContextValue = useMemo(
+    () => ({
+      loading,
+      tokens,
 
-    totalUsd,
-    totalChange24hUsd,
-    totalChange24hPct,
+      totalUsd,
+      totalChange24hUsd,
+      totalChange24hPct,
 
-    lastUpdated,
+      lastUpdated,
 
-    usdcUsd,
-    usdcAmount,
+      usdcUsd,
+      usdcAmount,
 
-    savingsFlexUsd,
-    savingsFlexAmount,
+      savingsFlexUsd,
+      savingsFlexAmount,
 
-    savingsPlusUsd,
-    savingsPlusAmount,
-    plusReady,
-    plusError,
+      savingsPlusUsd,
+      savingsPlusAmount,
+      plusReady,
+      plusError,
 
-    nativeSol,
+      nativeSol,
 
-    displayCurrency,
-    fxRate: fxRateState,
+      displayCurrency,
+      fxRate: fxRateState,
 
-    boosterTakeHomeUsd,
-    boosterPositionsCount,
-    boosterPositions,
+      boosterTakeHomeUsd,
+      boosterPositionsCount,
+      boosterPositions,
 
-    refresh,
-    refreshNow,
-  };
+      refresh,
+      refreshNow,
+    }),
+    [
+      loading,
+      tokens,
+      totalUsd,
+      totalChange24hUsd,
+      totalChange24hPct,
+      lastUpdated,
+      usdcUsd,
+      usdcAmount,
+      savingsFlexUsd,
+      savingsFlexAmount,
+      savingsPlusUsd,
+      savingsPlusAmount,
+      plusReady,
+      plusError,
+      nativeSol,
+      displayCurrency,
+      fxRateState,
+      boosterTakeHomeUsd,
+      boosterPositionsCount,
+      boosterPositions,
+      refresh,
+      refreshNow,
+    ],
+  );
 
   return (
     <BalanceContext.Provider value={value}>{children}</BalanceContext.Provider>
