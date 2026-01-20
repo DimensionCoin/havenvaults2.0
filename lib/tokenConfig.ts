@@ -736,14 +736,14 @@ export const STOCK_TOKENS: TokenMeta[] = [
   //--------------------- Commodity
   {
     name: "GOLD",
-    symbol: "GOLD",
+    symbol: "GLD",
     id: "",
     logo: "/logos/gold.png",
     kind: "stock",
     categories: ["Commodity"],
     tags: ["Commodity"],
     decimals: 8,
-    mints: { mainnet: "AEv6xLECJ2KKmwFGX85mHb9S2c2BQE7dqE5midyrXHBb" },
+    mints: { mainnet: "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P" },
   },
   {
     name: "SILVER",

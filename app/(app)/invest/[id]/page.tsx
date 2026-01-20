@@ -1710,8 +1710,6 @@ const CoinPage: React.FC = () => {
                           )}
                         </button>
                       </div>
-
-        
                     </div>
                   )}
 
