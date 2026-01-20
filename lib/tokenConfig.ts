@@ -16,7 +16,8 @@ export type TokenCategory =
   | "NFT"
   | "Privacy"
   | "PreMarket"
-  | "Utility";
+  | "Utility"
+  | "Commodity";
 
 export type TokenKind = "crypto" | "stock";
 
@@ -544,12 +545,12 @@ export const STOCK_TOKENS: TokenMeta[] = [
     mints: { mainnet: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
   },
   {
-    name: "Gold",
-    symbol: "GLDX",
+    name: "GLD",
+    symbol: "GLD",
     id: "gold-xstock",
     logo: "/logos/gld.png",
     kind: "stock",
-    categories: ["Stocks"],
+    categories: ["Stocks", "Commodity"],
     tags: ["Commodity"],
     decimals: 8,
     mints: { mainnet: "Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re" },
@@ -731,6 +732,51 @@ export const STOCK_TOKENS: TokenMeta[] = [
     tags: ["Index"],
     decimals: 8,
     mints: { mainnet: "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF" },
+  },
+  //--------------------- Commodity
+  {
+    name: "GOLD",
+    symbol: "GOLD",
+    id: "",
+    logo: "/logos/gold.png",
+    kind: "stock",
+    categories: ["Commodity"],
+    tags: ["Commodity"],
+    decimals: 8,
+    mints: { mainnet: "GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A" },
+  },
+  {
+    name: "SILVER",
+    symbol: "SLV",
+    id: "",
+    logo: "/logos/slv.png",
+    kind: "stock",
+    categories: ["Commodity"],
+    tags: ["Commodity"],
+    decimals: 8,
+    mints: { mainnet: "7C56WnJ94iEP7YeH2iKiYpvsS5zkcpP9rJBBEBoUGdzj" },
+  },
+  {
+    name: "COPPER",
+    symbol: "CPER",
+    id: "",
+    logo: "/logos/cper.png",
+    kind: "stock",
+    categories: ["Commodity"],
+    tags: ["Commodity"],
+    decimals: 8,
+    mints: { mainnet: "C3VLBJB2FhEb47s1WEgroyn3BnSYXaezqtBuu5WNmUGw" },
+  },
+  {
+    name: "PLATINUM",
+    symbol: "PPLT",
+    id: "",
+    logo: "/logos/pt.png",
+    kind: "stock",
+    categories: ["Commodity"],
+    tags: ["Commodity"],
+    decimals: 8,
+    mints: { mainnet: "EtTQ2QRyf33bd6B2uk7nm1nkinrdGKza66EGdjEY4s7o" },
   },
 ];
 

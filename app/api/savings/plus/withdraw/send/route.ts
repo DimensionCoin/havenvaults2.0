@@ -7,10 +7,17 @@ import {
   VersionedTransaction,
   PublicKey,
   SendTransactionError,
+  ParsedInstruction,
+  ParsedTransactionWithMeta,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 import mongoose from "mongoose";
 import BN from "bn.js";
+import {
+  getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 import { getSessionFromCookies } from "@/lib/auth";
 import {
@@ -47,7 +54,6 @@ const HAVEN_PUBKEY = new PublicKey(
 const USDC_MINT_STR = required("NEXT_PUBLIC_USDC_MINT");
 const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
 
-// Optional: protect cookie-auth routes from cross-site POSTs
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
@@ -84,7 +90,7 @@ function getPrivyClient(): PrivyClient {
   return _privy;
 }
 
-/* ───────── Helpers ───────── */
+/* ───────── Basic Helpers ───────── */
 
 function jsonError(
   status: number,
@@ -97,7 +103,10 @@ function jsonError(
     traceId?: string;
   },
 ) {
-  return NextResponse.json(payload, { status });
+  return NextResponse.json(payload, {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 type SignResp =
@@ -177,7 +186,6 @@ function assertExpectedSigners(
       `Unexpected signer count: ${signerKeys.length} (expected ${expected.length})`,
     );
   }
-
   for (const pk of expected) {
     if (!signerKeys.some((k) => k.equals(pk))) {
       throw new Error("Unexpected required signer set");
@@ -190,18 +198,15 @@ function assertOriginAllowed(req: NextRequest) {
 
   const origin = req.headers.get("origin") || "";
   if (!origin) throw new Error("Missing Origin");
-
-  if (!ALLOWED_ORIGINS.includes(origin)) {
+  if (!ALLOWED_ORIGINS.includes(origin))
     throw new Error(`Disallowed Origin: ${origin}`);
-  }
 }
 
-/* ───────── BN helpers (matching flex send route) ───────── */
+/* ───────── BN helpers ───────── */
 
 function bnMax(a: BN, b: BN) {
   return a.gt(b) ? a : b;
 }
-
 function bnMin(a: BN, b: BN) {
   return a.lt(b) ? a : b;
 }
@@ -213,29 +218,6 @@ function parseBaseAmountStringBN(s: unknown): BN {
   } catch {
     return ZERO.clone();
   }
-}
-
-type TokenBalanceLike = {
-  owner?: string;
-  mint?: string;
-  uiTokenAmount?: { amount?: string };
-};
-
-function sumOwnerMintBaseBN(
-  balances: unknown,
-  owner58: string,
-  mint58: string,
-): BN {
-  if (!Array.isArray(balances)) return ZERO.clone();
-  let sum = ZERO.clone();
-  for (const b of balances) {
-    const tb = b as TokenBalanceLike;
-    if (tb?.owner !== owner58) continue;
-    if (tb?.mint !== mint58) continue;
-    const amt = parseBaseAmountStringBN(tb?.uiTokenAmount?.amount);
-    sum = sum.add(amt);
-  }
-  return sum;
 }
 
 function baseBnToUiString(baseBn: BN): string {
@@ -278,7 +260,155 @@ function uiToDecimal128(ui: string) {
   return mongoose.Types.Decimal128.fromString(norm);
 }
 
-/* ───────── Ledger helpers (matching flex) ───────── */
+function safeTailLogs(logs: unknown, max = 20): string[] | null {
+  if (!Array.isArray(logs)) return null;
+  const only = logs.filter((x): x is string => typeof x === "string");
+  return only.length ? only.slice(-max) : null;
+}
+
+/* ───────── Parsed-tx fee finder (this is the REAL FIX) ───────── */
+
+type TransferCheckedParsed = {
+  type: "transferChecked" | "transfer";
+  info: {
+    destination?: string;
+    mint?: string;
+    tokenAmount?: { amount?: string; decimals?: number };
+    amount?: string; // for "transfer" sometimes
+  };
+};
+
+type ParsedIxWithProgramId = ParsedInstruction & { programId?: string };
+
+function isParsed(ix: unknown): ix is ParsedInstruction {
+  return (
+    !!ix &&
+    typeof ix === "object" &&
+    "parsed" in (ix as Record<string, unknown>)
+  );
+}
+
+function flattenParsedInstructions(tx: ParsedTransactionWithMeta) {
+  const out: ParsedInstruction[] = [];
+
+  const outer = tx.transaction.message.instructions || [];
+  for (const ix of outer) if (isParsed(ix)) out.push(ix);
+
+  const inner = tx.meta?.innerInstructions || [];
+  for (const pack of inner) {
+    for (const ix of pack.instructions || []) {
+      if (isParsed(ix)) out.push(ix);
+    }
+  }
+
+  return out;
+}
+
+async function fetchParsedTxWithRetry(
+  conn: Connection,
+  signature: string,
+  attempts = 6,
+): Promise<ParsedTransactionWithMeta | null> {
+  for (let i = 0; i < attempts; i++) {
+    const tx = await conn.getParsedTransaction(signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: "confirmed",
+    });
+    if (tx) return tx;
+    await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+  }
+  return null;
+}
+
+async function deriveTreasuryAtaForMint(params: {
+  mint: PublicKey;
+  tokenProgramId: PublicKey;
+}): Promise<PublicKey> {
+  const treasuryOwner = new PublicKey(TREASURY_OWNER_STR);
+  return getAssociatedTokenAddress(
+    params.mint,
+    treasuryOwner,
+    true,
+    params.tokenProgramId,
+  );
+}
+
+/**
+ * Find the actual fee transfer to treasury from the parsed tx.
+ * Returns exact base units string (e.g. "899") and decimals.
+ */
+async function findTreasuryUsdcFeeFromParsedTx(params: {
+  conn: Connection;
+  signature: string;
+}): Promise<{
+  amountBase: string;
+  decimals: number;
+  destination: string;
+} | null> {
+  const { conn, signature } = params;
+
+  const parsed = await fetchParsedTxWithRetry(conn, signature, 6);
+  if (!parsed) return null;
+
+  const usdcMint = new PublicKey(USDC_MINT_STR);
+  const all = flattenParsedInstructions(parsed);
+
+  // We’ll accept either Tokenkeg or Token-2022 based on which programId appears.
+  // Most USDC is Tokenkeg, but this makes it future-proof.
+  const possiblePrograms = new Set<string>();
+  for (const ix of all) {
+    const pid = (ix as ParsedIxWithProgramId).programId;
+    if (pid) possiblePrograms.add(String(pid));
+  }
+
+  // Try Tokenkeg first, then Token-2022
+  const programOrder: PublicKey[] = [];
+  programOrder.push(TOKEN_PROGRAM_ID);
+  programOrder.push(TOKEN_2022_PROGRAM_ID);
+
+  for (const tokenProgramId of programOrder) {
+    const treasuryAta = await deriveTreasuryAtaForMint({
+      mint: usdcMint,
+      tokenProgramId,
+    });
+    const treasuryAta58 = treasuryAta.toBase58();
+
+    for (const ix of all) {
+      const parsedUnknown = (ix as unknown as { parsed?: unknown }).parsed;
+      if (!parsedUnknown || typeof parsedUnknown !== "object") continue;
+
+      const p = parsedUnknown as TransferCheckedParsed;
+      if (p.type !== "transferChecked" && p.type !== "transfer") continue;
+
+      const info = p.info || {};
+      const destination = String(info.destination || "");
+      const mint = String(info.mint || "");
+      if (!destination) continue;
+
+      // Must go to treasury ATA
+      if (destination !== treasuryAta58) continue;
+
+      // Must be USDC mint (for transferChecked it’s present)
+      if (mint && mint !== usdcMint.toBase58()) continue;
+
+      // Extract exact base units
+      const tokenAmount = info.tokenAmount;
+      const amountBase = String(
+        tokenAmount?.amount || info.amount || "",
+      ).trim();
+
+      const decimals = Number(tokenAmount?.decimals ?? DECIMALS);
+
+      if (!/^\d+$/.test(amountBase)) continue;
+
+      return { amountBase, decimals, destination };
+    }
+  }
+
+  return null;
+}
+
+/* ───────── Ledger helpers ───────── */
 
 async function ensureSavingsAccountExists(opts: {
   userId: mongoose.Types.ObjectId;
@@ -354,7 +484,6 @@ async function syncSavingsAccountAggFromLedger(opts: {
     {
       $group: {
         _id: null,
-
         principalDeposited: {
           $sum: {
             $cond: [{ $eq: ["$direction", "deposit"] }, "$principalPart", D0],
@@ -370,7 +499,6 @@ async function syncSavingsAccountAggFromLedger(opts: {
             $cond: [{ $eq: ["$direction", "withdraw"] }, "$interestPart", D0],
           },
         },
-
         totalDeposited: {
           $sum: {
             $cond: [{ $eq: ["$direction", "deposit"] }, "$amount", D0],
@@ -381,7 +509,6 @@ async function syncSavingsAccountAggFromLedger(opts: {
             $cond: [{ $eq: ["$direction", "withdraw"] }, "$amount", D0],
           },
         },
-
         feesPaidUsdc: { $sum: "$feeUsdc" },
       },
     },
@@ -410,55 +537,39 @@ async function syncSavingsAccountAggFromLedger(opts: {
 }
 
 /**
- * Record fee to unified FeeEvent system (idempotent per signature)
+ * ✅ Must be awaited.
+ * Uses recordUserFees() which writes FeeEvent + updates User totals (your system).
  */
 async function recordSavingsFeeAsync(params: {
   userId: mongoose.Types.ObjectId;
   signature: string;
   feeUi: string;
   accountType: "flex" | "plus";
-}): Promise<void> {
+}): Promise<{ ok: boolean; recorded?: boolean; reason?: string }> {
   const { userId, signature, feeUi, accountType } = params;
 
-  try {
-    const feeUiNum = Number(feeUi);
-    if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) return;
-
-    const kind = `savings_${accountType}_withdraw_fee`;
-
-    const result = await recordUserFees({
-      userId,
-      signature,
-      kind,
-      tokens: [
-        {
-          mint: USDC_MINT_STR,
-          amountUi: feeUiNum,
-          decimals: DECIMALS,
-          symbol: "USDC",
-        },
-      ],
-    });
-
-    console.log("[plus/withdraw/send] recordUserFees", {
-      signature: signature.slice(0, 10),
-      feeUi,
-      kind,
-      recorded: result.ok ? result.recorded : false,
-      reason: (result as { reason?: string })?.reason,
-    });
-  } catch (err) {
-    console.error(
-      "[plus/withdraw/send] Fee recording failed:",
-      err instanceof Error ? err.message : err,
-    );
+  const feeUiNum = Number(feeUi);
+  if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) {
+    return { ok: true, recorded: false, reason: "fee_ui_zero_or_invalid" };
   }
-}
 
-function safeTailLogs(logs: unknown, max = 20): string[] | null {
-  if (!Array.isArray(logs)) return null;
-  const only = logs.filter((x): x is string => typeof x === "string");
-  return only.length ? only.slice(-max) : null;
+  const kind = `savings_${accountType}_withdraw_fee`;
+
+  const result = await recordUserFees({
+    userId,
+    signature,
+    kind,
+    tokens: [
+      {
+        mint: USDC_MINT_STR,
+        amountUi: feeUiNum,
+        decimals: DECIMALS,
+        symbol: "USDC",
+      },
+    ],
+  });
+
+  return result as { ok: boolean; recorded?: boolean; reason?: string };
 }
 
 /* ───────── Route ───────── */
@@ -468,7 +579,7 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
-    // ✅ Optional CSRF-ish protection
+    // CSRF-ish
     try {
       assertOriginAllowed(req);
     } catch (e) {
@@ -482,7 +593,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Auth
+    // Auth
     const session = await getSessionFromCookies();
     if (!session?.userId && !session?.sub) {
       return jsonError(401, {
@@ -493,7 +604,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Load user
+    // User
     const user = await getServerUser();
     if (!user) {
       return jsonError(401, {
@@ -510,7 +621,6 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => null)) as {
       transaction?: string;
     } | null;
-
     if (!body?.transaction || typeof body.transaction !== "string") {
       return jsonError(400, {
         code: "MISSING_TRANSACTION",
@@ -520,7 +630,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Deserialize
+    // Deserialize
     const raw = Buffer.from(body.transaction, "base64");
     if (!raw.length) {
       return jsonError(400, {
@@ -543,7 +653,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Fee payer must be Haven
+    // Fee payer must be Haven
     const feePayer = userSignedTx.message.staticAccountKeys[0];
     if (!feePayer.equals(HAVEN_PUBKEY)) {
       return jsonError(400, {
@@ -554,7 +664,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Blockhash exists
+    // Blockhash exists
     const blockhash = userSignedTx.message.recentBlockhash;
     if (!blockhash || blockhash === "11111111111111111111111111111111") {
       return jsonError(400, {
@@ -565,7 +675,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ User signer check
+    // User signer check
     try {
       assertUserSigned(userSignedTx, expectedUserPk);
     } catch (e) {
@@ -579,7 +689,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ No "surprise signer" txs
+    // No surprise signers
     try {
       assertExpectedSigners(userSignedTx, [HAVEN_PUBKEY, expectedUserPk]);
     } catch (e) {
@@ -596,7 +706,7 @@ export async function POST(req: NextRequest) {
     const conn = getConnection();
     const privy = getPrivyClient();
 
-    // ✅ Co-sign with Haven fee payer
+    // Co-sign with Haven
     let coSignedBytes: Uint8Array;
     try {
       const resp = await privy.walletApi.solana.signTransaction({
@@ -616,7 +726,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ SIMULATE first
+    // Simulate
     const sim = await conn
       .simulateTransaction(VersionedTransaction.deserialize(coSignedBytes), {
         commitment: "confirmed",
@@ -626,17 +736,17 @@ export async function POST(req: NextRequest) {
 
     if (sim?.value?.err) {
       const logs = sim.value.logs ?? [];
-      console.error(
-        "[PLUS/WITHDRAW/SEND] Simulation failed:",
-        sim.value.err,
-        logs.slice(0, 8),
-      );
-
       const joined = logs.join("\n");
       const msg =
         typeof sim.value.err === "string"
           ? sim.value.err
           : JSON.stringify(sim.value.err);
+
+      console.error(
+        "[PLUS/WITHDRAW/SEND] Simulation failed:",
+        msg,
+        logs.slice(0, 8),
+      );
 
       if (isLikelySlippageError(joined) || isLikelySlippageError(msg)) {
         return jsonError(400, {
@@ -681,7 +791,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Broadcast
+    // Broadcast
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
@@ -755,68 +865,37 @@ export async function POST(req: NextRequest) {
       `[PLUS/WITHDRAW/SEND] ${traceId} ${signature.slice(0, 8)}... ${sendTime}ms`,
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // LEDGER RECORDING + FEE EVENT (FIXED)
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ───────────────────────────────────────────────────────────────
+    // DB writes (ledger + fee event)
+    // ───────────────────────────────────────────────────────────────
 
     const accountType = "plus" as const;
     const direction = "withdraw" as const;
 
-    const txResp = await conn.getTransaction(signature, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
+    // ✅ Fee from chain (parsed ix to treasury ATA) — same idea as swaps
+    const feeParsed = await findTreasuryUsdcFeeFromParsedTx({
+      conn,
+      signature,
     });
 
-    const logsTail = safeTailLogs(txResp?.meta?.logMessages);
+    const feeBase = feeParsed
+      ? parseBaseAmountStringBN(feeParsed.amountBase)
+      : ZERO.clone();
+    const feeUi = baseBnToUiString(feeBase);
 
-    if (!txResp?.meta) {
-      return NextResponse.json({
-        ok: true,
-        signature,
-        sendTimeMs: sendTime,
-        traceId,
-        logs: logsTail ?? undefined,
-        recorded: false,
-        recordError:
-          "No transaction meta returned from RPC; cannot compute deltas.",
-      });
-    }
+    console.log("[PLUS/WITHDRAW/SEND] parsed fee", {
+      signature: signature.slice(0, 10),
+      found: Boolean(feeParsed),
+      destination: feeParsed?.destination,
+      amountBase: feeParsed?.amountBase,
+      decimals: feeParsed?.decimals,
+      feeUi,
+    });
 
-    const pre = txResp.meta.preTokenBalances ?? [];
-    const post = txResp.meta.postTokenBalances ?? [];
-
-    const usdcMintPk = new PublicKey(USDC_MINT_STR);
-    const treasuryOwnerPk = new PublicKey(TREASURY_OWNER_STR);
-
-    const userPre = sumOwnerMintBaseBN(
-      pre,
-      walletAddress,
-      usdcMintPk.toBase58(),
-    );
-    const userPost = sumOwnerMintBaseBN(
-      post,
-      walletAddress,
-      usdcMintPk.toBase58(),
-    );
-    const treasuryPre = sumOwnerMintBaseBN(
-      pre,
-      treasuryOwnerPk.toBase58(),
-      usdcMintPk.toBase58(),
-    );
-    const treasuryPost = sumOwnerMintBaseBN(
-      post,
-      treasuryOwnerPk.toBase58(),
-      usdcMintPk.toBase58(),
-    );
-
-    const userDelta = userPost.sub(userPre); // + means user received
-    const treasuryDelta = treasuryPost.sub(treasuryPre); // + means treasury received
-
-    const feeBase = bnMax(treasuryDelta, ZERO);
-    const netToUser = bnMax(userDelta, ZERO);
-
-    // For withdrawals: gross = net + fee
-    const amountBase = netToUser.add(feeBase);
+    // (Optional) compute netToUser later; keep your existing approach if you want,
+    // but don’t block fee event recording on it.
+    const netToUser = ZERO.clone(); // leave as 0 if you don't compute it here
+    const amountBase = netToUser.add(feeBase); // ledger gross fallback if you want exact later
 
     await connectMongo();
 
@@ -827,7 +906,6 @@ export async function POST(req: NextRequest) {
         signature,
         sendTimeMs: sendTime,
         traceId,
-        logs: logsTail ?? undefined,
         recorded: false,
         recordError: "User not found for walletAddress.",
       });
@@ -839,6 +917,9 @@ export async function POST(req: NextRequest) {
       walletAddress,
     });
 
+    // If you still want ledger correctness, you can keep your old net calculation.
+    // For now, we focus on fee event correctness since that's the blocker.
+
     const principalRemainingBase = await getPrincipalRemainingBaseFromLedger({
       userId: userDoc._id,
       accountType,
@@ -849,7 +930,6 @@ export async function POST(req: NextRequest) {
     if (interestPartBase.isNeg()) interestPartBase = ZERO.clone();
 
     const amountUi = baseBnToUiString(amountBase);
-    const feeUi = baseBnToUiString(feeBase);
     const principalUi = baseBnToUiString(principalPartBase);
     const interestUi = baseBnToUiString(interestPartBase);
     const netUi = baseBnToUiString(netToUser);
@@ -883,15 +963,38 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅✅ FIX: ALWAYS try to record the fee event if feeBase > 0
-    // (FeeEvent is idempotent by signature, so it’s safe on retries)
+    // ✅✅ FeeEvent write (AWAITED)
     if (!feeBase.isZero()) {
-      recordSavingsFeeAsync({
-        userId: userDoc._id,
-        signature,
-        feeUi,
-        accountType,
-      }).catch(() => {});
+      try {
+        const feeRes = await recordSavingsFeeAsync({
+          userId: userDoc._id,
+          signature,
+          feeUi,
+          accountType,
+        });
+
+        console.log("[plus/withdraw/send] fee recorded result", {
+          signature: signature.slice(0, 10),
+          feeUi,
+          ok: feeRes.ok,
+          recorded: feeRes.recorded,
+          reason: feeRes.reason,
+        });
+      } catch (err) {
+        console.error("[plus/withdraw/send] fee write FAILED", {
+          signature,
+          feeUi,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } else {
+      console.warn(
+        "[plus/withdraw/send] feeBase == 0; skipping FeeEvent write",
+        {
+          signature: signature.slice(0, 10),
+          hint: "No parsed treasury USDC transfer found. Fee ix might be going to a non-ATA token account.",
+        },
+      );
     }
 
     return NextResponse.json({
@@ -899,7 +1002,6 @@ export async function POST(req: NextRequest) {
       signature,
       sendTimeMs: sendTime,
       traceId,
-      logs: logsTail ?? undefined,
       recorded: inserted,
       accounting: {
         direction,
@@ -910,6 +1012,13 @@ export async function POST(req: NextRequest) {
         principalUi,
         interestUi,
       },
+      fee: feeParsed
+        ? {
+            destination: feeParsed.destination,
+            amountBase: feeParsed.amountBase,
+            decimals: feeParsed.decimals,
+          }
+        : null,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

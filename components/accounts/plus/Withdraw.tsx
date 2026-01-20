@@ -218,12 +218,9 @@ export default function WithdrawPlus({
     .toUpperCase()
     .trim();
 
-  const isUsd = displayCurrency === "USD";
+    const isUsd = displayCurrency === "USD";
 
-  // Available balance in display currency
-  const availableBalanceDisplay = isUsd
-    ? availableBalance
-    : availableBalance * fxRate;
+    const availableBalanceDisplay = availableBalance;
 
   const {
     withdraw,

@@ -2,17 +2,17 @@
 import mongoose, { Schema, Types } from "mongoose";
 
 export interface IFeeToken {
-  mint: string; // SPL mint base58
-  symbol?: string; // optional
-  decimals: number; // 0..18
-  amountUi: mongoose.Types.Decimal128; // UI units, stored with `decimals` precision
+  mint: string;
+  symbol?: string;
+  decimals: number;
+  amountUi: mongoose.Types.Decimal128;
 }
 
 export interface IFeeEvent {
   userId: Types.ObjectId;
-  kind: string; // e.g. "transfer", "swap", "savings_deposit"
-  signature: string; // UNIQUE idempotency key (txSig, requestId, etc.)
-  tokens: IFeeToken[]; // ✅ multi-token fees paid in this tx
+  kind: string;
+  signature: string;
+  tokens: IFeeToken[];
   createdAt: Date;
 }
 
@@ -23,7 +23,7 @@ const FeeTokenSchema = new Schema<IFeeToken>(
     decimals: { type: Number, required: true },
     amountUi: { type: Schema.Types.Decimal128, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const FeeEventSchema = new Schema<IFeeEvent>(
@@ -35,15 +35,19 @@ const FeeEventSchema = new Schema<IFeeEvent>(
       index: true,
     },
     kind: { type: String, required: true, index: true },
-    signature: { type: String, required: true, unique: true, index: true },
 
-    // ✅ NEW FIELD (replaces amountUsdc)
+    // ❗️NOT unique by itself anymore
+    signature: { type: String, required: true, index: true },
+
     tokens: { type: [FeeTokenSchema], required: true, default: [] },
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: { createdAt: true, updatedAt: false } },
 );
 
-// Helpful indexes for analytics
+// ✅ Idempotency should be signature + kind (not just signature)
+FeeEventSchema.index({ signature: 1, kind: 1 }, { unique: true });
+
+// Helpful indexes
 FeeEventSchema.index({ userId: 1, createdAt: -1 });
 FeeEventSchema.index({ kind: 1, createdAt: -1 });
 FeeEventSchema.index({ "tokens.mint": 1, createdAt: -1 });

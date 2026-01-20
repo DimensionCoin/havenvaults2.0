@@ -4,6 +4,7 @@ import "server-only";
 import mongoose from "mongoose";
 import User from "@/models/User";
 import { FeeEvent } from "@/models/FeeEvent";
+import { connect as connectMongo } from "@/lib/db";
 
 const D128 = mongoose.Types.Decimal128;
 
@@ -21,31 +22,21 @@ function normalizeSymbol(symbol?: string | null): string | undefined {
   return s ? s : undefined;
 }
 
-/**
- * FeeEvent stores UI units. This formats UI with token decimals.
- */
 function toD128FromUi(
   amountUi: number,
-  decimals: number
+  decimals: number,
 ): mongoose.Types.Decimal128 {
   const d = clampDecimals(decimals);
   const a = Number.isFinite(amountUi) ? Math.max(0, amountUi) : 0;
   return D128.fromString(a.toFixed(d));
 }
 
-/**
- * Convert UI (float) → base units integer string, safely.
- * Example: 0.002 wSOL with 9 decimals => "2000000"
- *
- * NOTE: No BigInt literals used.
- */
 function uiToBaseUnits(amountUi: number, decimals: number): string {
   const d = clampDecimals(decimals);
   const a = Number(amountUi);
   if (!Number.isFinite(a) || a <= 0) return "0";
 
-  // Normalize to fixed decimals, then remove decimal point
-  const fixed = a.toFixed(d); // e.g. "0.002000000"
+  const fixed = a.toFixed(d);
   const [wholeStr, fracStr = ""] = fixed.split(".");
   const whole = BigInt(wholeStr || "0");
   const frac = BigInt((fracStr + "0".repeat(d)).slice(0, d) || "0");
@@ -61,17 +52,15 @@ function addBase(a: string, b: string): string {
 }
 
 export type FeeToken = {
-  mint: string; // SPL mint base58
-  amountUi: number; // UI units
-  decimals: number; // token decimals
-  symbol?: string; // optional
+  mint: string;
+  amountUi: number;
+  decimals: number;
+  symbol?: string;
 };
 
 type RecordResult =
   | { ok: true; recorded: true }
   | { ok: true; recorded: false; reason: "duplicate" | "zero" };
-
-type MongoDupKeyError = { code?: number };
 
 type FeesPaidTotalsEntry = {
   amountBase?: string;
@@ -85,18 +74,14 @@ type UserFeesLean = {
   feesPaidTotals?: FeesPaidTotalsMap;
 } | null;
 
-/**
- * ✅ Records multi-token fees (ledger + aggregates).
- *
- * - FeeEvent: idempotent per signature (unique)
- * - User.feesPaidTotals[mint].amountBase: sums base-units as integer string
- */
 export async function recordUserFees(params: {
   userId: mongoose.Types.ObjectId;
   signature: string;
   kind: string;
   tokens: FeeToken[];
 }): Promise<RecordResult> {
+  await connectMongo(); // ✅ guarantee DB connection (even if caller forgot)
+
   const userId = params.userId;
   const signature = String(params.signature || "").trim();
   const kind = String(params.kind || "").trim();
@@ -107,7 +92,7 @@ export async function recordUserFees(params: {
 
   const tokensRaw = Array.isArray(params.tokens) ? params.tokens : [];
 
-  // Merge duplicates by mint (sum UI + sum base)
+  // Merge duplicates by mint
   const merged = new Map<
     string,
     {
@@ -148,28 +133,32 @@ export async function recordUserFees(params: {
   const tokens = Array.from(merged.values());
   if (tokens.length === 0) return { ok: true, recorded: false, reason: "zero" };
 
-  // 1) Insert FeeEvent (idempotency)
-  try {
-    await FeeEvent.create({
-      userId,
-      signature,
-      kind,
-      tokens: tokens.map((t) => ({
-        mint: t.mint,
-        symbol: t.symbol,
-        decimals: t.decimals,
-        amountUi: toD128FromUi(t.amountUi, t.decimals),
-      })),
-    });
-  } catch (e: unknown) {
-    const err = e as MongoDupKeyError;
-    if (err?.code === 11000) {
-      return { ok: true, recorded: false, reason: "duplicate" };
-    }
-    throw e;
+  // ✅ Atomic idempotent write: (signature + kind)
+  const up = await FeeEvent.updateOne(
+    { signature, kind },
+    {
+      $setOnInsert: {
+        userId,
+        signature,
+        kind,
+        tokens: tokens.map((t) => ({
+          mint: t.mint,
+          symbol: t.symbol,
+          decimals: t.decimals,
+          amountUi: toD128FromUi(t.amountUi, t.decimals),
+        })),
+      },
+    },
+    { upsert: true },
+  );
+
+  const inserted = (up.upsertedCount ?? 0) === 1;
+  if (!inserted) {
+    // already recorded for this signature+kind
+    return { ok: true, recorded: false, reason: "duplicate" };
   }
 
-  // 2) Update User aggregates safely (read-modify-write)
+  // ✅ Only now update aggregates (no double-counting)
   const userLean = (await User.findById(userId)
     .select({ feesPaidTotals: 1 })
     .lean()) as UserFeesLean;
@@ -189,14 +178,11 @@ export async function recordUserFees(params: {
     const nextBase = addBase(curBase, t.amountBase);
 
     $set[`feesPaidTotals.${t.mint}.amountBase`] = nextBase;
-
-    // keep decimals stable once set
     $set[`feesPaidTotals.${t.mint}.decimals`] =
       Number.isFinite(cur.decimals) && (cur.decimals as number) > 0
         ? (cur.decimals as number)
         : t.decimals;
 
-    // only set symbol if missing
     if (t.symbol && !cur.symbol) {
       $set[`feesPaidTotals.${t.mint}.symbol`] = t.symbol;
     }
@@ -207,31 +193,4 @@ export async function recordUserFees(params: {
   }
 
   return { ok: true, recorded: true };
-}
-
-/**
- * Convenience helper for USDC callers.
- */
-export async function recordUserFeeUsdc(params: {
-  userId: mongoose.Types.ObjectId;
-  signature: string;
-  kind: string;
-  amountUsdc: number;
-}) {
-  const usdcMint = String(process.env.NEXT_PUBLIC_USDC_MINT || "").trim();
-  if (!usdcMint) throw new Error("Missing env: NEXT_PUBLIC_USDC_MINT");
-
-  return recordUserFees({
-    userId: params.userId,
-    signature: params.signature,
-    kind: params.kind,
-    tokens: [
-      {
-        mint: usdcMint,
-        amountUi: params.amountUsdc,
-        decimals: 6,
-        symbol: "USDC",
-      },
-    ],
-  });
 }
