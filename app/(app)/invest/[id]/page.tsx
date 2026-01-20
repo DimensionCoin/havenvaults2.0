@@ -27,6 +27,8 @@ import {
   Check,
   AlertTriangle,
   QrCode,
+  Landmark,
+  TrendingUp,
 } from "lucide-react";
 
 import {
@@ -43,6 +45,7 @@ import {
   useServerSponsoredUsdcSwap,
   type UsdcSwapStatus,
 } from "@/hooks/useServerSponsoredUsdcSwap";
+import { useServerSponsoredJLJupUSDSwap } from "@/hooks/Useserversponsoredjljupusdswap";
 
 const CLUSTER = getCluster();
 
@@ -75,6 +78,10 @@ const TIMEFRAMES: Record<TimeframeKey, { label: string; days: string }> = {
   "30D": { label: "30D", days: "30" },
   "90D": { label: "90D", days: "90" },
 };
+
+/* ───────── Account Types ───────── */
+
+type PaymentAccount = "cash" | "plus";
 
 /* ───────── Stage Config (matches MultiplierPanel) ───────── */
 
@@ -152,8 +159,8 @@ const resolveTokenFromSlug = (slug: string): ResolvedToken | null => {
     const mint = getMintFor(meta, CLUSTER);
     if (!mint) continue;
 
-    const symbol = meta.symbol?.toLowerCase();
-    const id = meta.id?.toLowerCase();
+    const symbol = meta?.symbol?.toLowerCase();
+    const id = meta?.id?.toLowerCase();
     const mintLower = mint.toLowerCase();
 
     if (
@@ -203,6 +210,16 @@ function explorerUrl(sig: string) {
   return `https://solscan.io/tx/${sig}`;
 }
 
+/**
+ * Given a desired net amount and fee rate, calculate the gross amount needed.
+ * gross = net / (1 - feeRate)
+ * This ensures: gross - (gross * feeRate) = net
+ */
+function grossUpForFee(netAmount: number, feeRate: number): number {
+  if (feeRate <= 0 || feeRate >= 1) return netAmount;
+  return netAmount / (1 - feeRate);
+}
+
 /* ───────── QR Code Component ───────── */
 
 function WalletQRCode({ value, size = 140 }: { value: string; size?: number }) {
@@ -212,12 +229,11 @@ function WalletQRCode({ value, size = 140 }: { value: string; size?: number }) {
   useEffect(() => {
     if (!value) return;
 
-    // Dynamically import qrcode library
     const generateQR = async () => {
       try {
         const QRCode = (await import("qrcode")).default;
         const dataUrl = await QRCode.toDataURL(value, {
-          width: size * 2, // Higher resolution for crisp display
+          width: size * 2,
           margin: 1,
           color: {
             dark: "#000000",
@@ -405,7 +421,6 @@ function SleekLineChart({
         preserveAspectRatio="none"
       >
         <defs>
-          {/* uses CSS var if you set it; falls back to emerald */}
           <linearGradient id="havenLineFade" x1="0" x2="0" y1="0" y2="1">
             <stop
               offset="0%"
@@ -582,16 +597,31 @@ const CoinPage: React.FC = () => {
     tokens,
     usdcAmount,
     usdcUsd,
+    savingsPlusAmount,
+    savingsPlusUsd,
+    plusReady,
     refresh: refreshBalances,
   } = useBalance();
 
+  // USDC swap hook (for Cash account)
   const {
     swap: usdcSwap,
-    status: swapStatus,
-    error: swapError,
-    reset: resetSwap,
-    isBusy: swapBusy,
+    status: usdcSwapStatus,
+    error: usdcSwapError,
+    reset: resetUsdcSwap,
+    isBusy: usdcSwapBusy,
   } = useServerSponsoredUsdcSwap();
+
+  // JLJupUSD swap hook (for Plus account)
+  const {
+    swap: jlJupUsdSwap,
+    status: jlJupUsdSwapStatus,
+    error: jlJupUsdSwapError,
+    reset: resetJlJupUsdSwap,
+    isBusy: jlJupUsdSwapBusy,
+    inputMint: JLJUPUSD_MINT,
+    inputDecimals: JLJUPUSD_DECIMALS,
+  } = useServerSponsoredJLJupUSDSwap();
 
   const slug = (params?.id || "").toString();
   const resolved = useMemo(() => resolveTokenFromSlug(slug), [slug]);
@@ -606,11 +636,12 @@ const CoinPage: React.FC = () => {
 
   const [spotPriceUsd, setSpotPriceUsd] = useState<number | null>(null);
   const [priceChange24hPct, setPriceChange24hPct] = useState<number | null>(
-    null
+    null,
   );
   const [priceLoading, setPriceLoading] = useState(false);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [paymentAccount, setPaymentAccount] = useState<PaymentAccount>("cash");
   const [inputUnit, setInputUnit] = useState<"cash" | "asset">("cash");
   const [cashAmount, setCashAmount] = useState<string>("");
   const [assetAmount, setAssetAmount] = useState<string>("");
@@ -638,6 +669,18 @@ const CoinPage: React.FC = () => {
   const ownerBase58 = user?.walletAddress ?? "";
   const coingeckoId = (meta?.id || "").trim();
 
+  // Determine which hook is active based on payment account
+  const swapStatus =
+    paymentAccount === "cash" ? usdcSwapStatus : jlJupUsdSwapStatus;
+  const swapError =
+    paymentAccount === "cash" ? usdcSwapError : jlJupUsdSwapError;
+  const swapBusy = paymentAccount === "cash" ? usdcSwapBusy : jlJupUsdSwapBusy;
+
+  const resetSwap = useCallback(() => {
+    resetUsdcSwap();
+    resetJlJupUsdSwap();
+  }, [resetUsdcSwap, resetJlJupUsdSwap]);
+
   /* ───────── Balances ───────── */
 
   const tokenPosition = useMemo(() => {
@@ -650,10 +693,22 @@ const CoinPage: React.FC = () => {
 
   const tokenBalance = clampNumber(tokenPosition.amount);
   const tokenValueDisplay = clampNumber(tokenPosition.valueDisplay);
+
+  // Cash account balance (USDC)
   const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0));
   const cashBalanceDisplay = clampNumber(
-    typeof usdcUsd === "number" ? usdcUsd : 0
+    typeof usdcUsd === "number" ? usdcUsd : 0,
   );
+
+  // Plus account balance (from BalanceProvider - already in display currency)
+  const plusBalanceInternal = clampNumber(savingsPlusAmount);
+  const plusBalanceDisplay = clampNumber(savingsPlusUsd);
+
+  // Active balance based on selected payment account
+  const activeBalanceInternal =
+    paymentAccount === "cash" ? cashBalanceInternal : plusBalanceInternal;
+  const activeBalanceDisplay =
+    paymentAccount === "cash" ? cashBalanceDisplay : plusBalanceDisplay;
 
   const tokenDecimals =
     typeof meta?.decimals === "number" && Number.isFinite(meta.decimals)
@@ -690,12 +745,12 @@ const CoinPage: React.FC = () => {
         if (!entry) return;
 
         setSpotPriceUsd(
-          typeof entry.priceUsd === "number" ? entry.priceUsd : null
+          typeof entry.priceUsd === "number" ? entry.priceUsd : null,
         );
         setPriceChange24hPct(
           typeof entry.priceChange24hPct === "number"
             ? entry.priceChange24hPct
-            : null
+            : null,
         );
       } catch (err: unknown) {
         const e = err as { name?: string };
@@ -727,7 +782,7 @@ const CoinPage: React.FC = () => {
         setHistoryError(null);
 
         const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(
-          coingeckoId
+          coingeckoId,
         )}&days=${encodeURIComponent(cfg.days)}`;
 
         const res = await fetch(url, {
@@ -775,19 +830,101 @@ const CoinPage: React.FC = () => {
   const cashUsd = fxRate && fxRate > 0 && cashNum > 0 ? cashNum / fxRate : 0;
   const assetUsd = spotPriceUsd && assetNum > 0 ? assetNum * spotPriceUsd : 0;
 
-  const grossUsd = lastEdited === "cash" ? cashUsd : assetUsd;
+  /**
+   * Calculate gross/fee/net based on input mode and side
+   *
+   * For BUY:
+   * - If user enters cash amount: that's the gross, fee is deducted, they receive less asset
+   * - If user enters asset amount: we need to gross up the cash to ensure they receive exactly that amount
+   *
+   * For SELL:
+   * - If user enters asset amount: that's what they sell, fee is deducted from proceeds
+   * - If user enters cash amount: we calculate how much asset needed to receive that cash
+   */
+  const tradeCalculations = useMemo(() => {
+    if (!spotPriceUsd || spotPriceUsd <= 0 || !fxRate || fxRate <= 0) {
+      return {
+        grossUsd: 0,
+        feeUsd: 0,
+        netUsd: 0,
+        grossDisplay: 0,
+        feeDisplay: 0,
+        netDisplay: 0,
+        receiveAsset: 0,
+        receiveCashDisplay: 0,
+        payAsset: 0,
+        payCashDisplay: 0,
+      };
+    }
+
+    let grossUsd = 0;
+    let feeUsd = 0;
+    let netUsd = 0;
+
+    if (side === "buy") {
+      if (lastEdited === "cash") {
+        // User entered cash amount - this is the gross
+        grossUsd = cashUsd;
+        feeUsd = grossUsd * SWAP_FEE_PCT;
+        netUsd = Math.max(grossUsd - feeUsd, 0);
+      } else {
+        // User entered asset amount - they want exactly this much asset
+        // We need to gross up: net = assetUsd, gross = net / (1 - feeRate)
+        netUsd = assetUsd;
+        grossUsd = grossUpForFee(netUsd, SWAP_FEE_PCT);
+        feeUsd = grossUsd - netUsd;
+      }
+    } else {
+      // SELL side
+      if (lastEdited === "asset") {
+        // User entered asset amount to sell
+        grossUsd = assetUsd;
+        feeUsd = grossUsd * SWAP_FEE_PCT;
+        netUsd = Math.max(grossUsd - feeUsd, 0);
+      } else {
+        // User entered cash amount they want to receive
+        // net = cashUsd, gross = net / (1 - feeRate)
+        netUsd = cashUsd;
+        grossUsd = grossUpForFee(netUsd, SWAP_FEE_PCT);
+        feeUsd = grossUsd - netUsd;
+      }
+    }
+
+    const grossDisplay = grossUsd * fxRate;
+    const feeDisplay = feeUsd * fxRate;
+    const netDisplay = netUsd * fxRate;
+
+    // What user receives/pays
+    const receiveAsset = side === "buy" ? netUsd / spotPriceUsd : 0;
+    const receiveCashDisplay = side === "sell" ? netDisplay : 0;
+    const payAsset = side === "sell" ? grossUsd / spotPriceUsd : 0;
+    const payCashDisplay = side === "buy" ? grossDisplay : 0;
+
+    return {
+      grossUsd,
+      feeUsd,
+      netUsd,
+      grossDisplay,
+      feeDisplay,
+      netDisplay,
+      receiveAsset,
+      receiveCashDisplay,
+      payAsset,
+      payCashDisplay,
+    };
+  }, [spotPriceUsd, fxRate, side, lastEdited, cashUsd, assetUsd]);
+
+  const {
+    grossUsd,
+    feeDisplay,
+    netDisplay,
+    receiveAsset,
+    receiveCashDisplay,
+    payCashDisplay,
+  } = tradeCalculations;
+
+  // For balance checks
   const grossUsdSafe = grossUsd > 0 && Number.isFinite(grossUsd) ? grossUsd : 0;
-
-  const feeUsd =
-    grossUsdSafe > 0 && SWAP_FEE_PCT > 0 ? grossUsdSafe * SWAP_FEE_PCT : 0;
-  const netUsdAfterFee = Math.max(grossUsdSafe - feeUsd, 0);
-
-  const feeDisplay = fxRate && feeUsd ? feeUsd * fxRate : 0;
-  const netDisplay = fxRate && netUsdAfterFee ? netUsdAfterFee * fxRate : 0;
-
-  const receiveAsset =
-    spotPriceUsd && netUsdAfterFee ? netUsdAfterFee / spotPriceUsd : 0;
-  const receiveCashDisplay = netDisplay;
 
   const impliedAssetFromCash =
     spotPriceUsd && cashUsd > 0 ? cashUsd / spotPriceUsd : 0;
@@ -806,8 +943,22 @@ const CoinPage: React.FC = () => {
         if (assetAmount !== "") setAssetAmount("");
         return;
       }
+
+      // When user enters cash, calculate asset they'll receive (after fees for buy)
       const usd = n / fxRate;
-      const computed = usd / spotPriceUsd;
+      let computed: number;
+
+      if (side === "buy") {
+        // For buy: cash is gross, asset received is net/price
+        const fee = usd * SWAP_FEE_PCT;
+        const net = usd - fee;
+        computed = net / spotPriceUsd;
+      } else {
+        // For sell: cash is what they want to receive (net), asset is gross/price
+        const gross = grossUpForFee(usd, SWAP_FEE_PCT);
+        computed = gross / spotPriceUsd;
+      }
+
       if (Number.isFinite(computed) && computed > 0) {
         const next = String(computed);
         if (next !== assetAmount) setAssetAmount(next);
@@ -818,15 +969,29 @@ const CoinPage: React.FC = () => {
         if (cashAmount !== "") setCashAmount("");
         return;
       }
-      const usd = n * spotPriceUsd;
-      const computed = usd * fxRate;
+
+      // When user enters asset, calculate cash
+      const assetValueUsd = n * spotPriceUsd;
+      let computed: number;
+
+      if (side === "buy") {
+        // For buy: user wants exact asset, cash needed is grossed up
+        const gross = grossUpForFee(assetValueUsd, SWAP_FEE_PCT);
+        computed = gross * fxRate;
+      } else {
+        // For sell: asset is gross, cash received is net
+        const fee = assetValueUsd * SWAP_FEE_PCT;
+        const net = assetValueUsd - fee;
+        computed = net * fxRate;
+      }
+
       if (Number.isFinite(computed) && computed > 0) {
         const next = String(computed);
         if (next !== cashAmount) setCashAmount(next);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fxRate, spotPriceUsd, lastEdited]);
+  }, [fxRate, spotPriceUsd, lastEdited, side]);
 
   /* ───────── Modal stage config ───────── */
 
@@ -857,6 +1022,16 @@ const CoinPage: React.FC = () => {
     setShowBreakdown(false);
   };
 
+  const handlePaymentAccountChange = (next: PaymentAccount) => {
+    setPaymentAccount(next);
+    resetSwap();
+    setLocalErr(null);
+    // Reset amounts when switching accounts
+    setCashAmount("");
+    setAssetAmount("");
+    setIsMaxSell(false);
+  };
+
   const handleUnitChange = (next: "cash" | "asset") => {
     setLocalErr(null);
     setIsMaxSell(false);
@@ -866,8 +1041,8 @@ const CoinPage: React.FC = () => {
 
   const setQuickCash = (pct: number) => {
     if (side !== "buy") return;
-    if (!cashBalanceDisplay || cashBalanceDisplay <= 0) return;
-    const v = cashBalanceDisplay * pct;
+    if (!activeBalanceDisplay || activeBalanceDisplay <= 0) return;
+    const v = activeBalanceDisplay * pct;
     setInputUnit("cash");
     setLastEdited("cash");
     setCashAmount(String(v));
@@ -904,29 +1079,58 @@ const CoinPage: React.FC = () => {
       let sig: string;
 
       if (side === "buy") {
-        if (grossUsdSafe > cashBalanceInternal + 0.000001) {
-          throw new Error("Not enough Cash available.");
+        // Check balance based on selected payment account
+        if (grossUsdSafe > activeBalanceInternal + 0.000001) {
+          throw new Error(
+            paymentAccount === "cash"
+              ? "Not enough Cash available."
+              : "Not enough Plus account balance.",
+          );
         }
 
-        const amountDisplay =
-          lastEdited === "cash" ? cashNum : impliedCashFromAssetDisplay;
+        // Calculate the amount to send based on what was edited
+        let amountDisplay: number;
 
-        const result = await usdcSwap({
-          kind: "buy",
-          fromOwnerBase58: ownerBase58,
-          outputMint: mint,
-          amountDisplay,
-          fxRate,
-          slippageBps: 50,
-        });
+        if (lastEdited === "cash") {
+          // User entered cash amount directly
+          amountDisplay = cashNum;
+        } else {
+          // User entered asset amount - we need to gross up to ensure they get exact amount
+          // The payCashDisplay already accounts for this
+          amountDisplay = payCashDisplay;
+        }
 
-        sig = result.signature;
+        if (paymentAccount === "cash") {
+          // Use USDC swap
+          const result = await usdcSwap({
+            kind: "buy",
+            fromOwnerBase58: ownerBase58,
+            outputMint: mint,
+            amountDisplay,
+            fxRate,
+            slippageBps: 50,
+          });
+          sig = result.signature;
+        } else {
+          // Use JLJupUSD swap
+          // Convert display amount to JLJupUSD amount (roughly 1:1 with USD)
+          const jlJupUsdAmount = amountDisplay / fxRate; // Convert from display currency to USD
+
+          const result = await jlJupUsdSwap({
+            fromOwnerBase58: ownerBase58,
+            outputMint: mint,
+            amountUi: jlJupUsdAmount,
+            slippageBps: 50,
+          });
+          sig = result.signature;
+        }
       } else {
+        // SELL side - always sells to USDC regardless of payment account setting
         const sellAmountUi =
           lastEdited === "asset"
             ? assetNum
             : spotPriceUsd && fxRate && fxRate > 0
-              ? cashNum / fxRate / spotPriceUsd
+              ? tradeCalculations.payAsset
               : 0;
 
         if (sellAmountUi <= 0) throw new Error("Enter an amount.");
@@ -934,6 +1138,7 @@ const CoinPage: React.FC = () => {
           throw new Error("Not enough balance to sell that amount.");
         }
 
+        // Sell always goes through USDC swap (receive USDC)
         const result = await usdcSwap({
           kind: "sell",
           fromOwnerBase58: ownerBase58,
@@ -975,13 +1180,16 @@ const CoinPage: React.FC = () => {
     fxRate,
     spotPriceUsd,
     grossUsdSafe,
-    cashBalanceInternal,
+    activeBalanceInternal,
+    paymentAccount,
     lastEdited,
     cashNum,
-    impliedCashFromAssetDisplay,
+    payCashDisplay,
     usdcSwap,
     mint,
+    jlJupUsdSwap,
     assetNum,
+    tradeCalculations.payAsset,
     isMaxSell,
     tokenBalance,
     tokenDecimals,
@@ -996,7 +1204,6 @@ const CoinPage: React.FC = () => {
       setAddressCopied(true);
       setTimeout(() => setAddressCopied(false), 2000);
     } catch {
-      // Fallback for older browsers
       const textArea = document.createElement("textarea");
       textArea.value = ownerBase58;
       document.body.appendChild(textArea);
@@ -1024,11 +1231,13 @@ const CoinPage: React.FC = () => {
     !spotPriceUsd ||
     !fxRate ||
     grossUsdSafe <= 0 ||
-    (side === "buy" ? cashBalanceInternal <= 0 : tokenBalance <= 0);
+    (side === "buy" ? activeBalanceInternal <= 0 : tokenBalance <= 0);
 
   const errorToShow = localErr || swapError?.message;
 
+  // Balance display strings
   const cashLine = `Cash: ${formatMoneyNoCode(cashBalanceDisplay)}`;
+  const plusLine = `Plus: ${formatMoneyNoCode(plusBalanceDisplay)}`;
   const assetLine = `You own: ${formatQty(tokenBalance, 6)} ${
     symbol || "ASSET"
   } · ${formatMoneyNoCode(tokenValueDisplay)}`;
@@ -1093,7 +1302,6 @@ const CoinPage: React.FC = () => {
             className="w-full max-w-sm rounded-3xl border bg-card p-5 shadow-fintech-lg"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Close button */}
             {modal.kind !== "processing" && (
               <div className="mb-2 flex justify-end">
                 <button
@@ -1330,7 +1538,7 @@ const CoinPage: React.FC = () => {
                                 {TIMEFRAMES[tf].label}
                               </button>
                             );
-                          }
+                          },
                         )}
                       </div>
                     </div>
@@ -1403,17 +1611,123 @@ const CoinPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Context */}
-                  <div className="mt-3 rounded-2xl border bg-card/60 px-3 py-2 text-[12px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground">
-                        {side === "buy" ? "Cash account" : "Asset balance"}
-                      </span>
-                      <span className="font-medium text-foreground">
-                        {side === "buy" ? cashLine : assetLine}
-                      </span>
+                  {/* Payment Account Selector (only for BUY) */}
+                  {side === "buy" && (
+                    <div className="mt-3">
+                      <p className="mb-2 text-[11px] text-muted-foreground">
+                        Pay from
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={swapBusy || cashBalanceInternal <= 0}
+                          onClick={() => handlePaymentAccountChange("cash")}
+                          className={[
+                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
+                            paymentAccount === "cash"
+                              ? "border-primary/50 bg-primary/10"
+                              : "border-border bg-card/60 hover:bg-secondary",
+                            (swapBusy || cashBalanceInternal <= 0) &&
+                              "opacity-50",
+                          ].join(" ")}
+                        >
+                          <div
+                            className={[
+                              "flex h-8 w-8 items-center justify-center rounded-xl",
+                              paymentAccount === "cash"
+                                ? "bg-primary/20"
+                                : "bg-muted/40",
+                            ].join(" ")}
+                          >
+                            <Landmark
+                              className={[
+                                "h-4 w-4",
+                                paymentAccount === "cash"
+                                  ? "text-primary"
+                                  : "text-muted-foreground",
+                              ].join(" ")}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[12px] font-semibold text-foreground">
+                              Cash
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {formatMoneyNoCode(cashBalanceDisplay)}
+                            </p>
+                          </div>
+                          {paymentAccount === "cash" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={
+                            swapBusy || !plusReady || plusBalanceInternal <= 0
+                          }
+                          onClick={() => handlePaymentAccountChange("plus")}
+                          className={[
+                            "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-left transition",
+                            paymentAccount === "plus"
+                              ? "border-primary/50 bg-primary/10"
+                              : "border-border bg-card/60 hover:bg-secondary",
+                            (swapBusy ||
+                              !plusReady ||
+                              plusBalanceInternal <= 0) &&
+                              "opacity-50",
+                          ].join(" ")}
+                        >
+                          <div
+                            className={[
+                              "flex h-8 w-8 items-center justify-center rounded-xl",
+                              paymentAccount === "plus"
+                                ? "bg-primary/20"
+                                : "bg-muted/40",
+                            ].join(" ")}
+                          >
+                            <TrendingUp
+                              className={[
+                                "h-4 w-4",
+                                paymentAccount === "plus"
+                                  ? "text-primary"
+                                  : "text-muted-foreground",
+                              ].join(" ")}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[12px] font-semibold text-foreground">
+                              Plus
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {!plusReady
+                                ? "Loading..."
+                                : formatMoneyNoCode(plusBalanceDisplay)}
+                            </p>
+                          </div>
+                          {paymentAccount === "plus" && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </button>
+                      </div>
+
+        
                     </div>
-                  </div>
+                  )}
+
+                  {/* Context (for sell side) */}
+                  {side === "sell" && (
+                    <div className="mt-3 rounded-2xl border bg-card/60 px-3 py-2 text-[12px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-muted-foreground">
+                          Asset balance
+                        </span>
+                        <span className="font-medium text-foreground">
+                          {assetLine}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Amount input + unit toggle */}
                   <div className="mt-3">
@@ -1487,7 +1801,9 @@ const CoinPage: React.FC = () => {
                               : "text-foreground/80 hover:bg-secondary",
                           ].join(" ")}
                         >
-                          Cash
+                          {paymentAccount === "plus" && side === "buy"
+                            ? "Cash"
+                            : "Cash"}
                         </button>
                         <button
                           type="button"
@@ -1505,14 +1821,16 @@ const CoinPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Quick actions for Cash buys */}
+                    {/* Quick actions for buys */}
                     {side === "buy" && inputUnit === "cash" && (
                       <div className="mt-2 flex gap-2">
                         {[0.25, 0.5, 0.75, 1].map((p) => (
                           <button
                             key={p}
                             type="button"
-                            disabled={inputsDisabled || cashBalanceDisplay <= 0}
+                            disabled={
+                              inputsDisabled || activeBalanceDisplay <= 0
+                            }
                             onClick={() => setQuickCash(p)}
                             className="flex-1 rounded-2xl border bg-card/60 px-3 py-2 text-[11px] font-semibold text-foreground transition hover:bg-secondary disabled:opacity-50"
                           >
@@ -1531,23 +1849,22 @@ const CoinPage: React.FC = () => {
                       </span>
                       <span className="font-semibold text-foreground">
                         {side === "buy"
-                          ? formatMoneyNoCode(
-                              lastEdited === "cash"
-                                ? cashNum
-                                : impliedCashFromAssetDisplay
-                            )
+                          ? formatMoneyNoCode(payCashDisplay)
                           : `${formatQty(
                               lastEdited === "asset"
                                 ? assetNum
-                                : impliedAssetFromCash,
-                              6
+                                : tradeCalculations.payAsset,
+                              6,
                             )} ${symbol || "ASSET"}`}
                       </span>
                     </div>
 
                     <div className="mt-2 flex items-center justify-between">
                       <span className="text-muted-foreground">
-                        You receive (approx.)
+                        You receive
+                        {lastEdited === "asset" && side === "buy"
+                          ? ""
+                          : " (approx.)"}
                       </span>
                       <span className="font-semibold text-foreground">
                         {side === "buy"
@@ -1555,6 +1872,16 @@ const CoinPage: React.FC = () => {
                           : formatMoneyNoCode(receiveCashDisplay)}
                       </span>
                     </div>
+
+                    {/* Show note when user enters exact asset amount */}
+                    {side === "buy" &&
+                      lastEdited === "asset" &&
+                      assetNum > 0 && (
+                        <div className="mt-2 text-[11px] text-primary">
+                          ✓ You&apos;ll receive exactly {formatQty(assetNum, 6)}{" "}
+                          {symbol}
+                        </div>
+                      )}
 
                     <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                       <span>Rate</span>
@@ -1588,7 +1915,9 @@ const CoinPage: React.FC = () => {
                       </div>
 
                       <div className="mt-2 text-[11px] text-muted-foreground">
-                        Fees are taken from the order amount.
+                        {side === "buy" && lastEdited === "asset"
+                          ? "Fee is added to your payment to ensure you receive the exact amount."
+                          : "Fees are taken from the order amount."}
                       </div>
                     </div>
                   )}
@@ -1655,6 +1984,18 @@ const CoinPage: React.FC = () => {
                           {CLUSTER}
                         </span>
                       </div>
+                      {side === "buy" && (
+                        <div className="mt-2 flex items-center justify-between">
+                          <span className="text-muted-foreground">
+                            Payment source
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {paymentAccount === "cash"
+                              ? "Cash (USDC)"
+                              : "Plus (JLJupUSD)"}
+                          </span>
+                        </div>
+                      )}
 
                       {coingeckoId ? (
                         <div className="mt-2 flex items-center justify-between">
