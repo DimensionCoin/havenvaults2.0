@@ -1,4 +1,6 @@
 // app/api/onramp/session/route.ts
+import "server-only";
+
 import { NextRequest, NextResponse } from "next/server";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { requireServerUser } from "@/lib/getServerUser";
@@ -12,26 +14,28 @@ const ONRAMP_SESSION_URL =
 const API_KEY_ID = process.env.COINBASE_API_KEY_ID!;
 const API_KEY_SECRET = process.env.COINBASE_API_SECRET!;
 
-// Comma-separated list, e.g.
-// NEXT_PUBLIC_APP_ORIGINS="https://haven.com,https://www.haven.com,http://localhost:3000"
+// Optional: comma-separated list of allowed web origins for browser calls
+// NEXT_PUBLIC_APP_ORIGINS="https://staging.haven.com,http://localhost:3000"
 const ORIGINS = (process.env.NEXT_PUBLIC_APP_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// CDP review envs (set in Vercel Staging/Preview)
+const REVIEW_KEY = process.env.CDP_REVIEW_KEY || "";
+const DEFAULT_REVIEW_DEST = process.env.CDP_REVIEW_DESTINATION || "";
+
+/* ───────── helpers ───────── */
+
 function corsHeaders(req: NextRequest): Record<string, string> {
   const origin = req.headers.get("origin") || "";
-  const allowOrigin = ORIGINS.includes(origin) ? origin : ORIGINS[0] || ""; // strict allowlist
-
-  // If you don't have cross-origin needs, keeping this strict is good.
-  // For same-origin calls, browsers still send Origin, so this works.
+  const allowOrigin = ORIGINS.includes(origin) ? origin : ORIGINS[0] || "";
   return {
     ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-CDP-Review-Key",
     "Access-Control-Max-Age": "86400",
-    // Only set this if you truly need cookies cross-origin.
-    // If your frontend calls same-origin (/api/...), cookies work without cross-origin CORS anyway.
     "Access-Control-Allow-Credentials": "true",
     Vary: "Origin",
   };
@@ -43,12 +47,16 @@ function json(req: NextRequest, status: number, body: unknown) {
     headers: {
       "Content-Type": "application/json",
       ...corsHeaders(req),
+      "Cache-Control": "no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
     },
   });
 }
 
 export async function OPTIONS(req: NextRequest) {
-  // CORS preflight
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
 
@@ -68,17 +76,25 @@ function toSandboxUrl(onrampUrl: string): string {
   }
 }
 
-interface RequestBody {
-  destinationAddress: string;
-  purchaseCurrency?: string;
-  destinationNetwork?: string;
-  paymentCurrency?: string;
-  paymentAmount?: string;
-  redirectUrl?: string;
-  // partnerUserRef?: string; // ❌ don't trust this from client
-  sandbox?: boolean;
-  country?: string;
-  subdivision?: string;
+function getReviewKey(req: NextRequest, url: URL): string | null {
+  // Prefer header; allow Authorization: Bearer <key>; fallback query ?key=
+  const header =
+    req.headers.get("x-cdp-review-key") ||
+    req.headers.get("X-CDP-Review-Key") ||
+    null;
+
+  const auth = req.headers.get("authorization");
+  const bearer =
+    auth && auth.toLowerCase().startsWith("bearer ")
+      ? auth.slice("bearer ".length).trim()
+      : null;
+
+  return header || bearer || url.searchParams.get("key");
+}
+
+function wantsJson(req: NextRequest): boolean {
+  const accept = req.headers.get("accept") || "";
+  return accept.includes("application/json");
 }
 
 type UserIdLike = {
@@ -88,7 +104,7 @@ type UserIdLike = {
 };
 
 function toIdString(
-  value: { toString?: () => string } | string | undefined
+  value: { toString?: () => string } | string | undefined,
 ): string | undefined {
   if (!value) return undefined;
   if (typeof value === "string") return value;
@@ -96,55 +112,98 @@ function toIdString(
   return undefined;
 }
 
-export async function POST(req: NextRequest) {
-  const timings: Record<string, number> = {};
-  const start = Date.now();
+interface RequestBody {
+  destinationAddress?: string;
+  purchaseCurrency?: string; // e.g. USDC
+  destinationNetwork?: string; // solana
+  paymentCurrency?: string; // USD
+  paymentAmount?: string; // "5"
+  redirectUrl?: string;
+  sandbox?: boolean;
+  country?: string;
+  subdivision?: string;
+}
 
+type CoinbaseSessionish = { onrampUrl?: string; [k: string]: unknown };
+type CoinbaseOnrampResponse = {
+  errorMessage?: string;
+  message?: string;
+  session?: CoinbaseSessionish;
+  onrampUrl?: string;
+  url?: string;
+  data?: { session?: CoinbaseSessionish; [k: string]: unknown };
+  [k: string]: unknown;
+};
+
+function parseJsonObject(text: string): CoinbaseOnrampResponse | null {
+  try {
+    const v: unknown = JSON.parse(text);
+    if (v && typeof v === "object") return v as CoinbaseOnrampResponse;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/* ───────── main ───────── */
+
+export async function POST(req: NextRequest) {
   if (!API_KEY_ID || !API_KEY_SECRET) {
     return json(req, 500, { error: "Missing Coinbase API credentials" });
   }
 
-  // ✅ Auth (uses your Haven session cookie)
-  let user: UserIdLike;
-  try {
-    user = (await requireServerUser()) as UserIdLike;
-  } catch {
-    return json(req, 401, { error: "Unauthorized" });
-  }
+  const url = new URL(req.url);
 
-  // ✅ Basic origin enforcement (recommended when you claim CORS/auth)
+  // Browser-origin enforcement: ONLY enforce when Origin header exists.
+  // (curl/server-to-server typically has no Origin)
   const origin = req.headers.get("origin") || "";
-  if (ORIGINS.length && !ORIGINS.includes(origin)) {
+  if (ORIGINS.length && origin && !ORIGINS.includes(origin)) {
     return json(req, 403, { error: "Forbidden origin" });
   }
 
-  let body: Partial<RequestBody>;
+  // Parse JSON body (both app + review use POST JSON)
+  let body: RequestBody = {};
   try {
-    body = await req.json();
+    body = (await req.json()) as RequestBody;
   } catch {
     return json(req, 400, { error: "Invalid JSON body" });
   }
 
-  timings.parse = Date.now() - start;
+  // Try normal app auth first
+  let user: UserIdLike | null = null;
+  try {
+    user = (await requireServerUser()) as UserIdLike;
+  } catch {
+    user = null;
+  }
 
-  const destinationAddress = (body.destinationAddress || "").trim();
+  // If no app user, allow CDP review key to authorize
+  const reviewKey = getReviewKey(req, url);
+  const isReview =
+    !user &&
+    Boolean(REVIEW_KEY) &&
+    Boolean(reviewKey) &&
+    reviewKey === REVIEW_KEY;
+
+  if (!user && !isReview) {
+    return json(req, 401, { error: "Unauthorized" });
+  }
+
+  // Inputs
+  const sandbox = Boolean(body.sandbox);
+
+  // In review mode, default destination to env var and do NOT require client to pass it.
+  // In app mode, require destinationAddress in body.
+  const destinationAddress = (
+    (body.destinationAddress || "").trim() ||
+    (isReview ? DEFAULT_REVIEW_DEST : "")
+  ).trim();
+
   const purchaseCurrency = (body.purchaseCurrency || "USDC").trim();
   const destinationNetwork = (body.destinationNetwork || "solana").trim();
   const paymentCurrency = (body.paymentCurrency || "USD").trim();
-  const paymentAmount = body.paymentAmount?.trim();
-  const redirectUrl = body.redirectUrl?.trim();
-  const sandbox = Boolean(body.sandbox);
-
-  // ✅ Build partnerUserRef on server from authenticated user (no spoofing)
-  const baseRef =
-    toIdString(user?._id) ||
-    toIdString(user?.id) ||
-    user?.privyId ||
-    "unknown";
-
-  const partnerUserRef = sandbox
-    ? `sandbox-user-${baseRef}`
-    : `user-${baseRef}`;
+  const paymentAmount = (body.paymentAmount || (isReview ? "5" : "")).trim();
+  const redirectUrl = (body.redirectUrl || "").trim();
 
   const country = (body.country || "").toUpperCase() || undefined;
   const subdivision = body.subdivision?.toUpperCase();
@@ -160,24 +219,39 @@ export async function POST(req: NextRequest) {
     return json(req, 400, { error: "Invalid Solana address format" });
   }
 
-  // Build Coinbase payload
+  // partnerUserRef:
+  // - app: derived from authenticated user (anti-spoof)
+  // - review: fixed reviewer tag
+  const baseRef = user
+    ? toIdString(user._id) || toIdString(user.id) || user.privyId || "unknown"
+    : "cdp-review";
+
+  const partnerUserRef = isReview
+    ? sandbox
+      ? "sandbox-cdp-review"
+      : "cdp-review"
+    : sandbox
+      ? `sandbox-user-${baseRef}`
+      : `user-${baseRef}`;
+
   const sessionPayload: Record<string, string> = {
     destinationAddress,
     purchaseCurrency,
     destinationNetwork,
     partnerUserRef,
+    paymentCurrency,
   };
 
-  if (paymentCurrency) sessionPayload.paymentCurrency = paymentCurrency;
-  if (paymentAmount && parseFloat(paymentAmount) > 0) {
+  // Only include paymentAmount if valid positive number
+  if (paymentAmount && Number.parseFloat(paymentAmount) > 0) {
     sessionPayload.paymentAmount = paymentAmount;
   }
+
   if (redirectUrl) sessionPayload.redirectUrl = redirectUrl;
   if (country && /^[A-Z]{2}$/.test(country)) sessionPayload.country = country;
   if (country === "US" && subdivision) sessionPayload.subdivision = subdivision;
 
   try {
-    const jwtStart = Date.now();
     const jwt = await generateJwt({
       apiKeyId: API_KEY_ID,
       apiKeySecret: API_KEY_SECRET,
@@ -186,9 +260,7 @@ export async function POST(req: NextRequest) {
       requestPath: "/platform/v2/onramp/sessions",
       expiresIn: 120,
     });
-    timings.jwt = Date.now() - jwtStart;
 
-    const fetchStart = Date.now();
     const response = await fetch(ONRAMP_SESSION_URL, {
       method: "POST",
       headers: {
@@ -196,57 +268,57 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(sessionPayload),
+      cache: "no-store",
     });
-    timings.fetch = Date.now() - fetchStart;
 
     const responseText = await response.text();
+    const data = parseJsonObject(responseText);
 
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(responseText);
-    } catch {
+    if (!data) {
       return json(req, 502, { error: "Invalid response from Coinbase" });
     }
 
     if (!response.ok) {
       return json(req, response.status >= 500 ? 502 : 400, {
-        error:
-          (data.errorMessage as string) ||
-          (data.message as string) ||
-          "Coinbase API error",
+        error: data.errorMessage || data.message || "Coinbase API error",
         coinbaseError: data,
       });
     }
 
     let onrampUrl: string | undefined;
-
-    const session = data.session as Record<string, unknown> | undefined;
-    if (session?.onrampUrl) onrampUrl = session.onrampUrl as string;
-    if (!onrampUrl && data.onrampUrl) onrampUrl = data.onrampUrl as string;
-    if (!onrampUrl && data.url) onrampUrl = data.url as string;
-    if (!onrampUrl && data.data) {
-      const nested = data.data as Record<string, unknown>;
-      const nestedSession = nested.session as
-        | Record<string, unknown>
-        | undefined;
-      if (nestedSession?.onrampUrl)
-        onrampUrl = nestedSession.onrampUrl as string;
-    }
+    if (data.session?.onrampUrl) onrampUrl = data.session.onrampUrl;
+    if (!onrampUrl && typeof data.onrampUrl === "string")
+      onrampUrl = data.onrampUrl;
+    if (!onrampUrl && typeof data.url === "string") onrampUrl = data.url;
+    if (!onrampUrl && data.data?.session?.onrampUrl)
+      onrampUrl = data.data.session.onrampUrl;
 
     if (!onrampUrl) {
-      return json(req, 502, {
-        error: "No onramp URL in Coinbase response",
-        debug: process.env.NODE_ENV === "development" ? data : undefined,
-      });
+      return json(req, 502, { error: "No onramp URL in Coinbase response" });
     }
 
     const finalUrl = sandbox ? toSandboxUrl(onrampUrl) : onrampUrl;
-    timings.total = Date.now() - start;
+
+    // In app flows you probably want JSON anyway.
+    // For review flows, returning JSON is best for curl ("Copy as cURL").
+    // If you ever want redirect, you can add ?redirect=1.
+    const redirect = url.searchParams.get("redirect") === "1";
+
+    if (redirect && !wantsJson(req)) {
+      const res = NextResponse.redirect(finalUrl, { status: 302 });
+      res.headers.set("Cache-Control", "no-store");
+      return res;
+    }
 
     return json(req, 200, {
       onrampUrl: finalUrl,
       sandbox,
-      timings: process.env.NODE_ENV === "development" ? timings : undefined,
+      reviewMode: isReview,
+      destinationAddress,
+      purchaseCurrency,
+      destinationNetwork,
+      paymentCurrency,
+      paymentAmount,
     });
   } catch (error) {
     return json(req, 500, {

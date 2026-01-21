@@ -21,10 +21,19 @@ type RateLimitServerOptions = {
   /** Stable name for the API (e.g. "jup:build", "auth:onboard") */
   api: string;
 
-  /** Defaults to 5 */
+  /**
+   * Convenience: calls allowed per second.
+   * If provided, it overrides limit/windowMs as: limit=perSecond, windowMs=1000.
+   *
+   * Example:
+   *   perSecond: 30  -> 30 req/sec
+   */
+  perSecond?: number;
+
+  /** Defaults to 5 (ignored if perSecond is set) */
   limit?: number;
 
-  /** Defaults to 1000ms */
+  /** Defaults to 1000ms (ignored if perSecond is set) */
   windowMs?: number;
 
   /** If true, only authenticated users are allowed */
@@ -103,8 +112,10 @@ export async function rateLimitServer(
   req: NextRequest,
   opts: RateLimitServerOptions,
 ): Promise<NextResponse | null> {
-  const limit = opts.limit ?? 5;
-  const windowMs = opts.windowMs ?? 1000;
+  // perSecond convenience overrides (limit/windowMs)
+  const perSecond = opts.perSecond;
+  const limit = perSecond ?? opts.limit ?? 5;
+  const windowMs = perSecond ? 1000 : (opts.windowMs ?? 1000);
 
   const { key, kind } = await buildRateLimitKey(req, opts);
 

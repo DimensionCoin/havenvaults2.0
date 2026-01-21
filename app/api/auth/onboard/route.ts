@@ -4,6 +4,7 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 import User, {
   type FinancialKnowledgeLevel,
   type RiskLevel,
@@ -48,94 +49,141 @@ type Body = {
   riskLevel?: unknown;
 };
 
+// Small helpers to keep the handler clean
+function cleanName(v: unknown, maxLen = 50): string {
+  if (typeof v !== "string") return "";
+  const s = v.trim();
+  if (!s) return "";
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function cleanCountry(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim().toUpperCase();
+  // Accept ISO-3166-1 alpha-2 style: "CA", "US", ...
+  if (!/^[A-Z]{2}$/.test(s)) return undefined;
+  return s;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    await connect();
+    // ✅ Rate limit BEFORE any expensive work
+    const blocked = await rateLimitServer(req, {
+      api: "auth:onboard",
+      perSecond: 2,
+      requireAuth: true,
+    });
+    if (blocked) return blocked;
 
+    // ✅ Auth check early
     const session = await getSessionFromCookies();
     if (!session?.sub) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
     const privyId = session.sub;
 
+    // ✅ Parse body safely
     const body = (await req.json().catch(() => ({}))) as Body;
 
-    const firstName =
-      typeof body.firstName === "string" ? body.firstName.trim() : "";
-    const lastName =
-      typeof body.lastName === "string" ? body.lastName.trim() : "";
+    const firstName = cleanName(body.firstName, 50);
+    const lastName = cleanName(body.lastName, 50);
 
     const country =
-      typeof body.country === "string" && body.country.trim()
-        ? body.country.trim().toUpperCase()
-        : undefined;
+      body.country === undefined ? undefined : cleanCountry(body.country);
 
     const displayCurrency = parseDisplayCurrency(body.displayCurrency);
 
-    const financialKnowledgeLevel = isFinancialKnowledgeLevel(
-      body.financialKnowledgeLevel
-    )
-      ? body.financialKnowledgeLevel
-      : undefined;
+    const financialKnowledgeLevel =
+      body.financialKnowledgeLevel === undefined
+        ? undefined
+        : isFinancialKnowledgeLevel(body.financialKnowledgeLevel)
+          ? body.financialKnowledgeLevel
+          : null;
 
-    const riskLevel = isRiskLevel(body.riskLevel) ? body.riskLevel : undefined;
+    const riskLevel =
+      body.riskLevel === undefined
+        ? undefined
+        : isRiskLevel(body.riskLevel)
+          ? body.riskLevel
+          : null;
 
-    // ───────── Basic validation ─────────
+    // ───────── Required validation ─────────
     if (!firstName || !lastName) {
       return NextResponse.json(
         { error: "First name and last name are required." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // If the client sent a value but it wasn't valid, reject clearly
+    // ───────── Optional validation ─────────
+    // If optional fields were PROVIDED but invalid, reject clearly.
+    if (body.country !== undefined && !country) {
+      return NextResponse.json(
+        { error: "Invalid country code." },
+        { status: 400 },
+      );
+    }
+
     if (body.displayCurrency !== undefined && !displayCurrency) {
       return NextResponse.json(
         { error: "Invalid display currency." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    if (
-      body.financialKnowledgeLevel !== undefined &&
-      !financialKnowledgeLevel
-    ) {
+    if (financialKnowledgeLevel === null) {
       return NextResponse.json(
         { error: "Invalid financial knowledge level." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    if (body.riskLevel !== undefined && !riskLevel) {
+    if (riskLevel === null) {
       return NextResponse.json(
         { error: "Invalid risk level." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // ───────── Load user ─────────
-    const user = await User.findOne({ privyId });
-    if (!user) {
-      return NextResponse.json(
-        { error: "User not found for this session." },
-        { status: 404 }
-      );
-    }
+    await connect();
 
-    // ───────── Apply updates ─────────
-    user.firstName = firstName;
-    user.lastName = lastName;
+    // ✅ Build atomic update (prevents races + double onboarding)
+    const set: Record<string, unknown> = {
+      firstName,
+      lastName,
+      isOnboarded: true,
+    };
 
-    if (country) user.country = country;
-    if (displayCurrency) user.displayCurrency = displayCurrency;
+    if (country) set.country = country;
+    if (displayCurrency) set.displayCurrency = displayCurrency;
     if (financialKnowledgeLevel)
-      user.financialKnowledgeLevel = financialKnowledgeLevel;
-    if (riskLevel) user.riskLevel = riskLevel;
+      set.financialKnowledgeLevel = financialKnowledgeLevel;
+    if (riskLevel) set.riskLevel = riskLevel;
 
-    user.isOnboarded = true;
+    // Only onboard users who are NOT already onboarded
+    const user = await User.findOneAndUpdate(
+      { privyId, isOnboarded: { $ne: true } },
+      { $set: set },
+      { new: true },
+    );
 
-    await user.save();
+    // If null, either user doesn't exist OR already onboarded
+    if (!user) {
+      const existing = await User.findOne({ privyId })
+        .select("_id isOnboarded")
+        .lean();
+      if (!existing) {
+        return NextResponse.json(
+          { error: "User not found for this session." },
+          { status: 404 },
+        );
+      }
+      // ✅ Idempotent: already onboarded
+      return NextResponse.json(
+        { error: "User already onboarded." },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json(
       {
@@ -156,13 +204,13 @@ export async function POST(req: NextRequest) {
           updatedAt: user.updatedAt,
         },
       },
-      { status: 200 }
+      { status: 200 },
     );
   } catch (err) {
     console.error("/api/auth/onboard error:", err);
     return NextResponse.json(
       { error: "Failed to complete onboarding" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
