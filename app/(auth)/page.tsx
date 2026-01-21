@@ -1,7 +1,7 @@
 // app/(marketing)/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -18,8 +18,17 @@ import {
 } from "lucide-react";
 import ThemeToggle from "@/components/shared/ThemeToggle";
 
+type ApyResponse = {
+  apy?: number; // decimal (e.g. 0.0587)
+  apyPercentage?: string; // "5.87"
+  error?: string;
+};
+
 const Landing = () => {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+  // Dynamic APY (fetched once, used everywhere on page)
+  const [apyPct, setApyPct] = useState<number | null>(null);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -30,6 +39,63 @@ const Landing = () => {
     window.addEventListener("mousemove", handleMouseMove);
     return () => window.removeEventListener("mousemove", handleMouseMove);
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch("/api/savings/plus/apy", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const data = (await res.json()) as ApyResponse;
+
+        // Prefer pre-formatted percent string from API
+        const n = Number(data?.apyPercentage);
+
+        if (Number.isFinite(n)) {
+          setApyPct(n);
+          return;
+        }
+
+        // Fallback to decimal if provided
+        if (typeof data?.apy === "number" && Number.isFinite(data.apy)) {
+          setApyPct(data.apy * 100);
+        }
+      } catch {
+        // leave apyPct null -> fallback copy
+      }
+    })();
+
+    return () => controller.abort();
+  }, []);
+
+  const apyText = useMemo(() => {
+    if (apyPct == null) return null;
+    // Remove trailing .00 for cleaner marketing
+    return apyPct.toFixed(2).replace(/\.00$/, "");
+  }, [apyPct]);
+
+  // Strings used throughout the page (no “crypto”/USDC talk)
+  const apyStatValue = apyText ? `${apyText}%` : "—";
+
+  const heroSubcopy =
+    "Haven is a modern money app with a high-yield savings account, simple investing, and total control — with a clean experience that feels familiar from day one.";
+
+  const havenSavingsLine = apyText
+    ? `Earn ${apyText}% APY with Haven Savings`
+    : "Earn high-yield savings with Haven";
+
+  const highYieldDesc = apyText
+    ? `Earn ${apyText}% APY on your savings balance. Your money can grow automatically, with a smooth experience and clear control.`
+    : `Earn high-yield savings on your balance. Your money can grow automatically, with a smooth experience and clear control.`;
+
+  // ✅ Updated (no “audited” claims, no unverifiable promises)
+  const trustTitle = "Built for control, built with care";
+  const trustBody =
+    "We’re building Haven with a security-first mindset: strong sign-in protections, careful handling of sensitive data, and clear user control over assets.";
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
@@ -47,32 +113,38 @@ const Landing = () => {
       <div
         className="pointer-events-none fixed h-[500px] w-[500px] rounded-full bg-primary/[0.07] blur-[100px] transition-transform duration-500 ease-out hidden md:block"
         style={{
-          transform: `translate(${mousePosition.x - 250}px, ${mousePosition.y - 250}px)`,
+          transform: `translate(${mousePosition.x - 250}px, ${
+            mousePosition.y - 250
+          }px)`,
         }}
       />
 
       {/* Top ambient glow */}
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -top-[400px] left-1/2 h-[800px] w-[1200px] -translate-x-1/2 rounded-full bg-primary/[0.08] blur-[120px]" />
+        <div className="absolute -top-[400px] left=1/2 h-[800px] w-[1200px] -translate-x-1/2 rounded-full bg-primary/[0.08] blur-[120px]" />
       </div>
 
       <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6 sm:px-8">
         {/* Navigation */}
         <header className="relative z-50 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3 group">
-            <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-border bg-background/60 backdrop-blur-sm transition-all group-hover:border-primary/30">
-              <Image
-                src="/logo.jpg"
-                alt="Haven"
-                fill
-                className="object-contain"
-                priority
-              />
-            </div>
-            <span className="text-lg font-semibold tracking-tight">Haven</span>
-          </Link>
+          <div className="flex gap-4 md:gap-6 items-center">
+            <Link href="/" className="flex items-center gap-3 group">
+              <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-border bg-background/60 backdrop-blur-sm transition-all group-hover:border-primary/30">
+                <Image
+                  src="/logo.jpg"
+                  alt="Haven"
+                  fill
+                  className="object-contain"
+                  priority
+                />
+              </div>
+              <span className="text-lg font-semibold tracking-tight">
+                Haven
+              </span>
+            </Link>
 
-          <ThemeToggle />
+            <ThemeToggle />
+          </div>
           <div className="flex items-center gap-3">
             <Link
               href="/sign-in"
@@ -99,7 +171,7 @@ const Landing = () => {
                 <Lock className="h-3 w-3 text-primary" />
               </div>
               <span className="text-sm text-muted-foreground">
-                Non-custodial · Your keys, your money
+                Self-directed · You stay in control
               </span>
             </div>
           </div>
@@ -107,16 +179,14 @@ const Landing = () => {
           {/* Headline */}
           <div className="text-center max-w-3xl">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1]">
-              <span className="text-foreground">Banking that </span>
+              <span className="text-foreground">Your money, </span>
               <span className="bg-gradient-to-r from-primary via-primary to-primary bg-clip-text text-transparent">
-                works for you
+                upgraded
               </span>
             </h1>
 
             <p className="mt-6 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-              Haven gives you a savings account with real yield, instant
-              investing, and complete control — all without the complexity of
-              crypto.
+              {heroSubcopy}
             </p>
           </div>
 
@@ -140,9 +210,9 @@ const Landing = () => {
           {/* Value props row */}
           <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-3xl">
             {[
-              { value: "8%", label: "APY on savings" },
-              { value: "50+", label: "Assets to invest" },
-              { value: "<1s", label: "Transaction speed" },
+              { value: apyStatValue, label: "Savings APY" },
+              { value: "50+", label: "Investable assets" },
+              { value: "~1s", label: "Fast settlement" },
               { value: "24/7", label: "Always available" },
             ].map((stat, i) => (
               <div
@@ -164,27 +234,28 @@ const Landing = () => {
         <section className="py-20 border-t border-border">
           <div className="text-center mb-16">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
-              The bank account you deserve
+              A better way to save and invest
             </h2>
             <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
-              Traditional banks pay you nothing. Crypto is confusing. Haven is
-              the middle ground.
+              Most finance apps still feel like tradeoffs: low interest, slow
+              movement, and limited flexibility. Haven is built to feel modern —
+              without the learning curve.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">
-            {/* Traditional Banking - Problems */}
+            {/* Traditional - Problems */}
             <div className="rounded-3xl border border-border bg-background/60 p-8">
               <div className="inline-flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive mb-6">
-                Traditional Banking
+                Typical apps & banks
               </div>
               <ul className="space-y-4">
                 {[
-                  "0.01% APY on savings",
-                  "Limited to bank hours",
-                  "Days to transfer money",
-                  "Hidden fees everywhere",
-                  "They control your money",
+                  "Tiny interest rates on cash",
+                  "Transfers that take days",
+                  "Complex menus and hidden tradeoffs",
+                  "Fees that are hard to understand",
+                  "Limited control over how your money works",
                 ].map((item, i) => (
                   <li
                     key={i}
@@ -205,11 +276,11 @@ const Landing = () => {
               </div>
               <ul className="space-y-4">
                 {[
-                  "Up to 8% APY on savings",
-                  "Available 24/7, no downtime",
-                  "Instant transfers, always",
-                  "Transparent, minimal fees",
-                  "You own your money completely",
+                  havenSavingsLine,
+                  "Move any amount of money fast",
+                  "Simple, clean interface that feels familiar",
+                  "Clear pricing with no surprises",
+                  "More control and more freedom",
                 ].map((item, i) => (
                   <li
                     key={i}
@@ -231,8 +302,8 @@ const Landing = () => {
               Everything you need, nothing you don&apos;t
             </h2>
             <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
-              We handle the complexity of DeFi so you can focus on what matters
-              — growing your money.
+              A modern experience for saving and investing — built for clarity,
+              speed, and control.
             </p>
           </div>
 
@@ -241,38 +312,37 @@ const Landing = () => {
               {
                 icon: Banknote,
                 title: "High-Yield Savings",
-                description:
-                  "Earn 3-8% APY on your deposits. Your money works while you sleep, powered by battle-tested DeFi protocols.",
+                description: highYieldDesc,
               },
               {
                 icon: TrendingUp,
                 title: "Simple Investing",
                 description:
-                  "Buy stocks, crypto, and more with a few taps. No jargon, no complicated interfaces — just clear choices.",
+                  "Build a portfolio with a few taps. No jargon, no messy screens — just clean choices and clear pricing.",
               },
               {
                 icon: Clock,
-                title: "Instant Everything",
+                title: "Fast Access",
                 description:
-                  "Deposits, withdrawals, trades — all happen in seconds. No waiting days for your money to move.",
+                  "Deposits, withdrawals, and trades are designed to feel instant — so your money is ready when you are.",
               },
               {
                 icon: Shield,
-                title: "You&apos;re in Control",
+                title: "Security-First",
                 description:
-                  "Non-custodial means we never hold your funds. Your keys, your money — always.",
+                  "Strong security from day one: protected sessions, modern authentication, and careful handling of sensitive data.",
               },
               {
                 icon: Smartphone,
-                title: "Familiar Interface",
+                title: "Familiar UI",
                 description:
-                  "Looks like the banking apps you know. No crypto complexity — just a clean, simple experience.",
+                  "Feels like the best consumer finance apps — minimal, fast, and easy to understand.",
               },
               {
                 icon: Percent,
-                title: "No Hidden Fees",
+                title: "Transparent Fees",
                 description:
-                  "Transparent pricing on everything. See exactly what you&apos;re paying before you confirm.",
+                  "Pricing is clear before you confirm. No surprise charges and no confusing fine print.",
               },
             ].map((feature, i) => (
               <div
@@ -300,7 +370,7 @@ const Landing = () => {
               Get started in minutes
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              No paperwork. No waiting. No crypto knowledge required.
+              No paperwork. No waiting. Just a clean setup and you&apos;re in.
             </p>
           </div>
 
@@ -310,19 +380,19 @@ const Landing = () => {
                 step: "01",
                 title: "Create your account",
                 description:
-                  "Sign up with email or phone. We&apos;ll create a secure wallet for you automatically.",
+                  "Sign up in seconds. We’ll guide you through a smooth, secure setup.",
               },
               {
                 step: "02",
                 title: "Add funds",
                 description:
-                  "Deposit USDC or connect your bank. Your money is ready to use instantly.",
+                  "Add funds the way you prefer, then choose savings or investing — all in one place.",
               },
               {
                 step: "03",
-                title: "Start earning",
+                title: "Start growing",
                 description:
-                  "Put your money in savings for yield, or invest in assets you believe in.",
+                  "Earn a competitive savings rate, build a portfolio, and stay in control the whole time.",
               },
             ].map((item, i) => (
               <div key={i} className="relative">
@@ -350,26 +420,25 @@ const Landing = () => {
           <div className="rounded-3xl border border-border bg-gradient-to-b from-background/60 to-transparent p-10 text-center">
             <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary mb-6">
               <Shield className="h-4 w-4" />
-              Built on Solana
+              How we think about safety
             </div>
 
             <h2 className="text-2xl sm:text-3xl font-bold text-foreground max-w-2xl mx-auto">
-              Your money is secured by blockchain technology, not a bank vault
+              {trustTitle}
             </h2>
 
             <p className="mt-4 text-muted-foreground max-w-xl mx-auto">
-              Every transaction is verified on Solana — one of the fastest, most
-              secure blockchains. You can verify your funds anytime, anywhere.
+              {trustBody}
             </p>
 
             <div className="mt-8 flex flex-wrap items-center justify-center gap-x-8 gap-y-4 text-sm text-muted-foreground">
-              <span>Audited protocols</span>
+              <span>Protected sign-in</span>
               <span className="hidden sm:inline">·</span>
-              <span>Open source</span>
+              <span>Privacy-minded design</span>
               <span className="hidden sm:inline">·</span>
-              <span>Non-custodial</span>
+              <span>User-controlled assets</span>
               <span className="hidden sm:inline">·</span>
-              <span>Your keys</span>
+              <span>Clear, simple UX</span>
             </div>
           </div>
         </section>
@@ -377,11 +446,11 @@ const Landing = () => {
         {/* Final CTA */}
         <section className="py-20 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-foreground">
-            Ready to make your money work?
+            Ready to upgrade your money?
           </h2>
           <p className="mt-4 text-lg text-muted-foreground max-w-lg mx-auto">
-            Join thousands who&apos;ve moved past 0% savings accounts. Your
-            future self will thank you.
+            A modern place to save and invest — built for people who want more
+            control, more freedom, and a better experience.
           </p>
 
           <div className="mt-8">
@@ -395,7 +464,7 @@ const Landing = () => {
           </div>
 
           <p className="mt-4 text-sm text-muted-foreground">
-            No credit check · No minimum balance · Start in 2 minutes
+            No credit checks · No minimum balance · Start in under 1 minute
           </p>
         </section>
 
@@ -412,7 +481,7 @@ const Landing = () => {
                 />
               </div>
               <span className="text-sm text-muted-foreground">
-                © {new Date().getFullYear()} Haven Labs
+                © {new Date().getFullYear()} Haven Vaults
               </span>
             </div>
 
@@ -434,9 +503,10 @@ const Landing = () => {
           </div>
 
           <p className="mt-6 text-xs text-muted-foreground text-center max-w-2xl mx-auto">
-            Haven is non-custodial software. You maintain sole control of your
-            private keys and assets. Haven Labs does not have access to your
-            funds. Cryptocurrency investments are volatile and may lose value.
+            Haven is non-custodial software. You control your assets. Rates can
+            change and are not guaranteed. Savings yield may be generated using
+            tokenized cash equivalents (e.g., stable-value digital dollars). Not
+            available in all regions. Investing involves risk.
           </p>
         </footer>
       </div>

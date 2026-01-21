@@ -128,17 +128,22 @@ type UserContextValue = {
 
 const UserContext = createContext<UserContextValue | undefined>(undefined);
 
-// Truly public routes (no auth required)
-const PUBLIC_ROUTES = ["/", "/sign-in"];
+// ✅ Truly public routes (no auth required)
+const PUBLIC_ROUTES = ["/", "/sign-in", "/privacy", "/terms", "/security"];
 
 function isPublicRoute(pathname: string | null): boolean {
   if (!pathname) return true;
-  return PUBLIC_ROUTES.includes(pathname);
+
+  // If you later add subroutes like /terms/refunds, this keeps it flexible.
+  // For now it behaves the same as "includes exact paths above".
+  return PUBLIC_ROUTES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
 }
 
 function getSavingsByType(
   user: AppUser | null,
-  type: "flex" | "plus"
+  type: "flex" | "plus",
 ): AppUser["savingsAccounts"][number] | null {
   if (!user?.savingsAccounts?.length) return null;
   return user.savingsAccounts.find((a) => a.type === type) ?? null;
@@ -167,8 +172,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       if (res.status === 401 || res.status === 404) {
         setUser(null);
 
-        // If they’re trying to hit a protected route (anything not in PUBLIC_ROUTES),
-        // send them to /sign-in
+        // ✅ Only redirect if this route is NOT public
         if (!isPublicRoute(pathname)) {
           router.replace("/sign-in");
         }
@@ -177,7 +181,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({} as any));
+        const data = await res.json().catch(() => ({}) as any);
         console.error("Failed to fetch user:", data);
         setError((data as any)?.error || "Failed to fetch user");
         return;
@@ -202,12 +206,16 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (loading) return; // wait until we know if there's a user or not
 
-    // No user: if we're on a public route ("/" or "/sign-in"), do nothing.
-    // If they tried to go to a protected route, fetchUser already redirected them.
+    // No user: if we're on a public route, do nothing.
     if (!user) return;
 
     // Logged in but NOT onboarded → force them to /onboard
-    if (!user.isOnboarded && pathname !== "/onboard") {
+    // ✅ Don’t hijack public legal pages if a logged-in user is reading them
+    if (
+      !user.isOnboarded &&
+      pathname !== "/onboard" &&
+      !isPublicRoute(pathname)
+    ) {
       router.replace("/onboard");
       return;
     }

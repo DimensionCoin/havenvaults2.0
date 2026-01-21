@@ -10,6 +10,7 @@
 
 import type * as crons from "../crons.js";
 import type * as prices from "../prices.js";
+import type * as rateLimit from "../rateLimit.js";
 
 import type {
   ApiFromModules,
@@ -20,6 +21,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   prices: typeof prices;
+  rateLimit: typeof rateLimit;
 }>;
 
 /**

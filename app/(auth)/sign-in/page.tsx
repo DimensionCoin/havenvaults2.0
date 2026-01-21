@@ -616,7 +616,7 @@ export default function SignInPage() {
                 and stay in full control — without crypto complexity.
               </p>
 
-              <div className="mt-7 grid gap-3 sm:grid-cols-2">
+              <div className="mt-7 grid gap-3 sm:grid-cols-2 text-primary">
                 {[
                   {
                     icon: ShieldCheck,
@@ -645,7 +645,7 @@ export default function SignInPage() {
                         <item.icon className="h-5 w-5" />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-[13px] font-semibold">
+                        <span className="text-[13px] font-semibold text-primary">
                           {item.title}
                         </span>
                         <span className="mt-1 text-[12px] text-muted-foreground leading-snug">
