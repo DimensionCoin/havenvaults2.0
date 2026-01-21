@@ -53,7 +53,7 @@ export default function BundlesPage() {
               `}
             >
               <Sparkles className="h-4 w-4" />
-              <span className="hidden sm:inline">User</span> Bundles
+              Community
             </button>
           </div>
 
