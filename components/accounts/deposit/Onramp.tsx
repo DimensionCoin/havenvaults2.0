@@ -8,7 +8,7 @@ import React, {
   useEffect,
   useRef,
 } from "react";
-import { ArrowUpRight, Loader2, Info, X } from "lucide-react";
+import { ArrowUpRight, Loader2, Info, X, ShieldCheck } from "lucide-react";
 import { useUser } from "@/providers/UserProvider";
 
 type Props = {
@@ -88,7 +88,7 @@ function isValidSolanaAddress(addr: string): boolean {
 function isMobile(): boolean {
   if (typeof window === "undefined") return false;
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent
+    navigator.userAgent,
   );
 }
 
@@ -108,8 +108,9 @@ function maskAddress(addr?: string): string {
 
 function openCheckout(
   url: string,
-  onClosed?: () => void
+  onClosed?: () => void,
 ): { type: "popup" | "redirect"; cleanup?: () => void } {
+  // Mobile: redirect for best UX
   if (isMobile()) {
     window.location.assign(url);
     return { type: "redirect" };
@@ -123,7 +124,7 @@ function openCheckout(
   const popup = window.open(
     url,
     "coinbase_onramp",
-    `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+    `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`,
   );
 
   if (!popup) {
@@ -153,7 +154,7 @@ export default function Onramp({
   destinationAddress,
   defaultAmountDisplay = "50",
   title = "Add money",
-  subtitle = "Pay with your card.",
+  subtitle = "Top up your account via Coinbase Onramp.",
   displayCurrency,
   redirectUrl,
   sandbox,
@@ -164,15 +165,14 @@ export default function Onramp({
   const checkoutRef = useRef<{ cleanup?: () => void } | null>(null);
 
   const [amount, setAmount] = useState(defaultAmountDisplay);
-  const [approved, setApproved] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
-  // Derived values
   const toAddress = useMemo(
     () => (destinationAddress || user?.walletAddress || "").trim(),
-    [destinationAddress, user?.walletAddress]
+    [destinationAddress, user?.walletAddress],
   );
 
   const currency = useMemo(() => {
@@ -190,7 +190,7 @@ export default function Onramp({
   const isSandbox = sandbox ?? process.env.NODE_ENV !== "production";
 
   const canSubmit =
-    toAddress && isValidSolanaAddress(toAddress) && amountStr && approved;
+    toAddress && isValidSolanaAddress(toAddress) && amountStr && acknowledged;
 
   const getRedirectUrl = useCallback(() => {
     if (redirectUrl) return redirectUrl;
@@ -200,7 +200,6 @@ export default function Onramp({
     return url.toString();
   }, [redirectUrl]);
 
-  // Handle redirect return
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -212,7 +211,6 @@ export default function Onramp({
     }
   }, [onSuccess]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => checkoutRef.current?.cleanup?.();
   }, []);
@@ -230,15 +228,14 @@ export default function Onramp({
     if (!isValidSolanaAddress(toAddress))
       return setError("Invalid Solana address.");
     if (!amountStr) return setError("Enter a valid amount.");
-    if (!approved) return setError("Please approve to continue.");
+    if (!acknowledged)
+      return setError("Please acknowledge the Coinbase checkout terms.");
 
     setLoading(true);
 
     const country = normalizeCountry(user?.country);
 
     try {
-      const startTime = Date.now();
-
       const res = await fetch("/api/onramp/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -249,31 +246,26 @@ export default function Onramp({
           paymentCurrency: currency,
           paymentAmount: amountStr,
           redirectUrl: getRedirectUrl(),
-          partnerUserRef: user?.id ? `user-${user.id}` : "user-unknown",
           sandbox: isSandbox,
           ...(country && { country }),
         }),
       });
 
-      console.log(`[Onramp] API took ${Date.now() - startTime}ms`);
-
-      const data = await res.json().catch(() => ({}));
+      const data: unknown = await res.json().catch(() => ({}));
+      const obj = (data && typeof data === "object" ? data : {}) as Record<
+        string,
+        unknown
+      >;
 
       if (!res.ok) {
-        throw new Error(data?.error || "Failed to start checkout.");
+        const msg =
+          (typeof obj.error === "string" && obj.error) ||
+          "Failed to start checkout.";
+        throw new Error(msg);
       }
 
-      // Backend returns 'onrampUrl'
-      const url = data?.onrampUrl;
+      const url = typeof obj.onrampUrl === "string" ? obj.onrampUrl : "";
       if (!url) throw new Error("Missing onramp URL.");
-
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[Onramp] Opening:", {
-          url,
-          sandbox: data?.sandbox,
-          timings: data?.timings,
-        });
-      }
 
       const result = openCheckout(url, handlePopupClosed);
       checkoutRef.current = result;
@@ -290,16 +282,14 @@ export default function Onramp({
   }, [
     toAddress,
     amountStr,
-    approved,
+    acknowledged,
     currency,
-    user?.id,
     user?.country,
     isSandbox,
     getRedirectUrl,
     handlePopupClosed,
   ]);
 
-  // Checkout open state - show waiting screen
   if (checkoutOpen) {
     return (
       <div className="glass-panel bg-white/10 p-4 sm:p-6">
@@ -307,10 +297,10 @@ export default function Onramp({
           <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
           <div className="text-center">
             <div className="text-base font-semibold text-white/95">
-              Complete payment
+              Complete your checkout
             </div>
             <div className="mt-1 text-sm text-white/70">
-              Finish in the secure checkout window.
+              Finish in the secure Coinbase window. You can close it when done.
             </div>
           </div>
           <button
@@ -337,6 +327,7 @@ export default function Onramp({
           <div className="text-base font-semibold text-white/95">{title}</div>
           <div className="mt-1 text-sm text-white/70">{subtitle}</div>
         </div>
+
         <div className="flex items-center gap-2">
           {onClose && (
             <button
@@ -348,16 +339,59 @@ export default function Onramp({
               <X className="h-4 w-4" />
             </button>
           )}
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <div
+            className="flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3"
+            title="Checkout is provided by Coinbase"
+          >
+            <ShieldCheck className="h-4 w-4 text-white/70" />
+            <span className="text-[12px] text-white/70">Coinbase</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Provider disclosure */}
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5">
             <Info className="h-4 w-4 text-white/70" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white/90">
+              Coinbase facilitates this transfer
+            </div>
+            <div className="mt-1 text-[12px] leading-relaxed text-white/60">
+              When you continue, you&apos;ll complete your payment in a
+              Coinbase- hosted checkout. Coinbase is responsible for payment
+              processing, compliance checks, and transfer execution. Haven does
+              not collect your card details.
+            </div>
+            <div className="mt-3 grid gap-2 text-[12px] text-white/60">
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                <span className="text-white/80 font-semibold">
+                  Cards supported:
+                </span>{" "}
+                Visa / Mastercard <span className="text-white/80">debit</span>.{" "}
+                <span className="text-white/80">
+                  Credit cards are not supported.
+                </span>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                <span className="text-white/80 font-semibold">
+                  Alternative:
+                </span>{" "}
+                You can also pay using an existing{" "}
+                <span className="text-white/80">Coinbase USDC balance</span>{" "}
+                (where available).
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Deposit details */}
-      <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
         <div className="text-xs font-medium text-white/60">
-          Deposit to account
+          Deposit destination
         </div>
         <div className="mt-1 text-sm text-white/85">
           {maskAddress(toAddress)}
@@ -379,14 +413,16 @@ export default function Onramp({
               className="w-full rounded-xl border border-white/10 bg-white/5 pl-8 pr-3 py-3 text-sm text-white/90 outline-none placeholder:text-white/30 focus:border-emerald-300/30"
             />
           </div>
+
           <div className="mt-2 text-[12px] text-white/55">
             {amountStr ? (
               <>
-                Total{" "}
+                You&apos;ll be asked to confirm{" "}
                 <span className="text-white/85 font-semibold">
                   {symbol}
                   {amountStr}
-                </span>
+                </span>{" "}
+                in Coinbase checkout.
               </>
             ) : (
               <>Enter an amount to continue.</>
@@ -398,21 +434,21 @@ export default function Onramp({
         </div>
       </div>
 
-      {/* Consent */}
-      <label className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 cursor-pointer">
+      {/* Acknowledgement */}
+      <label className="mt-4 flex items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 cursor-pointer">
         <input
           type="checkbox"
-          checked={approved}
-          onChange={(e) => setApproved(e.target.checked)}
+          checked={acknowledged}
+          onChange={(e) => setAcknowledged(e.target.checked)}
           className="mt-1 h-4 w-4 accent-emerald-400"
         />
         <div className="text-[12px] text-white/70 leading-snug">
-          I authorize this card payment for{" "}
-          <span className="text-white/85 font-semibold">
-            {symbol}
-            {amountStr || "0.00"}
-          </span>
-          .
+          I acknowledge that this transfer is facilitated by{" "}
+          <span className="text-white/85 font-semibold">Coinbase</span>, and
+          that I will be redirected to a Coinbase-hosted checkout to complete
+          payment. I understand that Haven does not handle card details and that
+          payment availability may depend on my region and Coinbase&apos;s
+          policies.
         </div>
       </label>
 
@@ -438,11 +474,11 @@ export default function Onramp({
         ) : (
           <ArrowUpRight className="h-4 w-4" />
         )}
-        {loading ? "Opening checkout…" : "Continue"}
+        {loading ? "Opening Coinbase checkout…" : "Continue"}
       </button>
 
       <div className="mt-3 text-[11px] text-white/45">
-        Secure checkout. You&apos;ll be redirected to complete your payment.
+        You&apos;ll complete the payment in Coinbase&apos;s secure checkout.
       </div>
     </div>
   );
