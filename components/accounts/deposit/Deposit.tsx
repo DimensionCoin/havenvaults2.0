@@ -41,6 +41,13 @@ type DepositTab = "bank" | "crypto";
 type BankStep = "amount" | "confirm";
 type FlowType = "guest" | "coinbase_login";
 
+type FeeInfo = {
+  coinbaseFee?: { currency: string; value: string };
+  networkFee?: { currency: string; value: string };
+  paymentTotal?: { currency: string; value: string };
+  purchaseAmount?: { currency: string; value: string };
+};
+
 type OnrampSessionResponse = {
   onrampUrl?: string;
   url?: string;
@@ -50,6 +57,9 @@ type OnrampSessionResponse = {
   code?: string;
   flowType?: FlowType;
   country?: string;
+  method?: "quote" | "session";
+  quoteId?: string;
+  fees?: FeeInfo;
 };
 
 type OnrampSessionRequest = {
@@ -215,6 +225,10 @@ const Deposit: React.FC<DepositProps> = ({
   const [coinbaseError, setCoinbaseError] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [flowType, setFlowType] = useState<FlowType | null>(null);
+  const [quoteMethod, setQuoteMethod] = useState<"quote" | "session" | null>(
+    null,
+  );
+  const [feeInfo, setFeeInfo] = useState<FeeInfo | null>(null);
 
   // Crypto deposit state
   const [copied, setCopied] = useState(false);
@@ -295,6 +309,8 @@ const Deposit: React.FC<DepositProps> = ({
     setCheckoutOpen(false);
     setCopied(false);
     setFlowType(null);
+    setQuoteMethod(null);
+    setFeeInfo(null);
     popupRef.current?.cleanup?.();
     popupRef.current = null;
   }, [open]);
@@ -313,6 +329,8 @@ const Deposit: React.FC<DepositProps> = ({
     setCheckoutOpen(false);
     setCoinbaseLaunching(false);
     setFlowType(null);
+    setQuoteMethod(null);
+    setFeeInfo(null);
     if (onSuccess) await onSuccess();
     setTimeout(() => onOpenChange(false), 500);
   }, [onSuccess, onOpenChange]);
@@ -373,9 +391,15 @@ const Deposit: React.FC<DepositProps> = ({
         throw new Error("Missing Coinbase checkout URL");
       }
 
-      // Store the flow type for UI messaging
+      // Store the flow type and method for UI messaging
       if (data.flowType) {
         setFlowType(data.flowType);
+      }
+      if (data.method) {
+        setQuoteMethod(data.method);
+      }
+      if (data.fees) {
+        setFeeInfo(data.fees);
       }
 
       popupRef.current?.cleanup?.();
@@ -461,6 +485,11 @@ const Deposit: React.FC<DepositProps> = ({
                   "Finish in the secure Coinbase window. You can close it when done."
                 )}
               </div>
+              {quoteMethod === "quote" && (
+                <div className="mt-2 text-[12px] text-primary">
+                  ✓ Your amount has been pre-filled
+                </div>
+              )}
               <div className="mt-2 text-[12px] text-muted-foreground/70">
                 After checkout, funds may take a moment to appear depending on
                 Coinbase processing times.
@@ -473,6 +502,8 @@ const Deposit: React.FC<DepositProps> = ({
                 setCheckoutOpen(false);
                 setCoinbaseLaunching(false);
                 setFlowType(null);
+                setQuoteMethod(null);
+                setFeeInfo(null);
               }}
               className="mt-2 haven-btn-secondary"
             >
@@ -703,6 +734,16 @@ const Deposit: React.FC<DepositProps> = ({
                   <p className="text-[11px] text-muted-foreground">
                     You can also skip this and enter the amount in Coinbase
                     checkout
+                  </p>
+                </div>
+              )}
+
+              {/* Warning if no country is set but amount is entered */}
+              {amountDisplay > 0 && !userCountry && (
+                <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                  <p className="text-[11px] text-amber-200">
+                    <strong>Note:</strong> Set your country in profile settings
+                    to have your amount pre-filled in Coinbase checkout.
                   </p>
                 </div>
               )}
