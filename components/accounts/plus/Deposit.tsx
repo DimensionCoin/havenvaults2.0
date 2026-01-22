@@ -24,10 +24,32 @@ import { usePlusDeposit, type PlusDepositStatus } from "@/hooks/usePlusDeposit";
 
 /* ───────── TYPES ───────── */
 
+type DepositPrefetch = {
+  displayCurrency?: string;
+  fxRate?: number;
+
+  // USDC available (already in display currency terms in your provider)
+  usdcBalanceDisplay?: number;
+
+  // Plus readiness + amount (raw/position amount)
+  plusReady?: boolean;
+  plusAmount?: number;
+
+  // optional timestamp from provider if you have it
+  lastUpdated?: number;
+};
+
 type DepositPlusProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   hasAccount: boolean; // ignored
+  /** ✅ NEW: pass prefetched balances so modal renders instantly */
+  prefetch?: DepositPrefetch;
+  /**
+   * ✅ NEW: if true, do NOT refresh balances when opening.
+   * (Prevents the slow “open → refresh → rerender” behavior)
+   */
+  skipRefreshOnOpen?: boolean;
 };
 
 type ModalState =
@@ -189,6 +211,8 @@ export default function DepositPlus({
   open,
   onOpenChange,
   hasAccount: _hasAccountProp,
+  prefetch,
+  skipRefreshOnOpen = true,
 }: DepositPlusProps) {
   const { user, refresh: refreshUser } = useUser();
   const balance = useBalance();
@@ -210,85 +234,68 @@ export default function DepositPlus({
   const ownerReady = !!user?.walletAddress && user.walletAddress !== "pending";
   const tradeStartedRef = useRef(false);
 
-  // ====== NEW: force-refresh on open, and gate label until that refresh settles ======
-  const openSeqRef = useRef(0);
-  const [awaitingFreshPlus, setAwaitingFreshPlus] = useState(false);
+  // ✅ Local “instant” snapshot (so UI renders immediately)
+  const [snap, setSnap] = useState<DepositPrefetch | null>(null);
 
+  useEffect(() => setMounted(true), []);
+
+  // When opening, seed snapshot from props
   useEffect(() => {
     if (!open) return;
+    setSnap(prefetch ?? null);
+  }, [open, prefetch]);
 
-    openSeqRef.current += 1;
-    const seq = openSeqRef.current;
+  // ✅ Stop forcing refresh on open (this is what was making it feel slow)
+  useEffect(() => {
+    if (!open) return;
+    if (skipRefreshOnOpen) return;
 
-    setAwaitingFreshPlus(true);
-
-    // refreshNow() exists on provider; if not, fallback to refresh()
     const refreshFn =
       (balance as unknown as { refreshNow?: () => Promise<void> }).refreshNow ??
       balance.refresh;
 
     Promise.resolve()
       .then(() => refreshFn?.())
-      .catch(() => {})
-      .finally(() => {
-        // only clear if this is still the latest "open"
-        if (openSeqRef.current === seq) setAwaitingFreshPlus(false);
-      });
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, skipRefreshOnOpen]);
 
-  const plusReady = Boolean(balance.plusReady);
-  const plusAmount = safeNum(balance.savingsPlusAmount, 0);
-
-  // labelReady = "we opened + we ran a refresh + plus endpoint resolved"
-  const labelReady = !awaitingFreshPlus && plusReady;
-
-  // (optional) treat dust as zero
-  const hasPlusFunds = labelReady && plusAmount > 0.000001;
-
-  const label = !labelReady ? "…" : hasPlusFunds ? "Deposit" : "Open Account";
-  // ================================================================================
-
-  const displayCurrency = (balance.displayCurrency || "USD")
+  // Prefer provider values once available, otherwise use snapshot
+  const displayCurrency = (
+    (balance.displayCurrency as string | undefined) ||
+    snap?.displayCurrency ||
+    "USD"
+  )
     .toUpperCase()
     .trim();
 
-  const fxRate = safeNum(balance.fxRate, 1);
+  const fxRate = safeNum(
+    (balance as unknown as { fxRate?: unknown })?.fxRate,
+    safeNum(snap?.fxRate, 1),
+  );
+
   const isUsd = displayCurrency === "USD";
 
-  const usdcBalanceDisplay = safeNum(balance.usdcUsd, 0);
+  const usdcBalanceDisplay = safeNum(
+    (balance as unknown as { usdcUsd?: unknown })?.usdcUsd,
+    safeNum(snap?.usdcBalanceDisplay, 0),
+  );
 
-  // ✅ DEBUG: logs on every relevant change while open
-  useEffect(() => {
-    if (!open) return;
-    console.log("[DepositPlus][DEBUG]", {
-      open,
-      awaitingFreshPlus,
-      plusReady: balance.plusReady,
-      plusError: balance.plusError,
-      savingsPlusAmount_raw: balance.savingsPlusAmount,
-      plusAmount_parsed: plusAmount,
-      labelReady,
-      hasPlusFunds,
-      computedLabel: label,
-      balance_loading: balance.loading,
-      lastUpdated: balance.lastUpdated,
-      owner: user?.walletAddress,
-    });
-  }, [
-    open,
-    awaitingFreshPlus,
-    balance.plusReady,
-    balance.plusError,
-    balance.savingsPlusAmount,
-    plusAmount,
-    labelReady,
-    hasPlusFunds,
-    label,
-    balance.loading,
-    balance.lastUpdated,
-    user?.walletAddress,
-  ]);
+  const plusReady = Boolean(
+    (balance as unknown as { plusReady?: unknown })?.plusReady ??
+    snap?.plusReady ??
+    false,
+  );
+
+  const plusAmount = safeNum(
+    (balance as unknown as { savingsPlusAmount?: unknown })?.savingsPlusAmount,
+    safeNum(snap?.plusAmount, 0),
+  );
+
+  // labelReady just needs “plus resolved” (from provider OR snapshot)
+  const labelReady = plusReady;
+  const hasPlusFunds = labelReady && plusAmount > 0.000001;
+  const label = !labelReady ? "…" : hasPlusFunds ? "Deposit" : "Open Account";
 
   const amountDisplay = useMemo(() => {
     const n = parseFloat(amountRaw);
@@ -313,8 +320,6 @@ export default function DepositPlus({
   const currentStage = modal?.kind === "processing" ? depositStatus : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
 
-  useEffect(() => setMounted(true), []);
-
   useEffect(() => {
     if (!open) {
       setAmountRaw("");
@@ -322,6 +327,7 @@ export default function DepositPlus({
       setShowDetails(false);
       tradeStartedRef.current = false;
       resetDeposit();
+      setSnap(null);
     }
   }, [open, resetDeposit]);
 
@@ -605,6 +611,6 @@ export default function DepositPlus({
         )}
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }
