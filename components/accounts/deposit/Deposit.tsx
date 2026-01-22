@@ -635,8 +635,8 @@ const Deposit: React.FC<DepositProps> = ({
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     <strong className="text-foreground">
                       Secure checkout:
-                    </strong>{" "}
-                    You&apos;ll complete payment via Coinbase&apos;s secure
+                    </strong>
+                    You will complete payment via the Coinbase secure
                     checkout. Haven never sees your card details.
                   </p>
                 </div>
@@ -660,7 +660,7 @@ const Deposit: React.FC<DepositProps> = ({
               <div className="text-center py-6">
                 <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-2">
                   {amountDisplay > 0
-                    ? "You&apos;re depositing"
+                    ? "You are depositing"
                     : "Deposit via Coinbase"}
                 </p>
                 {amountDisplay > 0 ? (
@@ -683,7 +683,7 @@ const Deposit: React.FC<DepositProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[12px] text-muted-foreground">
-                        You&apos;re buying
+                        You are buying
                       </span>
                       <span className="text-[13px] text-foreground font-medium">
                         USDC
