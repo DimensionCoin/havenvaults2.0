@@ -746,7 +746,7 @@ export const STOCK_TOKENS: TokenMeta[] = [
   },
   //--------------------- Commodity
   {
-    name: "GOLD(1 troy ounce)",
+    name: "GOLD(1 T OZ)",
     symbol: "GLD",
     id: "",
     logo: "/logos/gldoz.png",
