@@ -9,9 +9,9 @@ import crypto from "crypto";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// API endpoints
-const ONRAMP_TOKEN_URL = "https://api.developer.coinbase.com/onramp/v1/token";
-const BUY_QUOTE_URL = "https://api.developer.coinbase.com/onramp/v1/buy/quote";
+// V2 API endpoint - this is the newer API that properly handles one-click buy URLs
+const ONRAMP_SESSION_URL_V2 =
+  "https://api.cdp.coinbase.com/platform/v2/onramp/sessions";
 
 const API_KEY_ID = process.env.COINBASE_API_KEY_ID!;
 const API_KEY_SECRET = process.env.COINBASE_API_SECRET!;
@@ -103,13 +103,11 @@ function stablePartnerRef(input: string): string {
  * Coinbase requires this for security validation.
  */
 function getClientIp(req: NextRequest): string | null {
-  // Vercel provides the real IP in x-real-ip header
   const realIp = req.headers.get("x-real-ip");
   if (realIp && isValidPublicIp(realIp)) {
     return realIp;
   }
 
-  // Fallback to x-forwarded-for (first IP in the chain)
   const forwardedFor = req.headers.get("x-forwarded-for");
   if (forwardedFor) {
     const firstIp = forwardedFor.split(",")[0]?.trim();
@@ -118,7 +116,6 @@ function getClientIp(req: NextRequest): string | null {
     }
   }
 
-  // Next.js may provide IP in the request
   // @ts-expect-error - ip may exist on NextRequest in some environments
   if (req.ip && isValidPublicIp(req.ip)) {
     // @ts-expect-error - ip may exist on NextRequest in some environments
@@ -179,21 +176,17 @@ const ALLOWED_PAYMENT_CURRENCIES = new Set([
   "MXN",
 ]);
 
-// Countries that support Guest Checkout (US only as of Jan 2026)
+// Countries that support Guest Checkout (US only)
 const GUEST_CHECKOUT_COUNTRIES = new Set(["US"]);
 
-// Valid payment methods for the Buy Quote API
-const VALID_PAYMENT_METHODS = new Set([
-  "UNSPECIFIED",
+// Valid payment methods for the V2 API
+const VALID_PAYMENT_METHODS_V2 = new Set([
   "CARD",
-  "ACH_BANK_ACCOUNT",
+  "ACH",
   "APPLE_PAY",
-  "FIAT_WALLET",
-  "CRYPTO_ACCOUNT",
-  "GUEST_CHECKOUT_CARD",
   "PAYPAL",
-  "RTP",
-  "GUEST_CHECKOUT_APPLE_PAY",
+  "FIAT_WALLET",
+  "CRYPTO_WALLET",
 ]);
 
 function normalizeCurrency(s?: string) {
@@ -212,192 +205,17 @@ function normalizeAmount(s?: string) {
 }
 
 /**
- * Generate JWT for Coinbase API
+ * Generate JWT for Coinbase V2 API
  */
-async function generateCoinbaseJwt(method: string, path: string) {
+async function generateCoinbaseJwtV2(method: string, path: string) {
   return generateJwt({
     apiKeyId: API_KEY_ID,
     apiKeySecret: API_KEY_SECRET,
     requestMethod: method,
-    requestHost: "api.developer.coinbase.com",
+    requestHost: "api.cdp.coinbase.com",
     requestPath: path,
     expiresIn: 120,
   });
-}
-
-/**
- * Use the Buy Quote API to get a one-click-buy URL with amount pre-filled.
- * This is the preferred method when the user has specified an amount.
- */
-async function getBuyQuoteUrl(params: {
-  destinationAddress: string;
-  purchaseCurrency: string;
-  purchaseNetwork: string;
-  paymentAmount: string;
-  paymentCurrency: string;
-  paymentMethod: string;
-  country: string;
-  subdivision?: string;
-  clientIp: string;
-}): Promise<{ onrampUrl: string; quoteId: string; fees: unknown } | null> {
-  try {
-    const jwt = await generateCoinbaseJwt("POST", "/onramp/v1/buy/quote");
-
-    const requestBody: Record<string, string> = {
-      purchaseCurrency: params.purchaseCurrency,
-      purchaseNetwork: params.purchaseNetwork,
-      paymentAmount: params.paymentAmount,
-      paymentCurrency: params.paymentCurrency,
-      paymentMethod: params.paymentMethod,
-      country: params.country,
-      destinationAddress: params.destinationAddress,
-      clientIp: params.clientIp,
-    };
-
-    // Add subdivision for US users (required)
-    if (params.subdivision) {
-      requestBody.subdivision = params.subdivision;
-    }
-
-    console.log("[Onramp] Requesting buy quote:", {
-      ...requestBody,
-      destinationAddress: requestBody.destinationAddress?.slice(0, 8) + "...",
-      clientIp: "[redacted]",
-    });
-
-    const response = await fetch(BUY_QUOTE_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-      cache: "no-store",
-    });
-
-    const text = await response.text();
-    let data: Record<string, unknown> | null = null;
-    try {
-      data = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      console.error("[Onramp] Failed to parse quote response:", text);
-      return null;
-    }
-
-    if (!response.ok) {
-      console.error("[Onramp] Buy quote error:", response.status, data);
-      return null;
-    }
-
-    const onrampUrl = data.onramp_url as string | undefined;
-    const quoteId = data.quote_id as string | undefined;
-
-    if (!onrampUrl) {
-      console.error("[Onramp] No onramp_url in quote response:", data);
-      return null;
-    }
-
-    return {
-      onrampUrl,
-      quoteId: quoteId || "",
-      fees: {
-        coinbaseFee: data.coinbase_fee,
-        networkFee: data.network_fee,
-        paymentTotal: data.payment_total,
-        purchaseAmount: data.purchase_amount,
-      },
-    };
-  } catch (error) {
-    console.error("[Onramp] Buy quote request failed:", error);
-    return null;
-  }
-}
-
-/**
- * Fallback to session token API when no amount is specified.
- * This allows users to enter the amount in Coinbase checkout.
- */
-async function getSessionTokenUrl(params: {
-  destinationAddress: string;
-  clientIp: string;
-  paymentCurrency: string;
-  isGuestCheckoutEligible: boolean;
-  partnerUserRef: string;
-  redirectUrl?: string;
-}): Promise<string | null> {
-  try {
-    const jwt = await generateCoinbaseJwt("POST", "/onramp/v1/token");
-
-    const tokenPayload = {
-      addresses: [
-        {
-          address: params.destinationAddress,
-          blockchains: ["solana"],
-        },
-      ],
-      assets: ["USDC"],
-      clientIp: params.clientIp,
-    };
-
-    const response = await fetch(ONRAMP_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(tokenPayload),
-      cache: "no-store",
-    });
-
-    const text = await response.text();
-    let data: Record<string, unknown> | null = null;
-    try {
-      data = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      console.error("[Onramp] Failed to parse token response:", text);
-      return null;
-    }
-
-    if (!response.ok || !data) {
-      console.error("[Onramp] Session token error:", response.status, data);
-      return null;
-    }
-
-    const dataObj = data.data as Record<string, unknown> | undefined;
-    const sessionToken =
-      (typeof data.token === "string" ? data.token : null) ||
-      (typeof dataObj?.token === "string" ? dataObj.token : null);
-
-    if (!sessionToken) {
-      console.error("[Onramp] No token in response:", data);
-      return null;
-    }
-
-    // Build URL manually for session token flow
-    const baseUrl = params.isGuestCheckoutEligible
-      ? "https://pay.coinbase.com/buy"
-      : "https://pay.coinbase.com/buy/select-asset";
-
-    const onrampUrl = new URL(baseUrl);
-    onrampUrl.searchParams.set("sessionToken", sessionToken);
-    onrampUrl.searchParams.set("defaultNetwork", "solana");
-    onrampUrl.searchParams.set("defaultAsset", "USDC");
-    onrampUrl.searchParams.set("fiatCurrency", params.paymentCurrency);
-    onrampUrl.searchParams.set("partnerUserRef", params.partnerUserRef);
-
-    if (!params.isGuestCheckoutEligible) {
-      onrampUrl.searchParams.set("defaultPaymentMethod", "CARD");
-    }
-
-    if (params.redirectUrl) {
-      onrampUrl.searchParams.set("redirectUrl", params.redirectUrl);
-    }
-
-    return onrampUrl.toString();
-  } catch (error) {
-    console.error("[Onramp] Session token request failed:", error);
-    return null;
-  }
 }
 
 /* ───────── main ───────── */
@@ -486,25 +304,45 @@ export async function POST(req: NextRequest) {
   const safeRedirectUrl =
     redirectUrl && isAllowedRedirectUrl(redirectUrl) ? redirectUrl : undefined;
 
-  // Get user's country
-  const userCountry = (body.country || user?.country || "")
-    .toUpperCase()
-    .trim();
+  // Get user's country - ensure we use ISO 3166-1 two-letter codes
+  const rawCountry = (body.country || user?.country || "").toUpperCase().trim();
+
+  // Map common country names to ISO codes
+  const COUNTRY_NAME_TO_CODE: Record<string, string> = {
+    CANADA: "CA",
+    "UNITED STATES": "US",
+    USA: "US",
+    "UNITED KINGDOM": "GB",
+    UK: "GB",
+    AUSTRALIA: "AU",
+    GERMANY: "DE",
+    FRANCE: "FR",
+    SPAIN: "ES",
+    ITALY: "IT",
+    NETHERLANDS: "NL",
+    SWITZERLAND: "CH",
+    SINGAPORE: "SG",
+    JAPAN: "JP",
+    BRAZIL: "BR",
+    MEXICO: "MX",
+  };
+
+  // If it's already a 2-letter code, use it; otherwise try to map it
+  const userCountry =
+    rawCountry.length === 2
+      ? rawCountry
+      : COUNTRY_NAME_TO_CODE[rawCountry] || rawCountry.slice(0, 2);
+
   const userSubdivision = (body.subdivision || user?.subdivision || "")
     .toUpperCase()
     .trim();
 
   const isGuestCheckoutEligible = GUEST_CHECKOUT_COUNTRIES.has(userCountry);
 
-  // Determine payment method
+  // Determine payment method for V2 API
   let paymentMethod = (body.paymentMethod || "").toUpperCase();
-  if (!paymentMethod || !VALID_PAYMENT_METHODS.has(paymentMethod)) {
-    // Default based on country and checkout type
-    if (isGuestCheckoutEligible) {
-      paymentMethod = "GUEST_CHECKOUT_CARD";
-    } else {
-      paymentMethod = "CARD";
-    }
+  if (!paymentMethod || !VALID_PAYMENT_METHODS_V2.has(paymentMethod)) {
+    paymentMethod = "CARD"; // Default to CARD for V2 API
   }
 
   // Partner user reference
@@ -516,61 +354,104 @@ export async function POST(req: NextRequest) {
   const partnerUserRef = `user-${stablePartnerRef(base)}`;
 
   try {
-    let onrampUrl: string | null = null;
-    let quoteId: string | null = null;
-    let fees: unknown = null;
-    let method: "quote" | "session" = "session";
+    // Build request body for V2 API
+    // Required fields: purchaseCurrency, destinationNetwork, destinationAddress
+    // Optional for one-click: paymentAmount, paymentCurrency
+    // Optional for quote: paymentMethod, country, subdivision
+    const requestBody: Record<string, string> = {
+      purchaseCurrency: purchaseCurrency,
+      destinationNetwork: destinationNetwork,
+      destinationAddress: userDepositAddress,
+      clientIp: clientIp,
+      partnerUserRef: partnerUserRef,
+    };
 
-    // If user specified an amount, use the Buy Quote API for pre-filled URL
-    if (paymentAmount && userCountry) {
-      const quoteResult = await getBuyQuoteUrl({
-        destinationAddress: userDepositAddress,
-        purchaseCurrency: "USDC",
-        purchaseNetwork: "solana",
-        paymentAmount,
-        paymentCurrency,
-        paymentMethod,
-        country: userCountry,
-        subdivision:
-          userCountry === "US" ? userSubdivision || undefined : undefined,
-        clientIp,
-      });
+    // Add payment amount and currency for one-click URL with pre-filled amount
+    if (paymentAmount) {
+      requestBody.paymentAmount = paymentAmount;
+      requestBody.paymentCurrency = paymentCurrency;
+    }
 
-      if (quoteResult) {
-        onrampUrl = quoteResult.onrampUrl;
-        quoteId = quoteResult.quoteId;
-        fees = quoteResult.fees;
-        method = "quote";
-        console.log("[Onramp] Using Buy Quote URL with pre-filled amount");
-      } else {
-        console.log("[Onramp] Buy Quote failed, falling back to session token");
+    // Add payment method and country for full quote
+    if (paymentMethod && userCountry) {
+      requestBody.paymentMethod = paymentMethod;
+      requestBody.country = userCountry;
+
+      // Subdivision required for US
+      if (userCountry === "US" && userSubdivision) {
+        requestBody.subdivision = userSubdivision;
       }
     }
 
-    // Fallback to session token if quote failed or no amount specified
-    if (!onrampUrl) {
-      onrampUrl = await getSessionTokenUrl({
-        destinationAddress: userDepositAddress,
-        clientIp,
-        paymentCurrency,
-        isGuestCheckoutEligible,
-        partnerUserRef,
-        redirectUrl: safeRedirectUrl,
-      });
-      method = "session";
+    // Add redirect URL if provided
+    if (safeRedirectUrl) {
+      requestBody.redirectUrl = safeRedirectUrl;
     }
 
-    if (!onrampUrl) {
-      return json(req, 502, {
-        error: "Failed to create Coinbase checkout URL",
+    console.log("[Onramp V2] Creating session with:", {
+      ...requestBody,
+      destinationAddress: requestBody.destinationAddress?.slice(0, 8) + "...",
+      clientIp: "[redacted]",
+    });
+
+    // Generate JWT for V2 API
+    const jwt = await generateCoinbaseJwtV2(
+      "POST",
+      "/platform/v2/onramp/sessions",
+    );
+
+    const response = await fetch(ONRAMP_SESSION_URL_V2, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      cache: "no-store",
+    });
+
+    const text = await response.text();
+    let data: Record<string, unknown> | null = null;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      console.error("[Onramp V2] Failed to parse response:", text);
+      return json(req, 502, { error: "Invalid response from Coinbase" });
+    }
+
+    if (!response.ok) {
+      console.error("[Onramp V2] Error:", response.status, data);
+
+      // Extract error message from V2 API response
+      const errorType = data?.errorType as string | undefined;
+      const errorMessage = data?.errorMessage as string | undefined;
+      const errorMsg = errorMessage || errorType || "Coinbase API error";
+
+      return json(req, response.status >= 500 ? 502 : 400, {
+        error: errorMsg,
+        errorType,
       });
     }
+
+    // Extract session and quote from V2 API response
+    const session = data.session as { onrampUrl?: string } | undefined;
+    const quote = data.quote as Record<string, unknown> | undefined;
+
+    const onrampUrl = session?.onrampUrl;
+
+    if (!onrampUrl) {
+      console.error("[Onramp V2] No onrampUrl in response:", data);
+      return json(req, 502, { error: "No onramp URL in Coinbase response" });
+    }
+
+    console.log("[Onramp V2] Session created successfully", {
+      hasQuote: !!quote,
+      hasAmount: !!paymentAmount,
+    });
 
     return json(req, 200, {
       onrampUrl,
-      quoteId,
-      fees,
-      method,
+      quote: quote || null,
       destinationAddress: userDepositAddress,
       purchaseCurrency: "USDC",
       destinationNetwork: "solana",
@@ -582,7 +463,7 @@ export async function POST(req: NextRequest) {
       country: userCountry || null,
     });
   } catch (error) {
-    console.error("[Onramp] Error:", error);
+    console.error("[Onramp V2] Error:", error);
     return json(req, 500, {
       error: error instanceof Error ? error.message : "Internal server error",
     });
