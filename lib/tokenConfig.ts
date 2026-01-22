@@ -746,17 +746,6 @@ export const STOCK_TOKENS: TokenMeta[] = [
   },
   //--------------------- Commodity
   {
-    name: "GOLD(ETF)",
-    symbol: "GLDr",
-    id: "",
-    logo: "/logos/gold.png",
-    kind: "stock",
-    categories: ["Commodity"],
-    tags: ["Commodity"],
-    decimals: 8,
-    mints: { mainnet: "AEv6xLECJ2KKmwFGX85mHb9S2c2BQE7dqE5midyrXHBb" },
-  },
-  {
     name: "GOLD(1 troy ounce)",
     symbol: "GLD",
     id: "",

@@ -9,10 +9,16 @@ import {
   PiggyBank,
   ArrowDownLeft,
   ArrowUpRight,
+  ExternalLink,
+  ChevronDown,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
+
+// ✅ ADD THESE
+import DepositPlus from "@/components/accounts/plus/Deposit";
+import WithdrawPlus from "@/components/accounts/plus/Withdraw";
 
 /* =========================
    Types returned by our NEW API
@@ -88,6 +94,15 @@ type FxPayload = {
   rate?: number;
 };
 
+type ApyResponse = {
+  apyPct?: number;
+  apy?: number;
+  apyPercentage?: string;
+  error?: string;
+};
+
+const APY_URL = "/api/savings/plus/apy";
+
 const toFxRate = (p: FxPayload | null) => {
   const r = Number(p?.rate);
   return Number.isFinite(r) && r > 0 ? r : 1;
@@ -132,22 +147,22 @@ function formatCurrency(amount: number, currency: string) {
   }
 }
 
+function safeNum(v: unknown, fallback = 0): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
 /* =========================
    Client-side parsing
-   (Deposit/Withdraw + Amount)
 ========================= */
 
-/**
- * Helius tokenTransfers sometimes have:
- * - mint
- * - fromUserAccount / toUserAccount
- * - tokenAmount { uiAmount / uiAmountString }
- * - or amount / rawTokenAmount
- */
 function readUiAmount(tt: TokenTransfer): number {
   const tokenAmount = tt?.tokenAmount ?? tt?.rawTokenAmount ?? tt?.amount;
 
-  // tokenAmount object shape
   if (tokenAmount && typeof tokenAmount === "object") {
     const ui = tokenAmount.uiAmount ?? tokenAmount.uiAmountString;
     const n = Number(ui);
@@ -162,15 +177,6 @@ function norm(v: unknown) {
   return typeof v === "string" ? v.trim().toLowerCase() : "";
 }
 
-/**
- * Fallback: accountData[].tokenBalanceChanges can contain:
- * - mint
- * - userAccount (sometimes)
- * - rawTokenAmount / tokenAmount
- * - changeType ("inc"/"dec") or amount can be +/- depending on shape
- *
- * We’ll compute USDC delta for the OWNER if possible.
- */
 function readUsdcDeltaFromBalanceChanges(owner: string, tx: ApiTx) {
   const ownerLower = owner.trim().toLowerCase();
   const ads = Array.isArray(tx.accountData) ? tx.accountData : [];
@@ -187,7 +193,6 @@ function readUsdcDeltaFromBalanceChanges(owner: string, tx: ApiTx) {
       const mint = norm(c?.mint);
       if (!mint || mint !== USDC_MINT) continue;
 
-      // best effort: only count changes tied to the owner
       const userAccount = norm(c?.userAccount ?? c?.owner ?? "");
       if (userAccount && userAccount !== ownerLower) continue;
 
@@ -195,7 +200,8 @@ function readUsdcDeltaFromBalanceChanges(owner: string, tx: ApiTx) {
       let ui = 0;
 
       if (raw && typeof raw === "object") {
-        const uiMaybe = raw.uiAmount ?? raw.uiAmountString;
+        const uiMaybe =
+          (raw as TokenAmount).uiAmount ?? (raw as TokenAmount).uiAmountString;
         const n = Number(uiMaybe);
         ui = Number.isFinite(n) ? n : 0;
       } else {
@@ -208,20 +214,12 @@ function readUsdcDeltaFromBalanceChanges(owner: string, tx: ApiTx) {
       const changeType = String(c?.changeType || "").toLowerCase();
       if (changeType === "inc" || changeType === "increase") inAmt += ui;
       else if (changeType === "dec" || changeType === "decrease") outAmt += ui;
-      else {
-        // if unknown, assume neutral and skip
-      }
     }
   }
 
   return { usdcIn: inAmt, usdcOut: outAmt };
 }
 
-/**
- * Primary parse from tokenTransfers:
- * - Deposit: owner sent USDC (out)
- * - Withdraw: owner received USDC (in)
- */
 function parsePlusEvent(owner: string, tx: ApiTx) {
   const ownerLower = owner.trim().toLowerCase();
 
@@ -244,14 +242,12 @@ function parsePlusEvent(owner: string, tx: ApiTx) {
     if (to === ownerLower) usdcIn += amt;
   }
 
-  // fallback if tokenTransfers didn’t reveal it
   if (usdcIn === 0 && usdcOut === 0) {
     const fallback = readUsdcDeltaFromBalanceChanges(owner, tx);
     usdcIn = fallback.usdcIn;
     usdcOut = fallback.usdcOut;
   }
 
-  // classify
   if (usdcOut > usdcIn && usdcOut > 0) {
     return {
       title: "Deposit",
@@ -282,9 +278,12 @@ function parsePlusEvent(owner: string, tx: ApiTx) {
    Page
 ========================= */
 
+type ModalMode = "deposit" | "withdraw" | null;
+
 export default function PlusSavingsAccountPage() {
   const router = useRouter();
   const { user, loading: userLoading } = useUser();
+
   const [fx, setFx] = useState<FxPayload | null>(null);
   const fxRate = useMemo(() => toFxRate(fx), [fx]);
 
@@ -299,6 +298,29 @@ export default function PlusSavingsAccountPage() {
   } = useBalance();
 
   const walletAddress = user?.walletAddress || "";
+
+  // ✅ MODAL STATE
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<ModalMode>(null);
+
+  const openDeposit = useCallback(() => {
+    setModalMode("deposit");
+    setModalOpen(true);
+  }, []);
+
+  const openWithdraw = useCallback(() => {
+    setModalMode("withdraw");
+    setModalOpen(true);
+  }, []);
+
+  const onModalChange = useCallback((open: boolean) => {
+    setModalOpen(open);
+    if (!open) setModalMode(null);
+  }, []);
+
+  // Live APY (cached)
+  const [apyPctLive, setApyPctLive] = useState<number | null>(null);
+  const [apyLoading, setApyLoading] = useState(false);
 
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
@@ -319,7 +341,10 @@ export default function PlusSavingsAccountPage() {
             ? `&before=${encodeURIComponent(nextBefore)}`
             : "";
 
-        const url = `/api/savings/plus/activity?wallet=${encodeURIComponent(walletAddress)}&limit=25${cursor}`;
+        const url = `/api/savings/plus/activity?wallet=${encodeURIComponent(
+          walletAddress,
+        )}&limit=25${cursor}`;
+
         const res = await fetch(url, {
           method: "GET",
           cache: "no-store",
@@ -373,6 +398,7 @@ export default function PlusSavingsAccountPage() {
     [walletAddress, nextBefore],
   );
 
+  // Initial activity load on user change
   useEffect(() => {
     if (!user) return;
     setTxs([]);
@@ -382,7 +408,7 @@ export default function PlusSavingsAccountPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // ✅ parse + sort for rendering
+  // Parse + sort
   const activity = useMemo(() => {
     const owner = walletAddress;
     const mapped: ActivityTx[] = txs.map((tx) => {
@@ -400,6 +426,7 @@ export default function PlusSavingsAccountPage() {
     return mapped;
   }, [txs, walletAddress]);
 
+  // FX
   useEffect(() => {
     let cancelled = false;
 
@@ -415,7 +442,6 @@ export default function PlusSavingsAccountPage() {
         const data = (await res.json()) as FxPayload;
         if (!cancelled) setFx(data);
       } catch {
-        // If FX fails, we safely fall back to rate=1 (USD)
         if (!cancelled) setFx({ base: "USD", target: "USD", rate: 1 });
       }
     }
@@ -426,25 +452,131 @@ export default function PlusSavingsAccountPage() {
     };
   }, [displayCurrency]);
 
+  // APY cache
+  const refetchApy = useCallback(async () => {
+    try {
+      setApyLoading(true);
+
+      const res = await fetch(APY_URL, { method: "GET", cache: "no-store" });
+      const data = (await res.json().catch(() => ({}))) as ApyResponse;
+
+      const pct =
+        typeof data.apyPct === "number" && Number.isFinite(data.apyPct)
+          ? data.apyPct
+          : typeof data.apy === "number" && Number.isFinite(data.apy)
+            ? data.apy * 100
+            : typeof data.apyPercentage === "string" &&
+                Number.isFinite(Number(data.apyPercentage))
+              ? Number(data.apyPercentage)
+              : 0;
+
+      setApyPctLive(pct);
+      sessionStorage.setItem(
+        "plus_apy_cache_v1",
+        JSON.stringify({ at: Date.now(), apyPct: pct }),
+      );
+    } catch {
+      setApyPctLive(null);
+    } finally {
+      setApyLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        setApyLoading(true);
+
+        const cacheKey = "plus_apy_cache_v1";
+        const cachedRaw = sessionStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw) as {
+            at: number;
+            apyPct: number;
+          };
+          if (
+            cached &&
+            typeof cached.at === "number" &&
+            typeof cached.apyPct === "number" &&
+            Number.isFinite(cached.apyPct) &&
+            Date.now() - cached.at < 5 * 60 * 1000
+          ) {
+            if (!cancelled) setApyPctLive(cached.apyPct);
+            return;
+          }
+        }
+
+        const res = await fetch(APY_URL, { method: "GET", cache: "no-store" });
+        const data = (await res.json().catch(() => ({}))) as ApyResponse;
+
+        const pct =
+          typeof data.apyPct === "number" && Number.isFinite(data.apyPct)
+            ? data.apyPct
+            : typeof data.apy === "number" && Number.isFinite(data.apy)
+              ? data.apy * 100
+              : typeof data.apyPercentage === "string" &&
+                  Number.isFinite(Number(data.apyPercentage))
+                ? Number(data.apyPercentage)
+                : 0;
+
+        if (!cancelled) setApyPctLive(pct);
+
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({ at: Date.now(), apyPct: pct }),
+        );
+      } catch {
+        if (!cancelled) setApyPctLive(null);
+      } finally {
+        if (!cancelled) setApyLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const hasMore = !exhausted;
 
-  // ✅ Better loading: wait for Plus to resolve so you don’t flash $0.00
   const balancePending = userLoading || balanceLoading || !plusReady;
 
+  const balUsd = safeNum(savingsPlusUsd, 0);
+  const balUsdc = safeNum(savingsPlusAmount, 0);
+
   const balanceDisplay = useMemo(() => {
-    const base = Number.isFinite(savingsPlusUsd) ? Number(savingsPlusUsd) : 0;
-    return formatCurrency(base, displayCurrency || "USD");
-  }, [savingsPlusUsd, displayCurrency]);
+    return formatCurrency(balUsd, (displayCurrency || "USD").toUpperCase());
+  }, [balUsd, displayCurrency]);
 
   const subBalanceLine = useMemo(() => {
-    const amt = Number.isFinite(savingsPlusAmount)
-      ? Number(savingsPlusAmount)
-      : 0;
-    if (!amt) return "Vault balance in USDC terms";
-    return `${amt.toLocaleString(undefined, {
+    if (!balUsdc) return "Vault balance in USDC terms";
+    return `${balUsdc.toLocaleString(undefined, {
       maximumFractionDigits: 6,
-    })} USDC in vault`;
-  }, [savingsPlusAmount]);
+    })} USD in vault`;
+  }, [balUsdc]);
+
+  const apyText = apyLoading
+    ? "APY …"
+    : apyPctLive === null
+      ? "APY —"
+      : `APY ${apyPctLive.toFixed(2)}%`;
+
+  // ✅ Deposit modal snapshot so it renders instantly
+  const depositPrefetch = useMemo(
+    () => ({
+      displayCurrency: (displayCurrency || "USD").toUpperCase(),
+      fxRate,
+      plusReady,
+      plusAmount: balUsdc,
+      lastUpdated: Date.now(),
+      // If you expose wallet USDC in BalanceProvider, you can also pass:
+      // usdcBalanceDisplay: (useBalance() as any).usdcUsd ?? 0,
+    }),
+    [displayCurrency, fxRate, plusReady, balUsdc],
+  );
 
   if (!user && !userLoading) {
     return (
@@ -476,13 +608,29 @@ export default function PlusSavingsAccountPage() {
               Wallet {shortAddress(walletAddress)}
             </p>
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              void refreshNow();
+              void refetchApy();
+              setTxs([]);
+              setNextBefore(null);
+              setExhausted(false);
+              void fetchTxsPage(true);
+            }}
+            className="haven-icon-btn absolute right-0 top-0"
+            aria-label="Refresh"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
 
-        {/* Balance */}
+        {/* Overview Card */}
         <div className="haven-card p-4 sm:p-6">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Balance</p>
+            <div className="min-w-0">
+              <p className="haven-kicker">Vault balance</p>
 
               <p className="mt-2 text-4xl font-semibold tracking-tight text-foreground">
                 {balancePending ? "…" : balanceDisplay}
@@ -499,47 +647,46 @@ export default function PlusSavingsAccountPage() {
               ) : null}
             </div>
 
-            <span className="haven-pill">
-              <span className="h-2 w-2 rounded-full bg-primary" />
-              Active
-            </span>
+            <span className="haven-pill">{apyText}</span>
           </div>
 
-          {/* Actions (wire to your Deposit/Withdraw drawers later) */}
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            <button type="button" className="haven-btn-primary text-[#0b3204]">
+          {/* Actions */}
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={openDeposit}
+              className="haven-btn-primary text-[#0b3204]"
+            >
               Deposit
             </button>
-            <button type="button" className="haven-btn-primary text-[#0b3204]">
+            <button
+              type="button"
+              onClick={openWithdraw}
+              disabled={balancePending || balUsd <= 0}
+              className="haven-btn-primary text-[#0b3204] disabled:opacity-60"
+            >
               Withdraw
             </button>
           </div>
+
+          {/* Small disclosure row */}
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <p className="text-[8px] text-muted-foreground">
+              APY is variable and can change. Yield is generated by
+              lending/borrow markets and carries smart contract and market risk.
+            </p>
+          </div>
         </div>
 
-        {/* Activity */}
+        {/* Transactions */}
         <div className="haven-card p-4 sm:p-6">
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
-              <p className="haven-kicker">Recent activity</p>
+              <p className="haven-kicker">Transactions</p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Only vault-related transactions (Helius filtered)
+                Vault-related transactions (Helius filtered)
               </p>
             </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                void refreshNow();
-                setTxs([]);
-                setNextBefore(null);
-                setExhausted(false);
-                void fetchTxsPage(true);
-              }}
-              className="haven-icon-btn"
-              aria-label="Refresh"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </button>
           </div>
 
           <div className="mt-3">
@@ -548,26 +695,23 @@ export default function PlusSavingsAccountPage() {
             ) : txError ? (
               <p className="text-sm text-muted-foreground">{txError}</p>
             ) : activity.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No Plus activity yet.
-              </p>
+              <div className="rounded-2xl border border-border bg-background/40 p-4">
+                <p className="text-sm text-muted-foreground">
+                  No Plus transactions yet.
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Your deposits and withdrawals will show here once you use the
+                  vault.
+                </p>
+              </div>
             ) : (
               <div className="space-y-2">
                 {activity.map((tx) => {
                   const title = tx._title;
                   const subtitle = tx._subtitle;
                   const direction = tx._direction;
-                  const amountUsdc = Number(tx._amountUsdc || 0);
 
-                  const icon =
-                    direction === "in" ? (
-                      <ArrowDownLeft className="h-4 w-4 text-foreground/80" />
-                    ) : direction === "out" ? (
-                      <ArrowUpRight className="h-4 w-4 text-foreground/80" />
-                    ) : (
-                      <PiggyBank className="h-4 w-4 text-foreground/80" />
-                    );
-
+                  const amountUsdc = safeNum(tx._amountUsdc, 0);
                   const amountDisplay =
                     amountUsdc > 0 ? amountUsdc * fxRate : 0;
 
@@ -583,6 +727,21 @@ export default function PlusSavingsAccountPage() {
                             )
                       : "—";
 
+                  const icon =
+                    direction === "in" ? (
+                      <ArrowDownLeft className="h-4 w-4 text-foreground/80" />
+                    ) : direction === "out" ? (
+                      <ArrowUpRight className="h-4 w-4 text-foreground/80" />
+                    ) : (
+                      <PiggyBank className="h-4 w-4 text-foreground/80" />
+                    );
+
+                  const chip =
+                    direction === "in"
+                      ? "Withdraw"
+                      : direction === "out"
+                        ? "Deposit"
+                        : "Vault";
 
                   return (
                     <div
@@ -590,23 +749,34 @@ export default function PlusSavingsAccountPage() {
                       className="haven-row hover:bg-accent transition flex items-start gap-3"
                     >
                       <div className="pt-0.5 shrink-0">
-                        <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
+                        <span className="h-8 w-8 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center">
                           {icon}
                         </span>
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-foreground truncate">
-                          {title}
-                        </p>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate">
+                            {title}
+                          </p>
+                          <span className="haven-pill text-[10px] py-1 px-2">
+                            {chip}
+                          </span>
+                        </div>
 
                         <p className="mt-0.5 text-xs text-muted-foreground truncate">
                           {subtitle}
                         </p>
 
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {formatDayTime(tx.timestamp)}
-                        </p>
+                        <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{formatDayTime(tx.timestamp)}</span>
+                          <span className="opacity-50">•</span>
+                          <span className="font-mono">
+                            {tx.signature
+                              ? `${tx.signature.slice(0, 6)}…${tx.signature.slice(-6)}`
+                              : "—"}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="text-right shrink-0 pl-2">
@@ -616,14 +786,13 @@ export default function PlusSavingsAccountPage() {
 
                         {tx.signature ? (
                           <a
-                            href={`https://orbmarkets.io/tx/${encodeURIComponent(
-                              tx.signature,
-                            )}`}
+                            href={`https://orbmarkets.io/tx/${encodeURIComponent(tx.signature)}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="mt-1 inline-flex items-center justify-end text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                            className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
                           >
-                            View
+                            View{" "}
+                            <ExternalLink className="h-3.5 w-3.5 opacity-60" />
                           </a>
                         ) : null}
                       </div>
@@ -636,11 +805,17 @@ export default function PlusSavingsAccountPage() {
             {hasMore && activity.length > 0 && (
               <button
                 type="button"
-                onClick={() => fetchTxsPage(false)}
+                onClick={() => void fetchTxsPage(false)}
                 disabled={txLoading}
                 className="haven-btn-primary w-full mt-3 text-[#0b3204] disabled:opacity-60"
               >
-                {txLoading ? "Loading…" : "Load more"}
+                {txLoading ? (
+                  "Loading…"
+                ) : (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    Load more <ChevronDown className="h-4 w-4" />
+                  </span>
+                )}
               </button>
             )}
 
@@ -651,7 +826,6 @@ export default function PlusSavingsAccountPage() {
             )}
           </div>
 
-          {/* helpful dev hint if USDC mint missing */}
           {!USDC_MINT ? (
             <p className="mt-3 text-[11px] text-amber-300/90">
               Missing NEXT_PUBLIC_USDC_MINT — amounts may not parse correctly.
@@ -659,6 +833,21 @@ export default function PlusSavingsAccountPage() {
           ) : null}
         </div>
       </div>
+
+      {/* ✅ RENDER MODALS OUTSIDE CARD LAYOUT (still within page) */}
+      <DepositPlus
+        open={modalOpen && modalMode === "deposit"}
+        onOpenChange={onModalChange}
+        hasAccount={true}
+        prefetch={depositPrefetch}
+        skipRefreshOnOpen
+      />
+
+      <WithdrawPlus
+        open={modalOpen && modalMode === "withdraw"}
+        onOpenChange={onModalChange}
+        availableBalance={balUsd}
+      />
     </div>
   );
 }
