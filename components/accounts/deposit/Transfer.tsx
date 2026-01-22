@@ -1,26 +1,40 @@
-// components/accounts/deposit/Transfer.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+// components/accounts/deposit/Transfer.tsx
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import { createPortal } from "react-dom";
-import { Mail, User as UserIcon, X } from "lucide-react";
-
-import { useSponsoredUsdcTransfer } from "@/hooks/useSponsoredUsdcTransfer";
+import Image from "next/image";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Copy,
+  ExternalLink,
+  Globe,
+  Loader2,
+  Mail,
+  Plus,
+  Search,
+  Shield,
+  Sparkles,
+  Users,
+  Wallet,
+  X,
+} from "lucide-react";
+import { useSponsoredExternalTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 import { useBalance } from "@/providers/BalanceProvider";
 
 type TransferProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-
-  /** Sender’s Haven wallet */
   walletAddress: string;
-
-  /**
-   * Balance in the user's display currency for THIS account/lane
-   * (e.g. 1500 CAD, 800 EUR, etc).
-   */
   balanceUsd: number;
-
   onSuccess?: () => void | Promise<void>;
 };
 
@@ -33,18 +47,37 @@ type Contact = {
   profileImageUrl?: string;
 };
 
-type ResolveState = "idle" | "checking" | "resolved" | "not_found" | "error";
+type RecipientType = "contact" | "wallet";
+type Step = "recipient" | "amount" | "confirm";
 
 type ResolvedRecipient = {
-  email: string;
-  walletAddress: string;
+  type: RecipientType;
+  email?: string;
   name?: string;
-  status?: string;
   profileImageUrl?: string;
+  inputValue: string;
+  resolvedAddress: string;
+  isDomain?: boolean;
 };
 
-const isEmail = (s: string) => /\S+@\S+\.\S+/.test(s.trim().toLowerCase());
-const sanitizeAmountInput = (s: string) => s.replace(/[^\d.]/g, "");
+const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+const isSolDomain = (s: string) => /^[a-zA-Z0-9_-]+\.sol$/i.test(s.trim());
+const isValidAddress = (s: string) => {
+  try {
+    return (
+      s.trim().length >= 32 &&
+      s.trim().length <= 44 &&
+      /^[1-9A-HJ-NP-Za-km-z]+$/.test(s.trim())
+    );
+  } catch {
+    return false;
+  }
+};
+
+const truncateAddress = (addr: string, chars = 4) => {
+  if (!addr || addr.length < chars * 2 + 3) return addr;
+  return `${addr.slice(0, chars)}...${addr.slice(-chars)}`;
+};
 
 const getInitials = (nameOrEmail?: string | null) => {
   if (!nameOrEmail) return "";
@@ -53,11 +86,30 @@ const getInitials = (nameOrEmail?: string | null) => {
   const parts = base.includes("@")
     ? base.split("@")[0].split(/[.\s_-]+/)
     : base.split(/\s+/);
-
-  const first = parts[0]?.[0] ?? "";
-  const second = parts[1]?.[0] ?? "";
-  return (first + second).toUpperCase() || first.toUpperCase();
+  return (
+    ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() ||
+    (parts[0]?.[0] ?? "").toUpperCase()
+  );
 };
+
+const formatCurrency = (n: number, currency: string) => {
+  if (!Number.isFinite(n)) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${currency}`;
+  }
+};
+
+function safeSolscanTxUrl(sig?: string | null) {
+  if (!sig) return null;
+  return `https://solscan.io/tx/${encodeURIComponent(sig)}`;
+}
 
 export default function Transfer({
   open,
@@ -67,190 +119,129 @@ export default function Transfer({
   onSuccess,
 }: TransferProps) {
   const { refresh: refreshBalances, displayCurrency, fxRate } = useBalance();
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const normalizedDisplayCurrency =
+  const currency =
     displayCurrency === "USDC" || !displayCurrency
       ? "USD"
       : displayCurrency.toUpperCase();
 
-  // USD → display currency rate (fallback 1)
   const effectiveFx = fxRate > 0 ? fxRate : 1;
 
-  /**
-   * laneBalanceDisplay:
-   * - already in display currency for THIS account/lane
-   * - drives UI + "has enough" checks
-   */
+  // NOTE: keeping your original behavior as-is:
+  // laneBalanceDisplay is whatever you pass in already (not FX converted here)
   const laneBalanceDisplay = balanceUsd || 0;
 
-  const formatDisplayAmount = (n: number | null | undefined) => {
-    if (n == null || !Number.isFinite(n)) return "—";
-    try {
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: normalizedDisplayCurrency,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(n);
-    } catch {
-      return `${n.toFixed(2)} ${normalizedDisplayCurrency}`;
-    }
-  };
-
-  // Portal mount guard (prevents hydration mismatch)
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  /* ───────────────── Step state ───────────────── */
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<Step>("recipient");
+  const [recipientType, setRecipientType] = useState<RecipientType>("contact");
+  const [resolvedRecipient, setResolvedRecipient] =
+    useState<ResolvedRecipient | null>(null);
+  const [amountInput, setAmountInput] = useState("");
 
-  /* ───────────────── Contacts ───────────────── */
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
-  const [contactsError, setContactsError] = useState<string | null>(null);
-  const [showAllContacts, setShowAllContacts] = useState(false);
+  const [contactSearch, setContactSearch] = useState("");
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
 
+  const [emailInput, setEmailInput] = useState("");
+  const [emailResolving, setEmailResolving] = useState(false);
+  const [emailResolved, setEmailResolved] = useState<{
+    walletAddress: string;
+    name?: string;
+    profileImageUrl?: string;
+  } | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  const [addingContact, setAddingContact] = useState(false);
+  const [addContactError, setAddContactError] = useState<string | null>(null);
+  const [addContactSuccess, setAddContactSuccess] = useState(false);
+
+  const [walletInput, setWalletInput] = useState("");
+  const [walletResolved, setWalletResolved] = useState<{
+    address: string;
+    isDomain: boolean;
+    domain?: string;
+  } | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+
+  const {
+    send,
+    validateAndResolve,
+    loading: sending,
+    resolving: walletResolving,
+    error: sendError,
+    feeUsdc,
+    clearError,
+  } = useSponsoredExternalTransfer();
+
+  const effectiveFeeUsdc = feeUsdc ?? 1.5;
+
+  const amountDisplay = useMemo(() => {
+    const n = Number(amountInput);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [amountInput]);
+
+  const amountUsdc = useMemo(
+    () => (amountDisplay <= 0 ? 0 : amountDisplay / effectiveFx),
+    [amountDisplay, effectiveFx],
+  );
+
+  const totalDebitedUsdc = amountUsdc + effectiveFeeUsdc;
+  const totalDebitedDisplay = totalDebitedUsdc * effectiveFx;
+  const feeDisplay = effectiveFeeUsdc * effectiveFx;
+
+  const hasEnoughBalance =
+    amountDisplay > 0 && totalDebitedDisplay <= laneBalanceDisplay + 0.001;
+
+  // Load contacts
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-
     (async () => {
       setContactsLoading(true);
-      setContactsError(null);
       try {
         const res = await fetch("/api/user/contacts", {
           method: "GET",
           credentials: "include",
           cache: "no-store",
         });
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(text || `Failed to load contacts (${res.status})`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) setContacts(data.contacts || []);
         }
-        const data = (await res.json()) as { contacts: Contact[] };
-        if (!cancelled) setContacts(data.contacts || []);
       } catch (e) {
-        if (!cancelled) {
-          console.error("[Deposit Transfer] failed to load contacts:", e);
-          setContactsError("Couldn’t load contacts");
-        }
+        console.error("[Transfer] Failed to load contacts:", e);
       } finally {
         if (!cancelled) setContactsLoading(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
   }, [open]);
 
-  const visibleContacts = useMemo(() => {
-    if (showAllContacts) return contacts;
-    return contacts.slice(0, 3);
-  }, [contacts, showAllContacts]);
+  const filteredContacts = useMemo(() => {
+    if (!contactSearch.trim()) return contacts;
+    const q = contactSearch.toLowerCase();
+    return contacts.filter(
+      (c) =>
+        c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q),
+    );
+  }, [contacts, contactSearch]);
 
-  const hasMoreContacts = contacts.length > 3;
-
-  const handlePickContact = (c: Contact) => {
-    if (c.email) setRecipientInput(c.email);
-  };
-
-  /* ───────────────── Recipient resolve ───────────────── */
-  const [recipientInput, setRecipientInput] = useState("");
-  const [resolveState, setResolveState] = useState<ResolveState>("idle");
-  const [resolveError, setResolveError] = useState<string | null>(null);
-  const [resolvedRecipient, setResolvedRecipient] =
-    useState<ResolvedRecipient | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    // whenever recipient changes, reset to step 1
-    setStep(1);
-    setResolvedRecipient(null);
-    setResolveError(null);
-    setResolveState("idle");
-
-    const email = recipientInput.trim().toLowerCase();
-    if (!isEmail(email)) return;
-
-    let cancelled = false;
-    const timeout = window.setTimeout(async () => {
-      setResolveState("checking");
-      try {
-        const url = `/api/user/contacts/resolve?email=${encodeURIComponent(
-          email
-        )}`;
-
-        const res = await fetch(url, {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-        });
-
-        if (cancelled) return;
-
-        if (res.status === 404) {
-          setResolveState("not_found");
-          setResolvedRecipient(null);
-          return;
-        }
-
-        const data: {
-          walletAddress?: string;
-          name?: string;
-          status?: string;
-          profileImageUrl?: string;
-          error?: string;
-        } | null = await res.json().catch(() => null);
-
-        if (!res.ok || !data?.walletAddress) {
-          setResolveState("error");
-          setResolveError(
-            typeof data?.error === "string"
-              ? data.error
-              : "Could not resolve recipient"
-          );
-          return;
-        }
-
-        setResolvedRecipient({
-          email,
-          walletAddress: data.walletAddress,
-          name: data.name,
-          status: data.status,
-          profileImageUrl: data.profileImageUrl,
-        });
-
-        setResolveState("resolved");
-      } catch (e) {
-        if (!cancelled) {
-          console.error("[Deposit Transfer] resolve failed:", e);
-          setResolveState("error");
-          setResolveError("Lookup failed. Try again.");
-        }
-      }
-    }, 450);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
-  }, [open, recipientInput]);
-
-  /* ───────────────── Quick add contact ───────────────── */
-  const [addingContact, setAddingContact] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-
+  // Add contact handler
   const handleAddContact = async () => {
-    const email = recipientInput.trim().toLowerCase();
+    const email = emailInput.trim().toLowerCase();
     if (!isEmail(email)) {
-      setAddError("Enter a valid email first.");
+      setAddContactError("Enter a valid email first.");
       return;
     }
-    setAddError(null);
+    setAddContactError(null);
+    setAddContactSuccess(false);
     setAddingContact(true);
-
     try {
       const res = await fetch("/api/user/contacts", {
         method: "POST",
@@ -258,61 +249,224 @@ export default function Transfer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-
-      const data: { contacts?: Contact[]; error?: string } | null = await res
-        .json()
-        .catch(() => null);
-
-      if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok)
         throw new Error(
           typeof data?.error === "string"
             ? data.error
-            : `Failed to save contact (${res.status})`
+            : `Failed to save contact (${res.status})`,
         );
-      }
-
       if (Array.isArray(data?.contacts)) setContacts(data.contacts);
+      setAddContactSuccess(true);
+      setTimeout(() => setAddContactSuccess(false), 2000);
     } catch (e) {
-      console.error("[Deposit Transfer] add contact failed:", e);
-      setAddError(
-        e instanceof Error ? e.message : "Could not save contact right now."
+      console.error("[Transfer] Add contact failed:", e);
+      setAddContactError(
+        e instanceof Error ? e.message : "Could not save contact right now.",
       );
     } finally {
       setAddingContact(false);
     }
   };
 
-  /* ───────────────── Amount + fee (UI in display, backend in USDC) ───────────────── */
-  const [amountInput, setAmountInput] = useState(""); // display currency
+  // Email resolution
+  useEffect(() => {
+    if (recipientType !== "contact" || !emailInput.trim()) {
+      setEmailResolved(null);
+      setEmailError(null);
+      return;
+    }
+    if (!isEmail(emailInput)) {
+      setEmailResolved(null);
+      setEmailError(null);
+      return;
+    }
+    const email = emailInput.trim().toLowerCase();
+    let cancelled = false;
+    const timeout = setTimeout(async () => {
+      setEmailResolving(true);
+      setEmailError(null);
+      try {
+        const res = await fetch(
+          `/api/user/contacts/resolve?email=${encodeURIComponent(email)}`,
+          { method: "GET", credentials: "include", cache: "no-store" },
+        );
+        if (cancelled) return;
+        if (res.status === 404) {
+          setEmailError("No Haven account found for this email");
+          setEmailResolved(null);
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok || !data?.walletAddress) {
+          setEmailError(data?.error || "Could not resolve recipient");
+          setEmailResolved(null);
+          return;
+        }
+        setEmailResolved({
+          walletAddress: data.walletAddress,
+          name: data.name,
+          profileImageUrl: data.profileImageUrl,
+        });
+        setEmailError(null);
+      } catch {
+        if (!cancelled) {
+          setEmailError("Lookup failed. Please try again.");
+          setEmailResolved(null);
+        }
+      } finally {
+        if (!cancelled) setEmailResolving(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [emailInput, recipientType]);
 
-  const amountDisplay = useMemo(() => {
-    const n = Number(amountInput);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }, [amountInput]);
+  // Wallet/domain resolution
+  useEffect(() => {
+    if (recipientType !== "wallet" || !walletInput.trim()) {
+      setWalletResolved(null);
+      setWalletError(null);
+      return;
+    }
+    const input = walletInput.trim();
+    if (isValidAddress(input)) {
+      setWalletResolved({ address: input, isDomain: false });
+      setWalletError(null);
+      return;
+    }
+    if (!isSolDomain(input)) {
+      setWalletResolved(null);
+      setWalletError(input.length > 5 ? "Invalid address or domain" : null);
+      return;
+    }
+    let cancelled = false;
+    const timeout = setTimeout(async () => {
+      try {
+        const result = await validateAndResolve(input);
+        if (cancelled) return;
+        if (result) {
+          setWalletResolved({
+            address: result.address,
+            isDomain: result.isDomain,
+            domain: result.domain,
+          });
+          setWalletError(null);
+        } else {
+          setWalletError("Could not resolve this domain");
+          setWalletResolved(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setWalletError("Resolution failed");
+          setWalletResolved(null);
+        }
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [walletInput, recipientType, validateAndResolve]);
 
-  // display = USD * fx => USD = display / fx => USDC ≈ USD
-  const amountUsdc = useMemo(() => {
-    if (amountDisplay <= 0) return 0;
-    const fx = effectiveFx || 1;
-    return amountDisplay / fx;
-  }, [amountDisplay, effectiveFx]);
+  const goToStep = useCallback((newStep: Step) => setStep(newStep), []);
 
-  const {
+  const canProceedFromRecipient = useMemo(() => {
+    if (recipientType === "contact") {
+      return !!(selectedContact?.walletAddress || emailResolved?.walletAddress);
+    }
+    return !!walletResolved?.address;
+  }, [recipientType, selectedContact, emailResolved, walletResolved]);
+
+  const handleContinueToAmount = useCallback(() => {
+    if (!canProceedFromRecipient) return;
+    let recipient: ResolvedRecipient;
+
+    if (recipientType === "contact") {
+      if (selectedContact?.walletAddress) {
+        recipient = {
+          type: "contact",
+          email: selectedContact.email,
+          name: selectedContact.name,
+          profileImageUrl: selectedContact.profileImageUrl,
+          inputValue: selectedContact.email || "",
+          resolvedAddress: selectedContact.walletAddress,
+        };
+      } else if (emailResolved) {
+        recipient = {
+          type: "contact",
+          email: emailInput.trim().toLowerCase(),
+          name: emailResolved.name,
+          profileImageUrl: emailResolved.profileImageUrl,
+          inputValue: emailInput.trim().toLowerCase(),
+          resolvedAddress: emailResolved.walletAddress,
+        };
+      } else return;
+    } else {
+      if (!walletResolved) return;
+      recipient = {
+        type: "wallet",
+        inputValue: walletInput.trim(),
+        resolvedAddress: walletResolved.address,
+        isDomain: walletResolved.isDomain,
+      };
+    }
+
+    setResolvedRecipient(recipient);
+    goToStep("amount");
+  }, [
+    canProceedFromRecipient,
+    recipientType,
+    selectedContact,
+    emailResolved,
+    emailInput,
+    walletResolved,
+    walletInput,
+    goToStep,
+  ]);
+
+  const handleContinueToConfirm = useCallback(() => {
+    if (!resolvedRecipient || amountDisplay <= 0 || !hasEnoughBalance) return;
+    goToStep("confirm");
+  }, [resolvedRecipient, amountDisplay, hasEnoughBalance, goToStep]);
+
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [txSuccess, setTxSuccess] = useState(false);
+
+  const handleSend = useCallback(async () => {
+    if (!resolvedRecipient || amountUsdc <= 0 || sending) return;
+    clearError();
+    setTxSignature(null);
+    setTxSuccess(false);
+    try {
+      const result = await send({
+        fromOwnerBase58: walletAddress,
+        toAddressOrDomain: resolvedRecipient.resolvedAddress,
+        amountUi: amountUsdc,
+      });
+      setTxSignature(result.signature);
+      setTxSuccess(true);
+      setTimeout(() => {
+        refreshBalances().catch(console.error);
+      }, 1500);
+      if (onSuccess) await onSuccess();
+    } catch (e) {
+      console.error("[Transfer] Send failed:", e);
+    }
+  }, [
+    resolvedRecipient,
+    amountUsdc,
+    sending,
+    walletAddress,
     send,
-    loading: sending,
-    error: sendError,
-    feeUsdc,
-  } = useSponsoredUsdcTransfer();
+    clearError,
+    refreshBalances,
+    onSuccess,
+  ]);
 
-  const effectiveFeeUsdc = feeUsdc ?? 0;
-  const totalDebitedUsdc = amountUsdc + effectiveFeeUsdc;
-  const totalDebitedDisplay = totalDebitedUsdc * effectiveFx;
-
-  const hasEnoughBalance =
-    amountDisplay > 0 && totalDebitedDisplay <= laneBalanceDisplay + 1e-9;
-
-  // keypad behavior matches TransferSPL (2 decimals for fiat)
-  const pressKey = (k: string) => {
+  const pressKey = useCallback((k: string) => {
     setAmountInput((prev) => {
       if (k === "DEL") return prev.slice(0, -1);
       if (k === "CLR") return "";
@@ -327,103 +481,38 @@ export default function Transfer({
       if (!prev && k === "0") return "0";
       return next.length > 12 ? prev : next;
     });
-  };
+  }, []);
 
-  /* ───────────────── Step gating ───────────────── */
-  const canContinueToAmount =
-    !!walletAddress &&
-    isEmail(recipientInput) &&
-    resolveState === "resolved" &&
-    !!resolvedRecipient?.walletAddress;
+  const handleSetMax = useCallback(() => {
+    const maxDisplay = Math.max(0, laneBalanceDisplay - feeDisplay - 0.01);
+    const safe = maxDisplay > 0 ? Math.floor(maxDisplay * 100) / 100 : 0;
+    setAmountInput(safe > 0 ? String(safe) : "");
+  }, [laneBalanceDisplay, feeDisplay]);
 
-  const handleContinueToAmount = () => {
-    if (!canContinueToAmount) return;
-    setStep(2);
-  };
-
-  const sendDisabled =
-    step !== 2 ||
-    sending ||
-    !walletAddress ||
-    !canContinueToAmount ||
-    amountDisplay <= 0 ||
-    !hasEnoughBalance;
-
-  /* ───────────────── Submit transfer ───────────────── */
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  const handleSend = useCallback(async () => {
-    if (sendDisabled || !resolvedRecipient?.walletAddress) return;
-
-    setSuccessMsg(null);
-
-    try {
-      const sig = await send({
-        fromOwnerBase58: walletAddress,
-        toOwnerBase58: resolvedRecipient.walletAddress,
-        amountUi: amountUsdc, // backend gets USDC
-        notify: {
-          toOwnerBase58: resolvedRecipient.walletAddress,
-          amountUi: amountUsdc,
-          message: `Transfer to ${resolvedRecipient.email}`,
-        },
-      });
-
-      const shortSig =
-        sig && sig.length > 12 ? `${sig.slice(0, 6)}…${sig.slice(-6)}` : sig;
-
-      setSuccessMsg(
-        sig ? `transfer sent. Tx: ${shortSig}` : "transfer failed."
-      );
-
-      try {
-        await new Promise((r) => setTimeout(r, 1200));
-        await refreshBalances();
-      } catch (e) {
-        console.error("[Deposit Transfer] balance refresh failed:", e);
-      }
-
-      setAmountInput("");
-      if (onSuccess) await onSuccess();
-    } catch (e) {
-      console.error("[Deposit Transfer] send failed:", e);
-    }
-  }, [
-    sendDisabled,
-    resolvedRecipient,
-    walletAddress,
-    amountUsdc,
-    send,
-    refreshBalances,
-    onSuccess,
-  ]);
-
-  const recipientLabel =
-    resolvedRecipient?.name || resolvedRecipient?.email || "";
-  const recipientInitials = useMemo(
-    () => getInitials(recipientLabel),
-    [recipientLabel]
-  );
-
-  /* ───────────────── Reset on close ───────────────── */
+  // Reset on close
   useEffect(() => {
     if (open) return;
-
-    setStep(1);
-    setRecipientInput("");
+    setStep("recipient");
+    setRecipientType("contact");
     setResolvedRecipient(null);
-    setResolveState("idle");
-    setResolveError(null);
-
     setAmountInput("");
-    setSuccessMsg(null);
+    setContacts([]);
+    setContactSearch("");
+    setSelectedContact(null);
+    setEmailInput("");
+    setEmailResolved(null);
+    setEmailError(null);
+    setWalletInput("");
+    setWalletResolved(null);
+    setWalletError(null);
+    setTxSignature(null);
+    setTxSuccess(false);
+    setAddContactError(null);
+    setAddContactSuccess(false);
+    clearError();
+  }, [open, clearError]);
 
-    setAddError(null);
-    setContactsError(null);
-    setShowAllContacts(false);
-  }, [open]);
-
-  /* ───────────────── Lock background scroll like Flex ───────────────── */
+  // Lock scroll
   useEffect(() => {
     if (!open) return;
     const prev = document.documentElement.style.overflow;
@@ -433,388 +522,776 @@ export default function Transfer({
     };
   }, [open]);
 
-  const canClose = !sending; // keep simple: don’t close while sending
-
   if (!open || !mounted) return null;
+  const canClose = !sending;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
       onClick={(e) => {
-        if (!canClose) return;
-        if (e.target === e.currentTarget) onOpenChange(false);
+        if (canClose && e.target === e.currentTarget) onOpenChange(false);
       }}
     >
       <div
-        className="w-full max-w-md haven-card p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
+        className="relative w-full sm:max-w-md haven-card overflow-hidden h-[92dvh] sm:h-auto sm:max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top bar */}
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-foreground/90">
-              Transfer USDC
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              Send USDC to a Haven user by email (gas covered).
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="haven-pill">Step {step} of 2</span>
-
-            <button
-              type="button"
-              onClick={() => (canClose ? onOpenChange(false) : undefined)}
-              disabled={!canClose}
-              className="haven-pill hover:bg-accent disabled:opacity-50"
-              aria-label="Close"
-              title={!canClose ? "Please wait…" : "Close"}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="mt-4 space-y-3 max-h-[70vh] overflow-y-auto no-scrollbar overscroll-contain">
-          {/* STEP 1 */}
-          {step === 1 && (
-            <div className="haven-card-soft px-3.5 py-3.5">
-              <div className="mb-2 text-[11px]">
-                <p className="font-medium text-foreground/90">
-                  Who are you sending to?
-                </p>
-                <p className="text-muted-foreground">
-                  Enter a Haven email (must be an existing Haven account).
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] text-muted-foreground">
-                  Recipient
-                </label>
-
-                <div className="relative">
-                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
-                  <input
-                    value={recipientInput}
-                    onChange={(e) => setRecipientInput(e.target.value)}
-                    placeholder="friend@example.com"
-                    className={[
-                      "haven-input pl-9 pr-3 py-2 text-[12px] text-foreground",
-                      resolveState === "error" || resolveState === "not_found"
-                        ? "border-destructive/40 focus-visible:ring-destructive/30"
-                        : "",
-                    ].join(" ")}
-                  />
-                </div>
-
-                <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
-                  <span className="text-muted-foreground">
-                    {resolveState === "checking" && "Looking up recipient…"}
-                    {resolveState === "resolved" &&
-                      resolvedRecipient &&
-                      `Sending to ${resolvedRecipient.name || resolvedRecipient.email}`}
-                    {resolveState === "not_found" &&
-                      "No Haven account found for this email yet."}
-                    {resolveState === "idle" &&
-                      "We’ll verify Haven accounts when you enter an email."}
-                    {resolveState === "error" &&
-                      (resolveError || "Lookup failed.")}
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={handleAddContact}
-                    disabled={addingContact || !isEmail(recipientInput)}
-                    className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-[10px] text-foreground/90 hover:bg-secondary disabled:opacity-40"
-                  >
-                    {addingContact ? "Saving…" : "Save"}
-                  </button>
-                </div>
-
-                {addError && (
-                  <p className="text-[10px] text-destructive">{addError}</p>
+        {/* Header */}
+        <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {step !== "recipient" && !txSuccess && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (step === "amount") goToStep("recipient");
+                    else if (step === "confirm") goToStep("amount");
+                  }}
+                  disabled={sending}
+                  className="haven-icon-btn !w-9 !h-9"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              )}
+              <div>
+                <h2 className="text-[15px] font-semibold text-foreground tracking-tight">
+                  {txSuccess ? "Transfer Sent" : "Send USDC"}
+                </h2>
+                {!txSuccess && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {step === "recipient" && "Choose who to send to"}
+                    {step === "amount" && "Enter amount to send"}
+                    {step === "confirm" && "Review and confirm"}
+                  </p>
                 )}
               </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => canClose && onOpenChange(false)}
+              disabled={!canClose}
+              className="haven-icon-btn !w-9 !h-9"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {!txSuccess && (
+            <div className="flex gap-1.5 mt-4">
+              {["recipient", "amount", "confirm"].map((s) => (
+                <div
+                  key={s}
+                  className={[
+                    "h-1 flex-1 rounded-full transition-all duration-300",
+                    step === s
+                      ? "bg-primary"
+                      : (s === "amount" && step === "confirm") ||
+                          (s === "recipient" && step !== "recipient")
+                        ? "bg-primary/40"
+                        : "bg-border",
+                  ].join(" ")}
+                />
+              ))}
+            </div>
+          )}
+        </div>
 
-              <div className="mt-3 flex items-center justify-between">
-                <p className="text-[11px] text-muted-foreground">Available</p>
-                <span className="haven-pill">
-                  {formatDisplayAmount(laneBalanceDisplay)}
-                </span>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          {/* STEP: Recipient */}
+          {step === "recipient" && (
+            <div className="p-5 space-y-5">
+              {/* Type Toggle */}
+              <div className="flex p-1 bg-secondary rounded-2xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientType("contact");
+                    setSelectedContact(null);
+                  }}
+                  className={[
+                    "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-medium transition-all",
+                    recipientType === "contact"
+                      ? "bg-card text-foreground shadow-fintech-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  ].join(" ")}
+                >
+                  <Users className="w-4 h-4" />
+                  Contact
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientType("wallet");
+                    setWalletInput("");
+                  }}
+                  className={[
+                    "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-medium transition-all",
+                    recipientType === "wallet"
+                      ? "bg-card text-foreground shadow-fintech-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  ].join(" ")}
+                >
+                  <Wallet className="w-4 h-4" />
+                  Wallet
+                </button>
               </div>
 
-              {/* Contacts */}
-              <div className="mt-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-[11px] text-muted-foreground">
-                    Your contacts
-                  </p>
-                  {contactsLoading && (
-                    <span className="text-[10px] text-muted-foreground">
-                      Loading…
+              {/* Contact Mode */}
+              {recipientType === "contact" && (
+                <div className="space-y-4">
+                  <div className="haven-card-soft px-4 py-4">
+                    <label className="block text-[11px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">
+                      Send to email
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
+                      <input
+                        ref={inputRef}
+                        type="email"
+                        value={emailInput}
+                        onChange={(e) => {
+                          setEmailInput(e.target.value);
+                          setSelectedContact(null);
+                          setAddContactSuccess(false);
+                        }}
+                        placeholder="friend@example.com"
+                        className={[
+                          "haven-input pl-10 text-black",
+                          emailError
+                            ? "border-destructive/50"
+                            : emailResolved
+                              ? "border-primary/50"
+                              : "",
+                        ].join(" ")}
+                      />
+                      {emailResolving && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                        </div>
+                      )}
+                      {emailResolved && !emailResolving && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                            <Check className="w-3 h-3 text-primary-foreground" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-muted-foreground flex-1">
+                        {emailResolving && "Looking up recipient…"}
+                        {emailResolved &&
+                          `Sending to ${emailResolved.name || emailInput}`}
+                        {emailError && (
+                          <span className="text-destructive">{emailError}</span>
+                        )}
+                        {!emailResolving &&
+                          !emailResolved &&
+                          !emailError &&
+                          "Enter a Haven user’s email"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleAddContact}
+                        disabled={addingContact || !isEmail(emailInput)}
+                        className="haven-pill hover:bg-accent disabled:opacity-40 gap-1"
+                      >
+                        {addingContact ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : addContactSuccess ? (
+                          <Check className="w-3 h-3 text-primary" />
+                        ) : (
+                          <Plus className="w-3 h-3" />
+                        )}
+                        {addContactSuccess ? "Saved" : "Save"}
+                      </button>
+                    </div>
+                    {addContactError && (
+                      <p className="mt-1 text-[10px] text-destructive">
+                        {addContactError}
+                      </p>
+                    )}
+                    {emailResolved && (
+                      <div className="mt-3 p-3 bg-primary/10 border border-primary/20 rounded-xl">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary text-sm font-semibold">
+                            {getInitials(emailResolved.name || emailInput)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13px] font-medium text-foreground truncate">
+                              {emailResolved.name || emailInput}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              Haven User •{" "}
+                              {truncateAddress(emailResolved.walletAddress, 6)}
+                            </p>
+                          </div>
+                          <Shield className="w-4 h-4 text-primary/60 flex-shrink-0" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {contacts.length > 0 && (
+                    <div className="haven-card-soft px-4 py-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                          Your contacts
+                        </label>
+                        {contacts.length > 4 && (
+                          <div className="relative flex-1 max-w-[140px] ml-3">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+                            <input
+                              type="text"
+                              value={contactSearch}
+                              onChange={(e) => setContactSearch(e.target.value)}
+                              placeholder="Search..."
+                              className="w-full pl-7 pr-2 py-1.5 bg-background rounded-lg text-[11px] text-black dark:text-foreground placeholder:text-muted-foreground border border-border focus:border-primary/40 outline-none"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1.5 max-h-[180px] overflow-y-auto">
+                        {contactsLoading ? (
+                          <div className="py-6 text-center">
+                            <Loader2 className="w-5 h-5 text-muted-foreground animate-spin mx-auto" />
+                          </div>
+                        ) : filteredContacts.length === 0 ? (
+                          <div className="py-6 text-center text-[12px] text-muted-foreground">
+                            {contactSearch
+                              ? "No contacts found"
+                              : "No contacts yet"}
+                          </div>
+                        ) : (
+                          filteredContacts.map((contact, idx) => {
+                            const isSelected =
+                              selectedContact?.id === contact.id ||
+                              (selectedContact?.email === contact.email &&
+                                contact.email);
+                            const hasWallet = !!contact.walletAddress;
+
+                            return (
+                              <button
+                                key={contact.id || contact.email || idx}
+                                type="button"
+                                onClick={() => {
+                                  if (!hasWallet) return;
+                                  setSelectedContact(contact);
+                                  setEmailInput(contact.email || "");
+                                  setEmailResolved(null);
+                                  setEmailError(null);
+                                }}
+                                disabled={!hasWallet}
+                                className={[
+                                  "w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                                  isSelected
+                                    ? "bg-primary/10 border border-primary/30"
+                                    : hasWallet
+                                      ? "bg-background hover:bg-accent border border-transparent"
+                                      : "bg-background border border-transparent opacity-50 cursor-not-allowed",
+                                ].join(" ")}
+                              >
+                                <div
+                                  className={[
+                                    "w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 overflow-hidden",
+                                    isSelected
+                                      ? "bg-primary/20 text-primary"
+                                      : "bg-secondary text-muted-foreground",
+                                  ].join(" ")}
+                                >
+                                  {contact.profileImageUrl ? (
+                                    <Image
+                                      src={contact.profileImageUrl}
+                                      alt={`${contact.name || contact.email || "Contact"} avatar`}
+                                      width={40}
+                                      height={40}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    getInitials(contact.name || contact.email)
+                                  )}
+                                </div>
+
+                                <div className="flex-1 min-w-0 text-left">
+                                  <p className="text-[13px] font-medium text-foreground truncate">
+                                    {contact.name || contact.email}
+                                  </p>
+                                  <p className="text-[11px] text-muted-foreground truncate">
+                                    {contact.name && contact.email
+                                      ? contact.email
+                                      : hasWallet
+                                        ? truncateAddress(
+                                            contact.walletAddress!,
+                                            6,
+                                          )
+                                        : "No wallet yet"}
+                                  </p>
+                                </div>
+
+                                {isSelected && (
+                                  <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                                    <Check className="w-3 h-3 text-primary-foreground" />
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Wallet Mode */}
+              {recipientType === "wallet" && (
+                <div className="space-y-4">
+                  <div className="haven-card-soft px-4 py-4">
+                    <label className="block text-[11px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">
+                      Wallet address or .sol domain
+                    </label>
+                    <div className="relative">
+                      <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
+                      <input
+                        type="text"
+                        value={walletInput}
+                        onChange={(e) => setWalletInput(e.target.value)}
+                        placeholder="Address or name.sol"
+                        className={[
+                          "haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground",
+                          walletError
+                            ? "border-destructive/50"
+                            : walletResolved
+                              ? "border-primary/50"
+                              : "",
+                        ].join(" ")}
+                      />
+                      {walletResolving && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                        </div>
+                      )}
+                      {walletResolved && !walletResolving && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                            <Check className="w-3 h-3 text-primary-foreground" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {walletError && (
+                      <p className="mt-2 text-[11px] text-destructive">
+                        {walletError}
+                      </p>
+                    )}
+                  </div>
+
+                  {walletResolved && (
+                    <div className="haven-card-soft px-4 py-4">
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center flex-shrink-0">
+                          <Wallet className="w-5 h-5 text-accent-foreground" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          {walletResolved.isDomain && (
+                            <p className="text-[13px] font-medium text-foreground mb-0.5">
+                              {walletInput}
+                            </p>
+                          )}
+                          <p className="text-[11px] text-muted-foreground font-mono break-all">
+                            {walletResolved.address}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-border">
+                        <div className="flex items-center gap-2 text-[11px] text-destructive/80">
+                          <Shield className="w-3.5 h-3.5" />
+                          <span>
+                            External wallet — verify address carefully
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="haven-card-soft px-4 py-3 border-primary/20 bg-primary/5">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      <strong className="text-foreground">Tip:</strong> You can
+                      send to any Solana wallet address or .sol domain. The
+                      recipient doesn&apos;t need a Haven account.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP: Amount */}
+          {step === "amount" && resolvedRecipient && (
+            <div className="p-5">
+              <div className="haven-card-soft px-4 py-3 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-sm font-semibold text-muted-foreground flex-shrink-0 overflow-hidden">
+                    {resolvedRecipient.type === "contact" ? (
+                      resolvedRecipient.profileImageUrl ? (
+                        <Image
+                          src={resolvedRecipient.profileImageUrl}
+                          alt={`${resolvedRecipient.name || resolvedRecipient.email || "Recipient"} avatar`}
+                          width={40}
+                          height={40}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        getInitials(
+                          resolvedRecipient.name || resolvedRecipient.email,
+                        )
+                      )
+                    ) : (
+                      <Wallet className="w-5 h-5" />
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-foreground truncate">
+                      {resolvedRecipient.type === "contact"
+                        ? resolvedRecipient.name || resolvedRecipient.email
+                        : resolvedRecipient.isDomain
+                          ? resolvedRecipient.inputValue
+                          : truncateAddress(
+                              resolvedRecipient.resolvedAddress,
+                              6,
+                            )}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {resolvedRecipient.type === "contact"
+                        ? "Haven User"
+                        : resolvedRecipient.isDomain
+                          ? truncateAddress(
+                              resolvedRecipient.resolvedAddress,
+                              6,
+                            )
+                          : "External Wallet"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-center py-4">
+                <div className="inline-flex items-baseline gap-2">
+                  <span className="text-[40px] sm:text-[48px] font-bold text-foreground tracking-tight tabular-nums">
+                    {amountInput || "0"}
+                  </span>
+                  <span className="text-[18px] font-medium text-muted-foreground">
+                    {currency}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex flex-col items-center gap-1 text-[11px]">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <span>
+                      Available: {formatCurrency(laneBalanceDisplay, currency)}
                     </span>
+                    <span>•</span>
+                    <button
+                      type="button"
+                      onClick={handleSetMax}
+                      className="text-primary hover:text-primary/80 font-medium"
+                    >
+                      Max
+                    </button>
+                  </div>
+
+                  {amountDisplay > 0 && (
+                    <div className="text-muted-foreground">
+                      + {formatCurrency(feeDisplay, currency)} fee ={" "}
+                      {formatCurrency(totalDebitedDisplay, currency)} total
+                    </div>
                   )}
                 </div>
 
-                {contactsError && (
-                  <p className="mt-1 text-[10px] text-destructive">
-                    {contactsError}
-                  </p>
+                {amountDisplay > 0 && !hasEnoughBalance && (
+                  <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-destructive/10 border border-destructive/20 rounded-full text-[11px] text-destructive">
+                    <span>Insufficient balance</span>
+                  </div>
                 )}
+              </div>
 
-                {contacts.length > 0 ? (
-                  <>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {visibleContacts.map((c, idx) => (
-                        <button
-                          key={c.id ?? c.email ?? idx}
-                          type="button"
-                          onClick={() => handlePickContact(c)}
-                          className="haven-pill hover:bg-accent"
-                        >
-                          {c.name || c.email || "Contact"}
-                        </button>
-                      ))}
-                    </div>
-
-                    {hasMoreContacts && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllContacts((v) => !v)}
-                        className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
-                      >
-                        {showAllContacts
-                          ? "Show fewer"
-                          : `Show all ${contacts.length} contacts`}
-                      </button>
-                    )}
-                  </>
-                ) : !contactsLoading ? (
-                  <p className="mt-2 text-[10px] text-muted-foreground">
-                    You don&apos;t have any contacts yet.
-                  </p>
-                ) : null}
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "DEL",
+                ].map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => pressKey(k)}
+                    className={[
+                      "h-14 sm:h-16 rounded-2xl text-[20px] font-semibold transition-all bg-secondary hover:bg-accent active:scale-95 border border-border",
+                      k === "DEL" ? "text-muted-foreground" : "text-foreground",
+                    ].join(" ")}
+                  >
+                    {k === "DEL" ? "⌫" : k}
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {/* STEP 2 */}
-          {step === 2 && resolvedRecipient && (
-            <div className="haven-card-soft overflow-hidden">
-              {/* Summary header */}
-              <div className="px-3.5 py-3 border-b border-border">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/60 text-[10px] font-semibold">
-                      {recipientInitials ? (
-                        recipientInitials
+          {/* STEP: Confirm */}
+          {step === "confirm" && resolvedRecipient && !txSuccess && (
+            <div className="p-5">
+              <div className="text-center py-6">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-2">
+                  You&apos;re sending
+                </p>
+                <span className="text-[44px] font-bold text-foreground tracking-tight">
+                  {formatCurrency(amountDisplay, currency)}
+                </span>
+              </div>
+
+              <div className="haven-card-soft overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+                    To
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-full bg-primary/20 flex items-center justify-center text-sm font-semibold text-primary flex-shrink-0 overflow-hidden">
+                      {resolvedRecipient.type === "contact" ? (
+                        resolvedRecipient.profileImageUrl ? (
+                          <Image
+                            src={resolvedRecipient.profileImageUrl}
+                            alt={`${resolvedRecipient.name || resolvedRecipient.email || "Recipient"} avatar`}
+                            width={44}
+                            height={44}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          getInitials(
+                            resolvedRecipient.name || resolvedRecipient.email,
+                          )
+                        )
                       ) : (
-                        <UserIcon className="h-4 w-4 text-foreground/80" />
+                        <Wallet className="w-5 h-5" />
                       )}
                     </div>
 
-                    <div>
-                      <p className="text-[10px] text-muted-foreground">
-                        Sending to
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[14px] font-medium text-foreground">
+                        {resolvedRecipient.type === "contact"
+                          ? resolvedRecipient.name || resolvedRecipient.email
+                          : resolvedRecipient.isDomain
+                            ? resolvedRecipient.inputValue
+                            : "External Wallet"}
                       </p>
-                      <p className="text-[11px] font-semibold text-primary">
-                        {recipientLabel}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        Haven recipient • {resolvedRecipient.email}
+                      <p className="text-[11px] text-muted-foreground font-mono truncate">
+                        {truncateAddress(resolvedRecipient.resolvedAddress, 8)}
                       </p>
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="haven-pill hover:bg-accent"
-                    disabled={sending}
-                  >
-                    Change
-                  </button>
                 </div>
 
-                <div className="mt-3 flex items-center justify-end">
-                  <div className="text-right text-[10px] text-muted-foreground">
-                    Available:{" "}
-                    <span className="text-foreground/90">
-                      {formatDisplayAmount(laneBalanceDisplay)}
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-muted-foreground">
+                      Amount
+                    </span>
+                    <span className="text-[13px] text-foreground font-medium">
+                      {formatCurrency(amountDisplay, currency)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-muted-foreground">
+                      Network fee
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="haven-pill haven-pill-positive !py-0.5 !px-1.5 !text-[10px]">
+                        FREE
+                      </span>
+                      <span className="text-[12px] text-muted-foreground line-through">
+                        ~$0.01
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-muted-foreground">
+                      Haven fee
+                    </span>
+                    <span className="text-[13px] text-foreground font-medium">
+                      {formatCurrency(feeDisplay, currency)}
+                    </span>
+                  </div>
+
+                  <div className="pt-3 border-t border-border flex items-center justify-between">
+                    <span className="text-[13px] text-foreground font-medium">
+                      Total
+                    </span>
+                    <span className="text-[15px] text-primary font-semibold">
+                      {formatCurrency(totalDebitedDisplay, currency)}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Amount area */}
-              <div className="px-3.5 py-3.5">
-                <div className="mb-2 flex items-center justify-between text-[11px]">
-                  <span className="text-muted-foreground">
-                    Amount ({normalizedDisplayCurrency})
-                  </span>
+              {sendError && (
+                <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-xl">
+                  <p className="text-[12px] text-destructive">{sendError}</p>
+                </div>
+              )}
+            </div>
+          )}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const maxDisplay = Math.max(
-                        0,
-                        laneBalanceDisplay - effectiveFeeUsdc * effectiveFx
-                      );
-                      const safe =
-                        maxDisplay > 0 ? Math.floor(maxDisplay * 100) / 100 : 0;
-                      setAmountInput(safe > 0 ? String(safe) : "");
-                    }}
-                    className="haven-pill haven-pill-positive hover:bg-primary/15 disabled:opacity-40 text-primary"
-                    disabled={
-                      laneBalanceDisplay <= effectiveFeeUsdc * effectiveFx
-                    }
-                  >
-                    Max
-                  </button>
+          {/* SUCCESS */}
+          {txSuccess && resolvedRecipient && (
+            <div className="p-5">
+              <div className="text-center py-8">
+                <div className="relative inline-flex mb-6">
+                  <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center">
+                    <div className="w-14 h-14 rounded-full bg-primary flex items-center justify-center glow-mint">
+                      <Check
+                        className="w-8 h-8 text-primary-foreground"
+                        strokeWidth={3}
+                      />
+                    </div>
+                  </div>
+                  <Sparkles className="absolute -top-1 -right-1 w-6 h-6 text-primary animate-pulse" />
                 </div>
 
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={amountInput}
-                  onChange={(e) => {
-                    const next = sanitizeAmountInput(e.target.value);
-                    const [, dec = ""] = next.split(".");
-                    if (dec.length > 2) return;
-                    setAmountInput(next);
-                  }}
-                  placeholder="0.00"
-                  className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
-                />
+                <h3 className="text-[20px] font-bold text-foreground mb-1">
+                  Transfer Sent!
+                </h3>
 
-                <p className="mt-2 text-[10px] text-muted-foreground">
-                  You pay (incl. fee):{" "}
-                  <span className="text-foreground/90">
-                    {formatDisplayAmount(
-                      amountDisplay > 0 ? totalDebitedDisplay : 0
-                    )}
-                  </span>
+                <p className="text-[13px] text-muted-foreground">
+                  {formatCurrency(amountDisplay, currency)} sent to{" "}
+                  {resolvedRecipient.type === "contact"
+                    ? resolvedRecipient.name || resolvedRecipient.email
+                    : resolvedRecipient.isDomain
+                      ? resolvedRecipient.inputValue
+                      : truncateAddress(resolvedRecipient.resolvedAddress, 4)}
                 </p>
+              </div>
 
-                <p className="mt-1 text-[10px] text-muted-foreground">
-                  They receive:{" "}
-                  <span className="text-foreground/90">
-                    {formatDisplayAmount(amountDisplay || 0)}
+              <div className="haven-card-soft p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                    Transaction
                   </span>
-                </p>
 
-                {amountDisplay > 0 && !hasEnoughBalance && (
-                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                    Not enough balance to cover amount + fee.
-                  </div>
-                )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (txSignature)
+                          navigator.clipboard.writeText(txSignature);
+                      }}
+                      className="haven-icon-btn !w-7 !h-7"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
 
-                {(sendError || (resolveState === "error" && resolveError)) && (
-                  <div className="mt-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                    {sendError || resolveError}
-                  </div>
-                )}
-
-                {successMsg && (
-                  <div className="mt-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2 text-[11px] text-foreground">
-                    {successMsg}
-                  </div>
-                )}
-
-                {/* Keypad */}
-                <div className="mt-3">
-                  <div className="grid grid-cols-3 gap-2 text-foreground">
-                    {[
-                      "1",
-                      "2",
-                      "3",
-                      "4",
-                      "5",
-                      "6",
-                      "7",
-                      "8",
-                      "9",
-                      ".",
-                      "0",
-                      "DEL",
-                    ].map((k) => (
-                      <button
-                        key={k}
-                        type="button"
-                        onClick={() => pressKey(k)}
-                        disabled={sending}
-                        className={[
-                          "rounded-2xl border py-3 text-base font-semibold transition",
-                          "border-border bg-background/40 hover:bg-secondary",
-                          "disabled:opacity-50 disabled:cursor-not-allowed",
-                        ].join(" ")}
+                    {safeSolscanTxUrl(txSignature) && (
+                      <a
+                        href={safeSolscanTxUrl(txSignature)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="haven-icon-btn !w-7 !h-7"
                       >
-                        {k === "DEL" ? "⌫" : k}
-                      </button>
-                    ))}
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => pressKey("CLR")}
-                    disabled={sending}
-                    className="mt-2 w-full rounded-2xl border border-border bg-background/40 py-2 text-[11px] text-muted-foreground hover:bg-secondary disabled:opacity-50"
-                  >
-                    Clear
-                  </button>
                 </div>
+
+                <p className="text-[12px] text-muted-foreground font-mono break-all">
+                  {txSignature}
+                </p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Footer (pinned like Flex style) */}
-        <div className="mt-4">
-          {step === 1 ? (
+        {/* Footer */}
+        <div className="flex-shrink-0 p-5 border-t border-border bg-card/80 backdrop-blur-sm">
+          {step === "recipient" && (
             <button
               type="button"
-              className={[
-                "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
-                canContinueToAmount
-                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
-                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
-              ].join(" ")}
-              disabled={!canContinueToAmount}
               onClick={handleContinueToAmount}
+              disabled={!canProceedFromRecipient}
+              className={[
+                "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
+                canProceedFromRecipient
+                  ? "haven-btn-primary"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
+              ].join(" ")}
             >
               Continue
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={[
-                "w-full rounded-2xl px-4 py-3 text-sm font-semibold transition border",
-                !sendDisabled
-                  ? "haven-btn-primary active:scale-[0.98] text-[#0b3204]"
-                  : "border-border bg-background/40 text-muted-foreground cursor-not-allowed",
-              ].join(" ")}
-              disabled={sendDisabled}
-              onClick={handleSend}
-            >
-              {sending ? "Sending..." : "Send"}
+              <ArrowRight className="w-4 h-4" />
             </button>
           )}
 
-          {/* Optional secondary close */}
-          <button
-            type="button"
-            disabled={!canClose}
-            onClick={() => onOpenChange(false)}
-            className="mt-3 w-full rounded-2xl border border-border bg-background/50 px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-accent transition disabled:opacity-50"
-          >
-            Cancel
-          </button>
+          {step === "amount" && (
+            <button
+              type="button"
+              onClick={handleContinueToConfirm}
+              disabled={amountDisplay <= 0 || !hasEnoughBalance}
+              className={[
+                "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
+                amountDisplay > 0 && hasEnoughBalance
+                  ? "haven-btn-primary"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
+              ].join(" ")}
+            >
+              Review Transfer
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          )}
+
+          {step === "confirm" && !txSuccess && (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={sending}
+              className="haven-btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-70"
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>
+                  <Shield className="w-4 h-4" />
+                  Confirm &amp; Send
+                </>
+              )}
+            </button>
+          )}
+
+          {txSuccess && (
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="haven-btn-secondary w-full"
+            >
+              Done
+            </button>
+          )}
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }

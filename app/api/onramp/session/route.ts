@@ -4,37 +4,36 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { requireServerUser } from "@/lib/getServerUser";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ONRAMP_SESSION_URL =
-  "https://api.cdp.coinbase.com/platform/v2/onramp/sessions";
+// Use the documented v1 token API endpoint
+// See: https://docs.cdp.coinbase.com/onramp-&-offramp/session-token-authentication
+const ONRAMP_TOKEN_URL = "https://api.developer.coinbase.com/onramp/v1/token";
 
 const API_KEY_ID = process.env.COINBASE_API_KEY_ID!;
 const API_KEY_SECRET = process.env.COINBASE_API_SECRET!;
 
-// Optional: comma-separated list of allowed web origins for browser calls
-// NEXT_PUBLIC_APP_ORIGINS="https://staging.haven.com,http://localhost:3000"
+/**
+ * Use a SERVER env var for allowed origins if possible.
+ */
 const ORIGINS = (process.env.NEXT_PUBLIC_APP_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-// CDP review envs (set in Vercel Staging/Preview)
-const REVIEW_KEY = process.env.CDP_REVIEW_KEY || "";
-const DEFAULT_REVIEW_DEST = process.env.CDP_REVIEW_DESTINATION || "";
-
 /* ───────── helpers ───────── */
 
 function corsHeaders(req: NextRequest): Record<string, string> {
   const origin = req.headers.get("origin") || "";
-  const allowOrigin = ORIGINS.includes(origin) ? origin : ORIGINS[0] || "";
+  const allowOrigin = origin && ORIGINS.includes(origin) ? origin : "";
+
   return {
     ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-      "Content-Type, Authorization, X-CDP-Review-Key",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
     "Access-Control-Allow-Credentials": "true",
     Vary: "Origin",
@@ -66,83 +65,151 @@ function isProbablySolanaAddress(addr: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]+$/.test(a);
 }
 
-function toSandboxUrl(onrampUrl: string): string {
+function isAllowedRedirectUrl(redirectUrl: string): boolean {
+  if (!redirectUrl) return false;
   try {
-    const u = new URL(onrampUrl);
-    u.host = "pay-sandbox.coinbase.com";
-    return u.toString();
+    const u = new URL(redirectUrl);
+    return ORIGINS.includes(u.origin);
   } catch {
-    return onrampUrl;
+    return false;
   }
 }
 
-function getReviewKey(req: NextRequest, url: URL): string | null {
-  // Prefer header; allow Authorization: Bearer <key>; fallback query ?key=
-  const header =
-    req.headers.get("x-cdp-review-key") ||
-    req.headers.get("X-CDP-Review-Key") ||
-    null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getUserDepositAddress(user: any): string | null {
+  const candidates: unknown[] = [
+    user?.walletAddress,
+    typeof user?.depositWallet === "string"
+      ? user.depositWallet
+      : user?.depositWallet?.address,
+    typeof user?.embeddedWallet === "string"
+      ? user.embeddedWallet
+      : user?.embeddedWallet?.address,
+  ];
 
-  const auth = req.headers.get("authorization");
-  const bearer =
-    auth && auth.toLowerCase().startsWith("bearer ")
-      ? auth.slice("bearer ".length).trim()
-      : null;
+  const found = candidates.find(
+    (v) => typeof v === "string" && v.trim().length > 0 && v !== "pending",
+  );
 
-  return header || bearer || url.searchParams.get("key");
+  return typeof found === "string" ? found.trim() : null;
 }
 
-function wantsJson(req: NextRequest): boolean {
-  const accept = req.headers.get("accept") || "";
-  return accept.includes("application/json");
+function stablePartnerRef(input: string): string {
+  return crypto.createHash("sha256").update(input).digest("hex").slice(0, 24);
 }
 
-type UserIdLike = {
-  _id?: { toString?: () => string } | string;
-  id?: { toString?: () => string } | string;
-  privyId?: string | null;
-};
+/**
+ * Extract client IP from the request.
+ * Coinbase requires this for security validation.
+ */
+function getClientIp(req: NextRequest): string | null {
+  // Vercel provides the real IP in x-real-ip header
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp && isValidPublicIp(realIp)) {
+    return realIp;
+  }
 
-function toIdString(
-  value: { toString?: () => string } | string | undefined,
-): string | undefined {
-  if (!value) return undefined;
-  if (typeof value === "string") return value;
-  if (typeof value.toString === "function") return value.toString();
-  return undefined;
+  // Fallback to x-forwarded-for (first IP in the chain)
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    const firstIp = forwardedFor.split(",")[0]?.trim();
+    if (firstIp && isValidPublicIp(firstIp)) {
+      return firstIp;
+    }
+  }
+
+  // Next.js may provide IP in the request
+  // @ts-expect-error - ip may exist on NextRequest in some environments
+  if (req.ip && isValidPublicIp(req.ip)) {
+    // @ts-expect-error - ip may exist on NextRequest in some environments
+    return req.ip;
+  }
+
+  return null;
 }
 
-interface RequestBody {
+function isValidIp(ip: string): boolean {
+  // IPv4
+  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+  // IPv6 (simplified)
+  const ipv6Regex = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+  return ipv4Regex.test(ip) || ipv6Regex.test(ip);
+}
+
+function isPrivateIp(ip: string): boolean {
+  // Check for private/reserved IP ranges
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4) return false;
+
+  // 10.0.0.0 - 10.255.255.255
+  if (parts[0] === 10) return true;
+
+  // 172.16.0.0 - 172.31.255.255
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+
+  // 192.168.0.0 - 192.168.255.255
+  if (parts[0] === 192 && parts[1] === 168) return true;
+
+  // 127.0.0.0 - 127.255.255.255 (loopback)
+  if (parts[0] === 127) return true;
+
+  // 0.0.0.0
+  if (parts.every((p) => p === 0)) return true;
+
+  return false;
+}
+
+function isValidPublicIp(ip: string): boolean {
+  if (!isValidIp(ip)) return false;
+  // For IPv4, check it's not private
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+    return !isPrivateIp(ip);
+  }
+  // For IPv6, assume it's valid (simplified)
+  return true;
+}
+
+type RequestBody = {
   destinationAddress?: string;
-  purchaseCurrency?: string; // e.g. USDC
-  destinationNetwork?: string; // solana
-  paymentCurrency?: string; // USD
-  paymentAmount?: string; // "5"
+  purchaseCurrency?: string;
+  destinationNetwork?: string;
+  paymentCurrency?: string;
+  paymentAmount?: string;
   redirectUrl?: string;
   sandbox?: boolean;
   country?: string;
   subdivision?: string;
-}
-
-type CoinbaseSessionish = { onrampUrl?: string; [k: string]: unknown };
-type CoinbaseOnrampResponse = {
-  errorMessage?: string;
-  message?: string;
-  session?: CoinbaseSessionish;
-  onrampUrl?: string;
-  url?: string;
-  data?: { session?: CoinbaseSessionish; [k: string]: unknown };
-  [k: string]: unknown;
 };
 
-function parseJsonObject(text: string): CoinbaseOnrampResponse | null {
-  try {
-    const v: unknown = JSON.parse(text);
-    if (v && typeof v === "object") return v as CoinbaseOnrampResponse;
-    return null;
-  } catch {
-    return null;
-  }
+const ALLOWED_PAYMENT_CURRENCIES = new Set([
+  "USD",
+  "EUR",
+  "GBP",
+  "CAD",
+  "AUD",
+  "JPY",
+  "CHF",
+  "SGD",
+  "BRL",
+  "MXN",
+]);
+
+// Currencies that support presetFiatAmount according to Coinbase docs
+const PRESET_FIAT_SUPPORTED = new Set(["USD", "CAD", "GBP", "EUR"]);
+
+function normalizeCurrency(s?: string) {
+  const v = (s || "").trim().toUpperCase();
+  return v || undefined;
+}
+
+function normalizeAmount(s?: string) {
+  const raw = (s || "").trim();
+  if (!raw) return undefined;
+
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 10000) return undefined;
+
+  return n.toFixed(2);
 }
 
 /* ───────── main ───────── */
@@ -152,16 +219,43 @@ export async function POST(req: NextRequest) {
     return json(req, 500, { error: "Missing Coinbase API credentials" });
   }
 
-  const url = new URL(req.url);
-
-  // Browser-origin enforcement: ONLY enforce when Origin header exists.
-  // (curl/server-to-server typically has no Origin)
+  // CORS check
   const origin = req.headers.get("origin") || "";
   if (ORIGINS.length && origin && !ORIGINS.includes(origin)) {
     return json(req, 403, { error: "Forbidden origin" });
   }
 
-  // Parse JSON body (both app + review use POST JSON)
+  // Extract client IP - required by Coinbase
+  const clientIp = getClientIp(req);
+  if (!clientIp) {
+    // In development, provide a helpful error message
+    if (process.env.NODE_ENV === "development") {
+      return json(req, 400, {
+        error:
+          "Coinbase Onramp requires a public IP address. Local development with localhost is not supported. Please test on a deployed environment or use ngrok/similar to get a public IP.",
+      });
+    }
+    return json(req, 400, { error: "Could not determine client IP" });
+  }
+
+  // Authenticate user
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let user: any;
+  try {
+    user = await requireServerUser();
+  } catch {
+    return json(req, 401, { error: "Unauthorized" });
+  }
+
+  const userDepositAddress = getUserDepositAddress(user);
+  if (!userDepositAddress) {
+    return json(req, 400, { error: "User has no linked deposit address" });
+  }
+  if (!isProbablySolanaAddress(userDepositAddress)) {
+    return json(req, 400, { error: "User deposit address is invalid" });
+  }
+
+  // Parse request body
   let body: RequestBody = {};
   try {
     body = (await req.json()) as RequestBody;
@@ -169,158 +263,165 @@ export async function POST(req: NextRequest) {
     return json(req, 400, { error: "Invalid JSON body" });
   }
 
-  // Try normal app auth first
-  let user: UserIdLike | null = null;
-  try {
-    user = (await requireServerUser()) as UserIdLike;
-  } catch {
-    user = null;
+  // Validate destination matches user's address
+  const requestedDestination = (body.destinationAddress || "").trim();
+  if (requestedDestination && requestedDestination !== userDepositAddress) {
+    return json(req, 403, { error: "Forbidden destination address" });
   }
 
-  // If no app user, allow CDP review key to authorize
-  const reviewKey = getReviewKey(req, url);
-  const isReview =
-    !user &&
-    Boolean(REVIEW_KEY) &&
-    Boolean(reviewKey) &&
-    reviewKey === REVIEW_KEY;
+  // Validate currency/network
+  const purchaseCurrency = (body.purchaseCurrency || "USDC")
+    .trim()
+    .toUpperCase();
+  const destinationNetwork = (body.destinationNetwork || "solana")
+    .trim()
+    .toLowerCase();
 
-  if (!user && !isReview) {
-    return json(req, 401, { error: "Unauthorized" });
+  if (purchaseCurrency !== "USDC") {
+    return json(req, 400, { error: "Unsupported purchaseCurrency" });
+  }
+  if (destinationNetwork !== "solana") {
+    return json(req, 400, { error: "Unsupported destinationNetwork" });
   }
 
-  // Inputs
-  const sandbox = Boolean(body.sandbox);
+  const paymentCurrency = normalizeCurrency(body.paymentCurrency) || "USD";
+  if (!ALLOWED_PAYMENT_CURRENCIES.has(paymentCurrency)) {
+    return json(req, 400, { error: "Unsupported paymentCurrency" });
+  }
 
-  // In review mode, default destination to env var and do NOT require client to pass it.
-  // In app mode, require destinationAddress in body.
-  const destinationAddress = (
-    (body.destinationAddress || "").trim() ||
-    (isReview ? DEFAULT_REVIEW_DEST : "")
-  ).trim();
+  const paymentAmount = normalizeAmount(body.paymentAmount);
+  if (body.paymentAmount && !paymentAmount) {
+    return json(req, 400, { error: "Invalid paymentAmount" });
+  }
 
-  const purchaseCurrency = (body.purchaseCurrency || "USDC").trim();
-  const destinationNetwork = (body.destinationNetwork || "solana").trim();
-  const paymentCurrency = (body.paymentCurrency || "USD").trim();
-  const paymentAmount = (body.paymentAmount || (isReview ? "5" : "")).trim();
+  // Validate redirect URL
   const redirectUrl = (body.redirectUrl || "").trim();
+  const safeRedirectUrl =
+    redirectUrl && isAllowedRedirectUrl(redirectUrl) ? redirectUrl : undefined;
 
-  const country = (body.country || "").toUpperCase() || undefined;
-  const subdivision = body.subdivision?.toUpperCase();
+  // Sandbox mode
+  const sandboxAllowed =
+    process.env.COINBASE_ONRAMP_ALLOW_SANDBOX === "true" &&
+    process.env.NODE_ENV !== "production";
+  const sandbox = sandboxAllowed ? Boolean(body.sandbox) : false;
 
-  if (!destinationAddress) {
-    return json(req, 400, { error: "Missing destinationAddress" });
-  }
+  // Partner user reference
+  const base =
+    String(user?.privyId || "") ||
+    String(user?._id || "") ||
+    String(user?.id || "") ||
+    "unknown";
+  const partnerUserRef = `user-${stablePartnerRef(base)}`;
 
-  if (
-    destinationNetwork.toLowerCase() === "solana" &&
-    !isProbablySolanaAddress(destinationAddress)
-  ) {
-    return json(req, 400, { error: "Invalid Solana address format" });
-  }
-
-  // partnerUserRef:
-  // - app: derived from authenticated user (anti-spoof)
-  // - review: fixed reviewer tag
-  const baseRef = user
-    ? toIdString(user._id) || toIdString(user.id) || user.privyId || "unknown"
-    : "cdp-review";
-
-  const partnerUserRef = isReview
-    ? sandbox
-      ? "sandbox-cdp-review"
-      : "cdp-review"
-    : sandbox
-      ? `sandbox-user-${baseRef}`
-      : `user-${baseRef}`;
-
-  const sessionPayload: Record<string, string> = {
-    destinationAddress,
-    purchaseCurrency,
-    destinationNetwork,
-    partnerUserRef,
-    paymentCurrency,
+  // Build token request payload per Coinbase v1 API docs
+  // See: https://docs.cdp.coinbase.com/onramp-&-offramp/session-token-authentication
+  const tokenPayload = {
+    addresses: [
+      {
+        address: userDepositAddress,
+        blockchains: ["solana"],
+      },
+    ],
+    assets: ["USDC"],
+    clientIp: clientIp,
   };
 
-  // Only include paymentAmount if valid positive number
-  if (paymentAmount && Number.parseFloat(paymentAmount) > 0) {
-    sessionPayload.paymentAmount = paymentAmount;
-  }
-
-  if (redirectUrl) sessionPayload.redirectUrl = redirectUrl;
-  if (country && /^[A-Z]{2}$/.test(country)) sessionPayload.country = country;
-  if (country === "US" && subdivision) sessionPayload.subdivision = subdivision;
-
   try {
+    // Generate JWT for authentication
     const jwt = await generateJwt({
       apiKeyId: API_KEY_ID,
       apiKeySecret: API_KEY_SECRET,
       requestMethod: "POST",
-      requestHost: "api.cdp.coinbase.com",
-      requestPath: "/platform/v2/onramp/sessions",
+      requestHost: "api.developer.coinbase.com",
+      requestPath: "/onramp/v1/token",
       expiresIn: 120,
     });
 
-    const response = await fetch(ONRAMP_SESSION_URL, {
+    // Request session token from Coinbase
+    const response = await fetch(ONRAMP_TOKEN_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(sessionPayload),
+      body: JSON.stringify(tokenPayload),
       cache: "no-store",
     });
 
-    const responseText = await response.text();
-    const data = parseJsonObject(responseText);
+    const text = await response.text();
+    let data: Record<string, unknown> | null = null;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      data = null;
+    }
 
-    if (!data) {
+    if (!data || typeof data !== "object") {
+      console.error("[Onramp] Invalid response:", text);
       return json(req, 502, { error: "Invalid response from Coinbase" });
     }
 
     if (!response.ok) {
+      console.error("[Onramp] Coinbase error:", response.status, data);
+      const errorMsg =
+        (typeof data.errorMessage === "string" ? data.errorMessage : null) ||
+        (typeof data.message === "string" ? data.message : null) ||
+        (typeof data.error === "string" ? data.error : null) ||
+        "Coinbase API error";
       return json(req, response.status >= 500 ? 502 : 400, {
-        error: data.errorMessage || data.message || "Coinbase API error",
-        coinbaseError: data,
+        error: errorMsg,
       });
     }
 
-    let onrampUrl: string | undefined;
-    if (data.session?.onrampUrl) onrampUrl = data.session.onrampUrl;
-    if (!onrampUrl && typeof data.onrampUrl === "string")
-      onrampUrl = data.onrampUrl;
-    if (!onrampUrl && typeof data.url === "string") onrampUrl = data.url;
-    if (!onrampUrl && data.data?.session?.onrampUrl)
-      onrampUrl = data.data.session.onrampUrl;
+    // Extract session token from response
+    // Response format: { "token": "...", "channel_id": "" } or { "data": { "token": "..." } }
+    const dataObj = data.data as Record<string, unknown> | undefined;
+    const sessionToken =
+      (typeof data.token === "string" ? data.token : null) ||
+      (typeof dataObj?.token === "string" ? dataObj.token : null);
 
-    if (!onrampUrl) {
-      return json(req, 502, { error: "No onramp URL in Coinbase response" });
+    if (!sessionToken) {
+      console.error("[Onramp] No token in response:", data);
+      return json(req, 502, { error: "No session token in Coinbase response" });
     }
 
-    const finalUrl = sandbox ? toSandboxUrl(onrampUrl) : onrampUrl;
+    // Build the onramp URL with session token and parameters
+    // Base URL: https://pay.coinbase.com/buy/select-asset?sessionToken=<token>
+    const onrampUrl = new URL("https://pay.coinbase.com/buy/select-asset");
+    onrampUrl.searchParams.set("sessionToken", sessionToken);
 
-    // In app flows you probably want JSON anyway.
-    // For review flows, returning JSON is best for curl ("Copy as cURL").
-    // If you ever want redirect, you can add ?redirect=1.
-    const redirect = url.searchParams.get("redirect") === "1";
+    // Set defaults for better UX
+    onrampUrl.searchParams.set("defaultNetwork", "solana");
+    onrampUrl.searchParams.set("defaultAsset", "USDC");
 
-    if (redirect && !wantsJson(req)) {
-      const res = NextResponse.redirect(finalUrl, { status: 302 });
-      res.headers.set("Cache-Control", "no-store");
-      return res;
+    // Add preset amount if provided (only for supported currencies)
+    if (paymentAmount && PRESET_FIAT_SUPPORTED.has(paymentCurrency)) {
+      onrampUrl.searchParams.set("presetFiatAmount", paymentAmount);
+      onrampUrl.searchParams.set("fiatCurrency", paymentCurrency);
     }
+
+    // Add partner user ref for transaction tracking
+    onrampUrl.searchParams.set("partnerUserRef", partnerUserRef);
+
+    // Add redirect URL if provided
+    if (safeRedirectUrl) {
+      onrampUrl.searchParams.set("redirectUrl", safeRedirectUrl);
+    }
+
+    const finalUrl = onrampUrl.toString();
 
     return json(req, 200, {
       onrampUrl: finalUrl,
       sandbox,
-      reviewMode: isReview,
-      destinationAddress,
-      purchaseCurrency,
-      destinationNetwork,
+      destinationAddress: userDepositAddress,
+      purchaseCurrency: "USDC",
+      destinationNetwork: "solana",
       paymentCurrency,
-      paymentAmount,
+      paymentAmount: paymentAmount || null,
+      redirectUrl: safeRedirectUrl || null,
     });
   } catch (error) {
+    console.error("[Onramp] Error:", error);
     return json(req, 500, {
       error: error instanceof Error ? error.message : "Internal server error",
     });
