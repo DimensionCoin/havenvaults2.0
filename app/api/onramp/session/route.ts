@@ -194,6 +194,9 @@ const ALLOWED_PAYMENT_CURRENCIES = new Set([
   "MXN",
 ]);
 
+// Countries that support Guest Checkout (US only as of Jan 2026)
+const GUEST_CHECKOUT_COUNTRIES = new Set(["US"]);
+
 // Currencies that support presetFiatAmount according to Coinbase docs
 const PRESET_FIAT_SUPPORTED = new Set(["USD", "CAD", "GBP", "EUR"]);
 
@@ -305,6 +308,12 @@ export async function POST(req: NextRequest) {
     process.env.NODE_ENV !== "production";
   const sandbox = sandboxAllowed ? Boolean(body.sandbox) : false;
 
+  // Get user's country for determining flow type
+  const userCountry = (body.country || user?.country || "")
+    .toUpperCase()
+    .trim();
+  const isGuestCheckoutEligible = GUEST_CHECKOUT_COUNTRIES.has(userCountry);
+
   // Partner user reference
   const base =
     String(user?.privyId || "") ||
@@ -386,8 +395,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Build the onramp URL with session token and parameters
-    // Base URL: https://pay.coinbase.com/buy/select-asset?sessionToken=<token>
-    const onrampUrl = new URL("https://pay.coinbase.com/buy/select-asset");
+    // For non-US users, use /buy/select-asset which handles Coinbase login flow better
+    // For US users with guest checkout, we can use /buy for faster flow
+    const baseUrl = isGuestCheckoutEligible
+      ? "https://pay.coinbase.com/buy"
+      : "https://pay.coinbase.com/buy/select-asset";
+
+    const onrampUrl = new URL(baseUrl);
     onrampUrl.searchParams.set("sessionToken", sessionToken);
 
     // Set defaults for better UX
@@ -398,6 +412,15 @@ export async function POST(req: NextRequest) {
     if (paymentAmount && PRESET_FIAT_SUPPORTED.has(paymentCurrency)) {
       onrampUrl.searchParams.set("presetFiatAmount", paymentAmount);
       onrampUrl.searchParams.set("fiatCurrency", paymentCurrency);
+    } else if (paymentCurrency) {
+      // Still set the fiat currency for non-preset-supported currencies
+      onrampUrl.searchParams.set("fiatCurrency", paymentCurrency);
+    }
+
+    // For non-US users, set default payment method to CARD
+    // This helps skip the payment method selection screen for users who need to log in anyway
+    if (!isGuestCheckoutEligible) {
+      onrampUrl.searchParams.set("defaultPaymentMethod", "CARD");
     }
 
     // Add partner user ref for transaction tracking
@@ -419,6 +442,9 @@ export async function POST(req: NextRequest) {
       paymentCurrency,
       paymentAmount: paymentAmount || null,
       redirectUrl: safeRedirectUrl || null,
+      // Include flow info for frontend handling
+      flowType: isGuestCheckoutEligible ? "guest" : "coinbase_login",
+      country: userCountry || null,
     });
   } catch (error) {
     console.error("[Onramp] Error:", error);

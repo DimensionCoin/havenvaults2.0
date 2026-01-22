@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Wallet,
   X,
+  Globe,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
@@ -38,6 +39,7 @@ type DepositProps = {
 
 type DepositTab = "bank" | "crypto";
 type BankStep = "amount" | "confirm";
+type FlowType = "guest" | "coinbase_login";
 
 type OnrampSessionResponse = {
   onrampUrl?: string;
@@ -46,6 +48,8 @@ type OnrampSessionResponse = {
   redirectUrl?: string;
   error?: string;
   code?: string;
+  flowType?: FlowType;
+  country?: string;
 };
 
 type OnrampSessionRequest = {
@@ -83,6 +87,9 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   BRL: "R$",
   MXN: "MX$",
 };
+
+// Countries that support Guest Checkout (US only)
+const GUEST_CHECKOUT_COUNTRIES = new Set(["US"]);
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -207,6 +214,7 @@ const Deposit: React.FC<DepositProps> = ({
   const [coinbaseLaunching, setCoinbaseLaunching] = useState(false);
   const [coinbaseError, setCoinbaseError] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [flowType, setFlowType] = useState<FlowType | null>(null);
 
   // Crypto deposit state
   const [copied, setCopied] = useState(false);
@@ -228,6 +236,15 @@ const Deposit: React.FC<DepositProps> = ({
   const symbol = CURRENCY_SYMBOLS[currency] || currency;
   const effectiveFx = fxRate > 0 ? fxRate : 1;
   const laneBalanceDisplay = balanceUsd * effectiveFx || 0;
+
+  // Determine if user is in a Guest Checkout eligible country
+  const userCountry = useMemo(() => {
+    return (user?.country || "").toUpperCase().trim();
+  }, [user?.country]);
+
+  const isGuestCheckoutEligible = useMemo(() => {
+    return GUEST_CHECKOUT_COUNTRIES.has(userCountry);
+  }, [userCountry]);
 
   // Amount parsing
   const amountDisplay = useMemo(() => {
@@ -277,6 +294,7 @@ const Deposit: React.FC<DepositProps> = ({
     setCoinbaseError(null);
     setCheckoutOpen(false);
     setCopied(false);
+    setFlowType(null);
     popupRef.current?.cleanup?.();
     popupRef.current = null;
   }, [open]);
@@ -294,6 +312,7 @@ const Deposit: React.FC<DepositProps> = ({
   const handleOnrampSuccess = useCallback(async () => {
     setCheckoutOpen(false);
     setCoinbaseLaunching(false);
+    setFlowType(null);
     if (onSuccess) await onSuccess();
     setTimeout(() => onOpenChange(false), 500);
   }, [onSuccess, onOpenChange]);
@@ -354,6 +373,11 @@ const Deposit: React.FC<DepositProps> = ({
         throw new Error("Missing Coinbase checkout URL");
       }
 
+      // Store the flow type for UI messaging
+      if (data.flowType) {
+        setFlowType(data.flowType);
+      }
+
       popupRef.current?.cleanup?.();
       popupRef.current = null;
 
@@ -368,7 +392,7 @@ const Deposit: React.FC<DepositProps> = ({
     } catch (e) {
       console.error("[Deposit] Coinbase launch failed:", e);
       setCoinbaseError(
-        e instanceof Error ? e.message : "Couldn’t open Coinbase right now.",
+        e instanceof Error ? e.message : "Couldn't open Coinbase right now.",
       );
       setCoinbaseLaunching(false);
     }
@@ -420,11 +444,22 @@ const Deposit: React.FC<DepositProps> = ({
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <div className="text-center">
               <div className="text-base font-semibold text-foreground">
-                Complete your checkout
+                {flowType === "coinbase_login"
+                  ? "Sign in to Coinbase"
+                  : "Complete your checkout"}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                Finish in the secure Coinbase window. You can close it when
-                done.
+                {flowType === "coinbase_login" ? (
+                  <>
+                    Sign in with your Coinbase account to complete the purchase.
+                    <br />
+                    <span className="text-[11px] text-muted-foreground/70">
+                      First time? Create a free account in the popup.
+                    </span>
+                  </>
+                ) : (
+                  "Finish in the secure Coinbase window. You can close it when done."
+                )}
               </div>
               <div className="mt-2 text-[12px] text-muted-foreground/70">
                 After checkout, funds may take a moment to appear depending on
@@ -437,6 +472,7 @@ const Deposit: React.FC<DepositProps> = ({
                 popupRef.current = null;
                 setCheckoutOpen(false);
                 setCoinbaseLaunching(false);
+                setFlowType(null);
               }}
               className="mt-2 haven-btn-secondary"
             >
@@ -628,16 +664,35 @@ const Deposit: React.FC<DepositProps> = ({
                 ))}
               </div>
 
-              {/* Provider info */}
-              <div className="mt-5 haven-card-soft px-4 py-3 border-primary/20 bg-primary/5">
+              {/* Provider info - different messaging for non-US users */}
+              {!isGuestCheckoutEligible && (
+                <div className="mt-5 haven-card-soft px-4 py-3 border-amber-500/20 bg-amber-500/5">
+                  <div className="flex items-start gap-3">
+                    <Globe className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      <strong className="text-foreground">
+                        Coinbase account required:
+                      </strong>{" "}
+                      You&apos;ll need to sign in with your Coinbase account to
+                      complete this deposit. Don&apos;t have one?{" "}
+                      <span className="text-foreground">
+                        Create a free account
+                      </span>{" "}
+                      during checkout.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3 haven-card-soft px-4 py-3 border-primary/20 bg-primary/5">
                 <div className="flex items-start gap-3">
                   <ShieldCheck className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     <strong className="text-foreground">
                       Secure checkout:
-                    </strong>
-                    You will complete payment via the Coinbase secure
-                    checkout. Haven never sees your card details.
+                    </strong>{" "}
+                    You will complete payment via the Coinbase secure checkout.
+                    Haven never sees your card details.
                   </p>
                 </div>
               </div>
@@ -730,18 +785,38 @@ const Deposit: React.FC<DepositProps> = ({
                   <div className="flex items-start gap-3">
                     <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
                     <div className="text-[11px] text-muted-foreground leading-relaxed">
-                      <strong className="text-foreground">
-                        Payment methods:
-                      </strong>{" "}
-                      Coinbase supports{" "}
-                      <span className="text-foreground">
-                        Visa/Mastercard debit
-                      </span>{" "}
-                      and{" "}
-                      <span className="text-foreground">
-                        existing Coinbase USDC balance
-                      </span>
-                      . Credit cards are not supported.
+                      {isGuestCheckoutEligible ? (
+                        <>
+                          <strong className="text-foreground">
+                            Payment methods:
+                          </strong>{" "}
+                          Coinbase supports{" "}
+                          <span className="text-foreground">
+                            Visa/Mastercard debit
+                          </span>
+                          , <span className="text-foreground">Apple Pay</span>,
+                          and{" "}
+                          <span className="text-foreground">
+                            existing Coinbase balance
+                          </span>
+                          . Credit cards are not supported.
+                        </>
+                      ) : (
+                        <>
+                          <strong className="text-foreground">
+                            Coinbase account required:
+                          </strong>{" "}
+                          You&apos;ll sign in with Coinbase and can use{" "}
+                          <span className="text-foreground">
+                            linked payment methods
+                          </span>{" "}
+                          or{" "}
+                          <span className="text-foreground">
+                            existing crypto balance
+                          </span>
+                          .
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -760,9 +835,10 @@ const Deposit: React.FC<DepositProps> = ({
                   <span className="text-foreground font-semibold">
                     Coinbase
                   </span>
-                  , and I will be redirected to a Coinbase-hosted checkout to
-                  complete payment. Haven does not handle card or banking
-                  details.
+                  {!isGuestCheckoutEligible && (
+                    <>, and I will need to sign in with my Coinbase account</>
+                  )}
+                  . Haven does not handle card or banking details.
                 </div>
               </label>
 
@@ -940,7 +1016,9 @@ const Deposit: React.FC<DepositProps> = ({
               ) : (
                 <>
                   <ExternalLink className="w-4 h-4" />
-                  Continue to Coinbase
+                  {isGuestCheckoutEligible
+                    ? "Continue to Coinbase"
+                    : "Sign in with Coinbase"}
                 </>
               )}
             </button>
@@ -958,7 +1036,9 @@ const Deposit: React.FC<DepositProps> = ({
 
           <div className="mt-2 text-center text-[11px] text-muted-foreground">
             {tab === "bank"
-              ? "Secure checkout via Coinbase"
+              ? isGuestCheckoutEligible
+                ? "Secure checkout via Coinbase"
+                : "Requires Coinbase account • Secure checkout"
               : "Only deposit USDC on Solana"}
           </div>
         </div>
