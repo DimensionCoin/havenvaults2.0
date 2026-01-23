@@ -437,16 +437,28 @@ export async function POST(req: NextRequest) {
     const session = data.session as { onrampUrl?: string } | undefined;
     const quote = data.quote as Record<string, unknown> | undefined;
 
-    const onrampUrl = session?.onrampUrl;
+    let onrampUrl = session?.onrampUrl;
 
     if (!onrampUrl) {
       console.error("[Onramp V2] No onrampUrl in response:", data);
       return json(req, 502, { error: "No onramp URL in Coinbase response" });
     }
 
+    // FIX: Coinbase V2 API returns /buy/input path for non-US users, but
+    // one-click-buy should use /buy path for presetFiatAmount to work.
+    // Replace /buy/input with /buy when we have a preset amount.
+    if (paymentAmount && onrampUrl.includes("/buy/input")) {
+      onrampUrl = onrampUrl.replace("/buy/input", "/buy");
+      console.log("[Onramp V2] Fixed URL path from /buy/input to /buy");
+    }
+
+    // Log the full response for debugging
+    console.log("[Onramp V2] Full response:", JSON.stringify(data, null, 2));
+    console.log("[Onramp V2] Session URL:", onrampUrl);
     console.log("[Onramp V2] Session created successfully", {
       hasQuote: !!quote,
       hasAmount: !!paymentAmount,
+      urlLength: onrampUrl.length,
     });
 
     return json(req, 200, {

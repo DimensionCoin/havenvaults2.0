@@ -102,7 +102,7 @@ function computeMovers(rows: AssetRow[]): Movers {
 
 /* ----------------------------- Page ----------------------------- */
 
-export default function StockExchange() {
+export default function StocksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -128,7 +128,6 @@ export default function StockExchange() {
       setError(null);
 
       try {
-        // 1) Fetch stock token catalog
         const tokensRes = await fetch("/api/tokens?kind=stock&pageSize=200", {
           method: "GET",
           headers: { Accept: "application/json" },
@@ -137,7 +136,7 @@ export default function StockExchange() {
         if (!tokensRes.ok) {
           const text = await tokensRes.text().catch(() => "");
           throw new Error(
-            `Failed to load stocks (${tokensRes.status}) ${text.slice(0, 200)}`
+            `Failed to load tokens (${tokensRes.status}) ${text.slice(0, 200)}`
           );
         }
 
@@ -146,7 +145,6 @@ export default function StockExchange() {
           (t) => t.kind === "stock"
         );
 
-        // 2) Fetch prices for all mints (<=100)
         const mints = tokens.map((t) => t.mint).filter(Boolean);
 
         const pricesRes = await fetch("/api/prices/jup", {
@@ -165,7 +163,6 @@ export default function StockExchange() {
         const pricesJson = (await pricesRes.json()) as JupPriceResponse;
         const byMint = pricesJson.prices ?? {};
 
-        // 3) Merge to AssetRow
         const rows = tokens.map((t) => toAssetRow(t, byMint[t.mint]));
         setAllAssets(rows);
       } catch (e) {
@@ -180,32 +177,25 @@ export default function StockExchange() {
   }, []);
 
   const categoriesForTabs = useMemo(() => {
-    // Stocks page: show stocks-ish categories (exclude crypto-only buckets)
     const allCatsSet = new Set<TokenCategory>();
     for (const a of allAssets) {
       for (const c of a.categories ?? []) {
-        // 🚫 exclude crypto buckets from stock tabs
-        if (
-          c === "DeFi" ||
-          c === "Infrastructure" ||
-          c === "LST" ||
-          c === "DePin" ||
-          c === "Meme" ||
-          c === "NFT" ||
-          c === "Privacy" ||
-          c === "Utility" ||
-          c === "Gaming"
-        )
-          continue;
-
+        if (c === "DeFi" || c === "Infrastructure") continue; // Skip crypto categories
         allCatsSet.add(c);
       }
     }
 
     const allCats = Array.from(allCatsSet);
 
-    // preferred order for stocks
-    const preferred: TokenCategory[] = ["Top MC", "Stocks", "PreMarket"];
+    const preferred: TokenCategory[] = [
+      "Top MC",
+      "Stocks",
+      "PreMarket",
+      "ETF",
+      "Commodity",
+      "Fund",
+    ];
+
     const preferredSet = new Set<TokenCategory>(preferred);
 
     const ordered: TokenCategory[] = [
@@ -222,7 +212,7 @@ export default function StockExchange() {
 
   const movers: Movers = useMemo(() => computeMovers(allAssets), [allAssets]);
 
-  // ✅ Browse list = only category + filters + sort (NOT q)
+  // ✅ Browse list = only category + filters + sort
   const filtered: AssetRow[] = useMemo(() => {
     let rows = allAssets;
 
@@ -278,19 +268,24 @@ export default function StockExchange() {
         {error ? (
           <div className="mb-6 rounded-3xl border border-destructive/25 bg-destructive/10 p-4 shadow-fintech-sm">
             <div className="text-sm font-semibold text-foreground">
-              Couldn’t load market
+              Couldn&apos;t load market
             </div>
             <div className="mt-1 text-xs text-muted-foreground">{error}</div>
             <div className="mt-3 text-xs text-muted-foreground">
               Check <span className="font-mono">JUP_API_KEY</span> and keep your
-              stock list under 100 mints.
+              token list under 100 mints.
             </div>
           </div>
         ) : null}
 
         {/* Movers */}
         <div className="mb-8">
-          <FeaturedMovers movers={movers} loading={loading} limit={5} />
+          <FeaturedMovers
+            movers={movers}
+            loading={loading}
+            limit={5}
+            onAssetClick={(a) => console.log("open asset:", a.symbol)}
+          />
         </div>
 
         {/* Browse */}
@@ -327,6 +322,7 @@ export default function StockExchange() {
           <AssetList
             assets={filtered}
             emptyLabel="No matches. Try a different category or filter."
+            onAssetClick={(a) => console.log("open asset:", a.symbol)}
           />
         )}
       </div>
