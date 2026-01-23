@@ -45,12 +45,12 @@ const PRIVY_AUTH_PK = required("PRIVY_AUTH_PRIVATE_KEY_B64");
 const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 
 const HAVEN_PUBKEY = new PublicKey(
-  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
+  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS"),
 );
 
 // ✅ Only treasury OWNER is stored in env
 const TREASURY_OWNER = new PublicKey(
-  required("NEXT_PUBLIC_APP_TREASURY_OWNER")
+  required("NEXT_PUBLIC_APP_TREASURY_OWNER"),
 );
 
 /* ───────── Token Lookup ───────── */
@@ -114,9 +114,7 @@ type SignResp =
     };
 
 /** Type guard for Privy wrapped response */
-function hasSignedTransaction(
-  x: unknown
-): x is {
+function hasSignedTransaction(x: unknown): x is {
   signedTransaction:
     | string
     | Uint8Array
@@ -146,11 +144,7 @@ type MongoDuplicateKeyError = { code?: number };
 
 /* ───────── Basic Helpers ───────── */
 
-function jsonError(
-  status: number,
-  error: string,
-  extra?: JsonErrorExtra
-) {
+function jsonError(status: number, error: string, extra?: JsonErrorExtra) {
   return NextResponse.json({ error, ...(extra || {}) }, { status });
 }
 
@@ -178,7 +172,7 @@ function toSignedBytes(resp: unknown): Uint8Array {
     typeof (payload as { serialize: unknown }).serialize === "function"
   ) {
     return new Uint8Array(
-      (payload as { serialize: () => Uint8Array }).serialize()
+      (payload as { serialize: () => Uint8Array }).serialize(),
     );
   }
 
@@ -403,7 +397,7 @@ function flattenParsedInstructions(tx: ParsedTransactionWithMeta) {
 async function fetchParsedTxWithRetry(
   conn: Connection,
   signature: string,
-  attempts = 5
+  attempts = 5,
 ): Promise<ParsedTransactionWithMeta | null> {
   for (let i = 0; i < attempts; i++) {
     const tx = await conn.getParsedTransaction(signature, {
@@ -432,7 +426,7 @@ async function deriveTreasuryAtaForMint(params: {
     params.mint,
     TREASURY_OWNER,
     true, // allowOwnerOffCurve (safe even if not needed)
-    params.tokenProgramId
+    params.tokenProgramId,
   );
 }
 
@@ -469,7 +463,7 @@ async function recordSwapFeeFromChainAsync(params: {
     if (!parsed) {
       console.warn(
         "[JUP/SEND] Fee parse skipped: tx not available yet",
-        signature.slice(0, 8)
+        signature.slice(0, 8),
       );
       return;
     }
@@ -496,7 +490,7 @@ async function recordSwapFeeFromChainAsync(params: {
 
       // Determine token program used by this instruction
       const programIdStr = String(
-        (ix as ParsedIxWithProgramId).programId || ""
+        (ix as ParsedIxWithProgramId).programId || "",
       );
       const tokenProgramId =
         programIdStr === TOKEN_2022_PROGRAM_ID.toBase58()
@@ -528,11 +522,11 @@ async function recordSwapFeeFromChainAsync(params: {
 
       if (result.ok && result.recorded) {
         console.log(
-          `[JUP/SEND] Fee recorded from chain: ${amountBase} base units (${symbol || mint.slice(0, 8)}) for ${signature.slice(0, 8)}`
+          `[JUP/SEND] Fee recorded from chain: ${amountBase} base units (${symbol || mint.slice(0, 8)}) for ${signature.slice(0, 8)}`,
         );
       } else if (result.ok && !result.recorded) {
         console.log(
-          `[JUP/SEND] Fee skipped (${result.reason}): ${signature.slice(0, 8)}`
+          `[JUP/SEND] Fee skipped (${result.reason}): ${signature.slice(0, 8)}`,
         );
       }
 
@@ -542,12 +536,12 @@ async function recordSwapFeeFromChainAsync(params: {
     console.warn(
       "[JUP/SEND] No treasury transferChecked found for fee in tx",
       signature.slice(0, 8),
-      { feeMintHint: hintMint || undefined }
+      { feeMintHint: hintMint || undefined },
     );
   } catch (err) {
     console.error(
       "[JUP/SEND] Fee recording failed:",
-      err instanceof Error ? err.message : err
+      err instanceof Error ? err.message : err,
     );
   }
 }
@@ -654,7 +648,7 @@ export async function POST(req: NextRequest) {
           {
             code: "SLIPPAGE_EXCEEDED",
             logs: logs.slice(0, 10),
-          }
+          },
         );
       }
 

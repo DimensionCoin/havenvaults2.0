@@ -46,7 +46,7 @@ const JUP_SWAP_IXS = "https://api.jup.ag/swap/v1/swap-instructions";
 const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
 
 /* ───────── Priority Fee Config ───────── */
@@ -96,7 +96,7 @@ function jsonError(
     tip?: string;
     stage?: string;
     traceId?: string;
-  }
+  },
 ) {
   console.error("[/api/jup/build]", status, payload.code, payload.error);
   return NextResponse.json(payload, { status });
@@ -104,7 +104,7 @@ function jsonError(
 
 async function getTokenProgramId(
   conn: Connection,
-  mint: PublicKey
+  mint: PublicKey,
 ): Promise<PublicKey> {
   const key = mint.toBase58();
   const cached = tokenProgramCache.get(key);
@@ -137,7 +137,7 @@ async function getDecimals(conn: Connection, mint: PublicKey): Promise<number> {
 
 async function getAltCached(
   conn: Connection,
-  key: string
+  key: string,
 ): Promise<AddressLookupTableAccount | null> {
   const now = Date.now();
   const cached = altCache.get(key);
@@ -200,8 +200,8 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
       PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS,
       Math.min(
         PRIORITY_FEE_CONFIG.MAX_MICRO_LAMPORTS,
-        Math.floor(microLamports)
-      )
+        Math.floor(microLamports),
+      ),
     );
 
     priorityFeeCache = {
@@ -235,7 +235,7 @@ async function getRecentPriorityFee(conn: Connection): Promise<number> {
 
     return Math.max(
       PRIORITY_FEE_CONFIG.MIN_MICRO_LAMPORTS,
-      Math.min(PRIORITY_FEE_CONFIG.MAX_MICRO_LAMPORTS, withBuffer)
+      Math.min(PRIORITY_FEE_CONFIG.MAX_MICRO_LAMPORTS, withBuffer),
     );
   } catch (err) {
     console.warn("[PriorityFee] getRecentPrioritizationFees failed:", err);
@@ -245,7 +245,7 @@ async function getRecentPriorityFee(conn: Connection): Promise<number> {
 
 async function getOptimalPriorityFee(
   conn: Connection,
-  accountKeys?: string[]
+  accountKeys?: string[],
 ): Promise<number> {
   if (HELIUS_API_KEY || RPC.includes("helius")) {
     return getHeliusPriorityFee(accountKeys);
@@ -336,8 +336,8 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
         ata,
         owner,
         mint,
-        tokenProgram
-      )
+        tokenProgram,
+      ),
     );
   }
 
@@ -346,21 +346,21 @@ function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
 
 function filterComputeBudgetIxs(ixs: TransactionInstruction[]) {
   const COMPUTE_BUDGET_PROGRAM = new PublicKey(
-    "ComputeBudget111111111111111111111111111111"
+    "ComputeBudget111111111111111111111111111111",
   );
   return ixs.filter((ix) => !ix.programId.equals(COMPUTE_BUDGET_PROGRAM));
 }
 
 function createComputeBudgetIxs(
   computeUnits: number,
-  microLamportsPerCu: number
+  microLamportsPerCu: number,
 ): TransactionInstruction[] {
   const totalLamports = Math.floor(
-    (computeUnits * microLamportsPerCu) / 1_000_000
+    (computeUnits * microLamportsPerCu) / 1_000_000,
   );
   const cappedLamports = Math.min(
     totalLamports,
-    PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS
+    PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS,
   );
 
   const effectiveMicroLamports =
@@ -460,21 +460,21 @@ export async function POST(req: Request) {
       inputMint,
       userOwner,
       false,
-      inputProgId
+      inputProgId,
     );
 
     const userOutputAta = getAssociatedTokenAddressSync(
       outputMint,
       userOwner,
       false,
-      outputProgId
+      outputProgId,
     );
 
     const treasuryInputAta = getAssociatedTokenAddressSync(
       inputMint,
       TREASURY_OWNER,
       false,
-      inputProgId
+      inputProgId,
     );
 
     stage = "amount";
@@ -641,7 +641,7 @@ export async function POST(req: Request) {
         treasuryInputAta,
         TREASURY_OWNER,
         inputMint,
-        inputProgId
+        inputProgId,
       );
 
     // Transfer fee from user -> treasury (user signs; fee payer pays SOL)
@@ -655,7 +655,7 @@ export async function POST(req: Request) {
             feeUnits,
             inputDecimals,
             [],
-            inputProgId
+            inputProgId,
           )
         : null;
 
@@ -669,12 +669,12 @@ export async function POST(req: Request) {
     const additionalIxCount = sponsoredAtaIxs.length + 1 + (feeIx ? 1 : 0); // treasury ATA + fee ix
     const computeUnits = Math.min(
       baseComputeUnits + additionalIxCount * 30_000,
-      1_400_000
+      1_400_000,
     );
 
     const computeBudgetIxs = createComputeBudgetIxs(
       computeUnits,
-      priorityFeeMicroLamports
+      priorityFeeMicroLamports,
     );
 
     // ✅ Final instruction order
@@ -696,7 +696,7 @@ export async function POST(req: Request) {
         payerKey: HAVEN_FEEPAYER, // ✅ Haven pays SOL
         recentBlockhash: blockhash,
         instructions: ixs,
-      }).compileToV0Message(altAccounts)
+      }).compileToV0Message(altAccounts),
     );
 
     const rawLen = tx.serialize().length;
@@ -716,17 +716,17 @@ export async function POST(req: Request) {
     const buildTime = Date.now() - startTime;
 
     const priorityFeeLamports = Math.floor(
-      (computeUnits * priorityFeeMicroLamports) / 1_000_000
+      (computeUnits * priorityFeeMicroLamports) / 1_000_000,
     );
     const cappedPriorityFeeLamports = Math.min(
       priorityFeeLamports,
-      PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS
+      PRIORITY_FEE_CONFIG.MAX_TOTAL_LAMPORTS,
     );
 
     console.log(
       `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0, 8)}→${outputMintStr.slice(0, 8)} ` +
         `gross=${amountUnits} fee=${feeUnits} net=${netUnits} ` +
-        `priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`
+        `priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`,
     );
 
     // IMPORTANT:

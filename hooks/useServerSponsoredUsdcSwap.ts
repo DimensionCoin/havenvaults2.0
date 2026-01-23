@@ -108,7 +108,7 @@ type SendResponse = {
 async function postJSON<T>(
   url: string,
   body: unknown,
-  options?: { timeout?: number }
+  options?: { timeout?: number },
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = options?.timeout ?? 15_000;
@@ -173,11 +173,11 @@ async function postJSON<T>(
 
 function pickWallet(
   wallets: ConnectedStandardSolanaWallet[],
-  address: string
+  address: string,
 ): ConnectedStandardSolanaWallet | null {
   // Prefer non-embedded (Phantom, etc) over Privy embedded
   const nonEmbedded = wallets.find(
-    (w) => w.address === address && w.standardWallet?.name !== "Privy"
+    (w) => w.address === address && w.standardWallet?.name !== "Privy",
   );
   return nonEmbedded ?? wallets.find((w) => w.address === address) ?? null;
 }
@@ -246,7 +246,7 @@ export function useServerSponsoredUsdcSwap() {
 
       return Buffer.from(signedTransaction).toString("base64");
     },
-    [wallets, signTransaction]
+    [wallets, signTransaction],
   );
 
   // ───────── Build transaction (extracted for prefetch) ─────────
@@ -273,7 +273,7 @@ export function useServerSponsoredUsdcSwap() {
         timeout: 10_000, // 10s timeout for build
       });
     },
-    []
+    [],
   );
 
   // ───────── Prefetch build (call before user confirms) ─────────
@@ -484,7 +484,7 @@ export function useServerSponsoredUsdcSwap() {
             feeMint: buildResp!.feeMint,
             feeDecimals: buildResp!.feeDecimals,
           },
-          { timeout: 30_000 } // Longer timeout for send (network latency)
+          { timeout: 30_000 }, // Longer timeout for send (network latency)
         );
 
         setSignature(sendResp.signature);
@@ -498,7 +498,7 @@ export function useServerSponsoredUsdcSwap() {
           `[UsdcSwap] ${kind} ${sendResp.signature.slice(0, 8)}... ${totalTime}ms` +
             (priorityFeeLamports
               ? ` (priority: ${priorityFeeLamports} lamports)`
-              : "")
+              : ""),
         );
 
         return {
@@ -533,7 +533,7 @@ export function useServerSponsoredUsdcSwap() {
         abortRef.current = null;
       }
     },
-    [signWithWallet, buildTransaction]
+    [signWithWallet, buildTransaction],
   );
 
   // ───────── Reset ─────────
@@ -573,6 +573,6 @@ export function useServerSponsoredUsdcSwap() {
       isDone: status === "done",
       isError: status === "error",
     }),
-    [swap, prefetch, clearPrefetch, reset, status, error, signature]
+    [swap, prefetch, clearPrefetch, reset, status, error, signature],
   );
 }

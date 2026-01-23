@@ -35,7 +35,7 @@ export async function POST(req: Request) {
 
   const slippageBps = Math.max(
     1,
-    Math.min(2000, Number(body?.slippageBps ?? 50))
+    Math.min(2000, Number(body?.slippageBps ?? 50)),
   );
 
   if (!inputMint || !outputMint || inputMint === outputMint) {
@@ -67,7 +67,7 @@ export async function POST(req: Request) {
         error: `Quote failed (HTTP ${res.status})`,
         details: text.slice(0, 400),
       },
-      { status: res.status }
+      { status: res.status },
     );
   }
 
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
   const labels = Array.isArray(json.routePlan)
     ? json.routePlan
         .map((p) =>
-          typeof p?.swapInfo?.label === "string" ? p.swapInfo.label : null
+          typeof p?.swapInfo?.label === "string" ? p.swapInfo.label : null,
         )
         .filter((lbl): lbl is string => typeof lbl === "string")
     : [];

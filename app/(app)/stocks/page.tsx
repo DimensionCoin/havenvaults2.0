@@ -65,7 +65,7 @@ function categoryLabel(c: TokenCategory): string {
 
 function toAssetRow(
   t: TokenSummary,
-  quote?: JupPriceResponse["prices"][string]
+  quote?: JupPriceResponse["prices"][string],
 ): AssetRow {
   return {
     mint: t.mint,
@@ -84,14 +84,15 @@ function toAssetRow(
 
 function computeMovers(rows: AssetRow[]): Movers {
   const withChange = rows.filter(
-    (r) => typeof r.changePct24h === "number" && Number.isFinite(r.changePct24h)
+    (r) =>
+      typeof r.changePct24h === "number" && Number.isFinite(r.changePct24h),
   );
 
   const gainers = [...withChange].sort(
-    (a, b) => (b.changePct24h ?? -Infinity) - (a.changePct24h ?? -Infinity)
+    (a, b) => (b.changePct24h ?? -Infinity) - (a.changePct24h ?? -Infinity),
   );
   const losers = [...withChange].sort(
-    (a, b) => (a.changePct24h ?? Infinity) - (b.changePct24h ?? Infinity)
+    (a, b) => (a.changePct24h ?? Infinity) - (b.changePct24h ?? Infinity),
   );
 
   return {
@@ -102,7 +103,7 @@ function computeMovers(rows: AssetRow[]): Movers {
 
 /* ----------------------------- Page ----------------------------- */
 
-export default function StocksPage() {
+export default function StockExchange() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -128,6 +129,7 @@ export default function StocksPage() {
       setError(null);
 
       try {
+        // 1) Fetch stock token catalog
         const tokensRes = await fetch("/api/tokens?kind=stock&pageSize=200", {
           method: "GET",
           headers: { Accept: "application/json" },
@@ -136,15 +138,16 @@ export default function StocksPage() {
         if (!tokensRes.ok) {
           const text = await tokensRes.text().catch(() => "");
           throw new Error(
-            `Failed to load tokens (${tokensRes.status}) ${text.slice(0, 200)}`
+            `Failed to load stocks (${tokensRes.status}) ${text.slice(0, 200)}`,
           );
         }
 
         const tokensJson = (await tokensRes.json()) as TokensApiResponse;
         const tokens = (tokensJson.tokens ?? []).filter(
-          (t) => t.kind === "stock"
+          (t) => t.kind === "stock",
         );
 
+        // 2) Fetch prices for all mints (<=100)
         const mints = tokens.map((t) => t.mint).filter(Boolean);
 
         const pricesRes = await fetch("/api/prices/jup", {
@@ -156,13 +159,14 @@ export default function StocksPage() {
         if (!pricesRes.ok) {
           const text = await pricesRes.text().catch(() => "");
           throw new Error(
-            `Failed to load prices (${pricesRes.status}) ${text.slice(0, 200)}`
+            `Failed to load prices (${pricesRes.status}) ${text.slice(0, 200)}`,
           );
         }
 
         const pricesJson = (await pricesRes.json()) as JupPriceResponse;
         const byMint = pricesJson.prices ?? {};
 
+        // 3) Merge to AssetRow
         const rows = tokens.map((t) => toAssetRow(t, byMint[t.mint]));
         setAllAssets(rows);
       } catch (e) {
@@ -177,25 +181,32 @@ export default function StocksPage() {
   }, []);
 
   const categoriesForTabs = useMemo(() => {
+    // Stocks page: show stocks-ish categories (exclude crypto-only buckets)
     const allCatsSet = new Set<TokenCategory>();
     for (const a of allAssets) {
       for (const c of a.categories ?? []) {
-        if (c === "DeFi" || c === "Infrastructure") continue; // Skip crypto categories
+        // 🚫 exclude crypto buckets from stock tabs
+        if (
+          c === "DeFi" ||
+          c === "Infrastructure" ||
+          c === "LST" ||
+          c === "DePin" ||
+          c === "Meme" ||
+          c === "NFT" ||
+          c === "Privacy" ||
+          c === "Utility" ||
+          c === "Gaming"
+        )
+          continue;
+
         allCatsSet.add(c);
       }
     }
 
     const allCats = Array.from(allCatsSet);
 
-    const preferred: TokenCategory[] = [
-      "Top MC",
-      "Stocks",
-      "PreMarket",
-      "ETF",
-      "Commodity",
-      "Fund",
-    ];
-
+    // preferred order for stocks
+    const preferred: TokenCategory[] = ["Top MC", "Stocks", "PreMarket"];
     const preferredSet = new Set<TokenCategory>(preferred);
 
     const ordered: TokenCategory[] = [
@@ -212,7 +223,7 @@ export default function StocksPage() {
 
   const movers: Movers = useMemo(() => computeMovers(allAssets), [allAssets]);
 
-  // ✅ Browse list = only category + filters + sort
+  // ✅ Browse list = only category + filters + sort (NOT q)
   const filtered: AssetRow[] = useMemo(() => {
     let rows = allAssets;
 
@@ -268,24 +279,19 @@ export default function StocksPage() {
         {error ? (
           <div className="mb-6 rounded-3xl border border-destructive/25 bg-destructive/10 p-4 shadow-fintech-sm">
             <div className="text-sm font-semibold text-foreground">
-              Couldn&apos;t load market
+              Couldn’t load market
             </div>
             <div className="mt-1 text-xs text-muted-foreground">{error}</div>
             <div className="mt-3 text-xs text-muted-foreground">
               Check <span className="font-mono">JUP_API_KEY</span> and keep your
-              token list under 100 mints.
+              stock list under 100 mints.
             </div>
           </div>
         ) : null}
 
         {/* Movers */}
         <div className="mb-8">
-          <FeaturedMovers
-            movers={movers}
-            loading={loading}
-            limit={5}
-            onAssetClick={(a) => console.log("open asset:", a.symbol)}
-          />
+          <FeaturedMovers movers={movers} loading={loading} limit={5} />
         </div>
 
         {/* Browse */}
@@ -322,7 +328,6 @@ export default function StocksPage() {
           <AssetList
             assets={filtered}
             emptyLabel="No matches. Try a different category or filter."
-            onAssetClick={(a) => console.log("open asset:", a.symbol)}
           />
         )}
       </div>

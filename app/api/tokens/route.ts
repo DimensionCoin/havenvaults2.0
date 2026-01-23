@@ -1,6 +1,4 @@
 // app/api/tokens/route.ts
-import "server-only";
-
 import { NextRequest, NextResponse } from "next/server";
 import {
   tokensForCluster,
@@ -14,8 +12,6 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ───────────────── Types ───────────────── */
-
 type TokenSummary = {
   mint: string;
   symbol: string;
@@ -23,7 +19,7 @@ type TokenSummary = {
   logoURI: string;
   kind: TokenKind;
   categories: TokenCategory[];
-  tags: string[];
+  tags?: string[];
 };
 
 type TokensApiResponse = {
@@ -35,15 +31,9 @@ type TokensApiResponse = {
     total: number;
     hasMore: boolean;
   };
-  filters: {
-    availableCategories: TokenCategory[];
-    availableTags: string[];
-    availableKinds: Array<"all" | TokenKind>;
-  };
 };
 
-/* ───────── Category ordering (stable UI buckets) ───────── */
-
+// ✅ include ALL categories so ordering is stable
 const CATEGORY_ORDER: TokenCategory[] = [
   "Top MC",
   "Stocks",
@@ -71,7 +61,6 @@ function sortTokens(tokens: TokenMeta[]): TokenMeta[] {
     const bi = biRaw === -1 ? 999 : biRaw;
 
     if (ai !== bi) return ai - bi;
-    // secondary: alphabetical by name (stable enough for UX)
     return a.name.localeCompare(b.name);
   });
 }
@@ -80,65 +69,29 @@ function isTokenKind(v: string): v is TokenKind {
   return v === "crypto" || v === "stock";
 }
 
-function normalizeLower(x: string | null): string {
-  return (x ?? "").trim().toLowerCase();
-}
-
-function clampInt(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function buildAvailableTags(tokens: TokenMeta[]): string[] {
-  const set = new Set<string>();
-  for (const t of tokens) {
-    for (const tag of t.tags ?? []) {
-      const cleaned = tag.trim();
-      if (cleaned) set.add(cleaned);
-    }
-  }
-  // stable alphabetical
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
-
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
 
-    // Query params
-    const page = clampInt(
-      Number(searchParams.get("page") ?? 1) || 1,
-      1,
-      10_000,
-    );
-    const pageSize = clampInt(
-      Number(searchParams.get("pageSize") ?? 25) || 25,
-      1,
-      200,
-    );
+    const pageRaw = searchParams.get("page") || "1";
+    const pageSizeRaw = searchParams.get("pageSize") || "25";
+    const qRaw = (searchParams.get("q") || "").trim();
+    const categoryRaw = (searchParams.get("category") || "").trim();
+    const kindRaw = (searchParams.get("kind") || "all").trim().toLowerCase();
+    const tagRaw = (searchParams.get("tag") || "").trim(); // ✅ NEW
 
-    const qRaw = (searchParams.get("q") ?? "").trim();
-    const categoryRaw = (searchParams.get("category") ?? "").trim();
-    const kindRaw = normalizeLower(searchParams.get("kind") ?? "all");
-    const tagRaw = (searchParams.get("tag") ?? "").trim();
-
+    const page = Math.max(1, Number(pageRaw) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(pageSizeRaw) || 25)); // ✅ allow bigger lists
     const cluster = getCluster();
 
-    // Base token list (sorted for stable ordering)
-    const base = sortTokens(tokensForCluster(cluster));
+    let filtered = sortTokens(tokensForCluster(cluster));
 
-    // Filter metadata (for UI chips)
-    const availableTags = buildAvailableTags(base);
-    const availableCategories = [...CATEGORY_ORDER];
-    const availableKinds: Array<"all" | TokenKind> = ["all", "crypto", "stock"];
-
-    let filtered = base;
-
-    // kind filter
+    // ✅ kind filter
     if (kindRaw !== "all" && isTokenKind(kindRaw)) {
       filtered = filtered.filter((t) => t.kind === kindRaw);
     }
 
-    // search by name/symbol/id
+    // ✅ search by name/symbol/id
     const q = qRaw.toLowerCase();
     if (q) {
       filtered = filtered.filter((t) => {
@@ -149,7 +102,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // category filter
+    // ✅ category filter
     if (categoryRaw && categoryRaw !== "all") {
       const allowed = new Set<TokenCategory>(CATEGORY_ORDER);
       if (allowed.has(categoryRaw as TokenCategory)) {
@@ -160,7 +113,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // tag filter
+    // ✅ tag filter (secondary chips)
     if (tagRaw && tagRaw !== "all") {
       const wanted = tagRaw.toLowerCase();
       filtered = filtered.filter((t) =>
@@ -168,14 +121,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // pagination
     const total = filtered.length;
     const start = (page - 1) * pageSize;
     const end = start + pageSize;
 
     const slice = filtered.slice(start, end);
 
-    // map to API payload (drop tokens missing mint on this cluster)
     const tokens: TokenSummary[] = slice
       .map((t) => {
         const mint = getMintFor(t, cluster);
@@ -202,16 +153,12 @@ export async function GET(req: NextRequest) {
         total,
         hasMore: end < total,
       },
-      filters: {
-        availableCategories,
-        availableTags,
-        availableKinds,
-      },
     };
 
+    // ✅ Cache: fast UX after first load, still safe since tokens are basically static
     return NextResponse.json(payload, {
       headers: {
-        // static-ish catalog → safe to cache
+        // cache in browser for 5 min, allow stale while revalidating for 1 hour
         "Cache-Control": "public, max-age=300, stale-while-revalidate=3600",
       },
     });
