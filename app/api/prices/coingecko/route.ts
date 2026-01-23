@@ -6,26 +6,41 @@ export const dynamic = "force-dynamic";
 
 type Body = { ids: string[] };
 
-type CoingeckoSimplePriceResponse = Record<
-  string,
-  { usd?: number; usd_24h_change?: number }
->;
+type CoinGeckoCoin = {
+  market_data?: {
+    current_price?: { usd?: number };
+    price_change_percentage_24h?: number;
+  };
+  description?: Record<string, unknown>;
+};
 
 const CG_BASE = "https://api.coingecko.com/api/v3";
+
+function pickEnDescription(desc: unknown): string | null {
+  if (!desc || typeof desc !== "object") return null;
+  const d = desc as Record<string, unknown>;
+  const en = d["en"];
+  return typeof en === "string" && en.trim().length ? en : null;
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as Body;
     const ids = Array.isArray(body?.ids) ? body.ids.filter(Boolean) : [];
 
-    if (!ids.length) {
+    // No CoinGecko id → let the page fall back to Jupiter
+    if (ids.length !== 1) {
       return NextResponse.json({ prices: {} });
     }
 
-    const url = new URL(`${CG_BASE}/simple/price`);
-    url.searchParams.set("ids", ids.join(","));
-    url.searchParams.set("vs_currencies", "usd");
-    url.searchParams.set("include_24hr_change", "true");
+    const id = ids[0];
+
+    const url = new URL(`${CG_BASE}/coins/${encodeURIComponent(id)}`);
+    url.searchParams.set("localization", "false");
+    url.searchParams.set("tickers", "false");
+    url.searchParams.set("community_data", "false");
+    url.searchParams.set("developer_data", "false");
+    url.searchParams.set("sparkline", "false");
 
     const headers: Record<string, string> = {};
     const demoKey = process.env.COINGECKO_DEMO_KEY;
@@ -38,37 +53,39 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return NextResponse.json(
-        { error: "CoinGecko request failed", status: res.status, text },
-        { status: 500 }
-      );
+      // Fail soft → page will use Jupiter
+      return NextResponse.json({ prices: {} });
     }
 
-    const json = (await res.json()) as CoingeckoSimplePriceResponse;
+    const json = (await res.json()) as CoinGeckoCoin;
 
-    const prices: Record<
-      string,
-      { priceUsd: number; priceChange24hPct: number | null }
-    > = {};
+    const priceUsd =
+      typeof json?.market_data?.current_price?.usd === "number"
+        ? json.market_data.current_price.usd
+        : null;
 
-    for (const id of ids) {
-      const entry = json?.[id];
-      const p = typeof entry?.usd === "number" ? entry.usd : null;
-      const ch =
-        typeof entry?.usd_24h_change === "number" ? entry.usd_24h_change : null;
-
-      if (p !== null) {
-        prices[id] = {
-          priceUsd: p,
-          priceChange24hPct: ch,
-        };
-      }
+    if (priceUsd === null) {
+      return NextResponse.json({ prices: {} });
     }
 
-    return NextResponse.json({ prices });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const priceChange24hPct =
+      typeof json?.market_data?.price_change_percentage_24h === "number"
+        ? json.market_data.price_change_percentage_24h
+        : null;
+
+    const description = pickEnDescription(json?.description);
+
+    return NextResponse.json({
+      prices: {
+        [id]: {
+          priceUsd,
+          priceChange24hPct,
+          description, 
+        },
+      },
+    });
+  } catch {
+    // Fail soft → page will use Jupiter
+    return NextResponse.json({ prices: {} });
   }
 }

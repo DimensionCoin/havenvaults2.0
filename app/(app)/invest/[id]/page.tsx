@@ -10,12 +10,12 @@ import React, {
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { getCluster } from "@/lib/tokenConfig";
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
 import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
 import { useServerSponsoredJLJupUSDSwap } from "@/hooks/Useserversponsoredjljupusdswap";
 import { useServerSponsoredToJLJupUSDSwap } from "@/hooks/Useserversponsoredtojljupusdswap";
+import About from "@/components/coinPage/About";
 
 import {
   // Types
@@ -38,7 +38,6 @@ import {
   clampNumber,
   safeParse,
   grossUpForFee,
-  formatPct,
   // Components
   TradeModal,
   PriceChartSection,
@@ -46,8 +45,6 @@ import {
   DepositSection,
   NotFoundView,
 } from "@/components/coinPage";
-
-const CLUSTER = getCluster();
 
 const CoinPage: React.FC = () => {
   const params = useParams<{ id: string }>();
@@ -113,6 +110,9 @@ const CoinPage: React.FC = () => {
   const [priceSource, setPriceSource] = useState<
     "coingecko" | "jupiter" | null
   >(null);
+
+  // ✅ ADDED: description for <About />
+  const [description, setDescription] = useState<string | null>(null);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [paymentAccount, setPaymentAccount] = useState<PaymentAccount>("cash");
@@ -235,6 +235,9 @@ const CoinPage: React.FC = () => {
       try {
         setPriceLoading(true);
 
+        // ✅ ADDED: clear description each run
+        setDescription(null);
+
         if (hasCoingeckoId) {
           const res = await fetch("/api/prices/coingecko", {
             method: "POST",
@@ -256,6 +259,17 @@ const CoinPage: React.FC = () => {
                   ? entry.priceChange24hPct
                   : null,
               );
+
+              // ✅ ADDED: description from CoinGecko API response (no `any`)
+              const entryWithDesc = entry as typeof entry & {
+                description?: string | null;
+              };
+              setDescription(
+                typeof entryWithDesc.description === "string"
+                  ? entryWithDesc.description
+                  : null,
+              );
+
               setPriceSource("coingecko");
               return;
             }
@@ -283,6 +297,10 @@ const CoinPage: React.FC = () => {
                   ? entry.priceChange24hPct
                   : null,
               );
+
+              // ✅ ADDED: Jupiter has no description
+              setDescription(null);
+
               setPriceSource("jupiter");
               return;
             }
@@ -292,6 +310,9 @@ const CoinPage: React.FC = () => {
         setSpotPriceUsd(null);
         setPriceChange24hPct(null);
         setPriceSource(null);
+
+        // ✅ ADDED: keep description empty if nothing worked
+        setDescription(null);
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return;
@@ -321,7 +342,9 @@ const CoinPage: React.FC = () => {
         setHistoryLoading(true);
         setHistoryError(null);
 
-        const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(coingeckoId)}&days=${encodeURIComponent(cfg.days)}`;
+        const url = `/api/prices/coingecko/historical?id=${encodeURIComponent(
+          coingeckoId,
+        )}&days=${encodeURIComponent(cfg.days)}`;
 
         const res = await fetch(url, {
           method: "GET",
@@ -852,13 +875,16 @@ const CoinPage: React.FC = () => {
               />
             </div>
 
-            {/* Deposit Section */}
-            <DepositSection
-              symbol={symbol}
-              ownerBase58={ownerBase58}
-              showDeposit={showDeposit}
-              onShowDepositChange={setShowDeposit}
-            />
+            <div className="mt-3">
+              <About name={name} symbol={symbol} description={description} />
+
+              <DepositSection
+                symbol={symbol}
+                ownerBase58={ownerBase58}
+                showDeposit={showDeposit}
+                onShowDepositChange={setShowDeposit}
+              />
+            </div>
           </div>
         </div>
       </div>
