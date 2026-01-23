@@ -254,6 +254,43 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     target: string;
   } | null>(null);
 
+  // ✅ Snapshot dedupe (minimal, non-invasive)
+  const snapshotInflightRef = useRef<Promise<void> | null>(null);
+  const lastSnapshotKeyRef = useRef<string>("");
+
+  const callBalanceSnapshot = useCallback(
+    (owner: string, combinedBaseUsd: number) => {
+      if (!owner?.trim()) return;
+      if (!Number.isFinite(combinedBaseUsd) || combinedBaseUsd < 0) return;
+
+      // Dedupe: owner + daily + cents (prevents spam on repeated refreshes)
+      const day = new Date().toISOString().slice(0, 10); // UTC day
+      const cents = Math.round(combinedBaseUsd * 100) / 100;
+      const key = `${owner}:${day}:${cents}`;
+      if (lastSnapshotKeyRef.current === key) return;
+      lastSnapshotKeyRef.current = key;
+
+      if (snapshotInflightRef.current) return;
+
+      snapshotInflightRef.current = (async () => {
+        try {
+          await fetch("/api/user/balance/snapshot", {
+            method: "POST",
+            cache: "no-store",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ owner, totalUsd: cents }),
+          });
+        } catch {
+          // snapshot must never break UI
+        } finally {
+          snapshotInflightRef.current = null;
+        }
+      })();
+    },
+    [],
+  );
+
   /* ───────── Booster computed ───────── */
 
   const boosterPositions = useMemo<BoosterStaticPosition[]>(() => {
@@ -655,6 +692,9 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               setTotalChange24hPct(combinedChangePct);
 
               setLastUpdated(Date.now());
+
+              // ✅ Only call snapshot AFTER full totals are known
+              callBalanceSnapshot(owner, combinedBaseUsd);
             } catch {
               if (ac.signal.aborted) return;
               // Do not nuke wallet state; only mark plus as resolved with an error like before
@@ -685,7 +725,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         refreshInflight.current = null;
       }
     },
-    [user, userLoading],
+    [user, userLoading, callBalanceSnapshot],
   );
 
   const refresh = useCallback(async () => {
