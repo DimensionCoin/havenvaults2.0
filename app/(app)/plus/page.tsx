@@ -16,7 +16,6 @@ import {
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 
-// ✅ ADD THESE
 import DepositPlus from "@/components/accounts/plus/Deposit";
 import WithdrawPlus from "@/components/accounts/plus/Withdraw";
 
@@ -101,7 +100,20 @@ type ApyResponse = {
   error?: string;
 };
 
+type EarningsResponse = {
+  owner?: string;
+  hasPosition?: boolean;
+
+  // ui strings from server (USD-ish underlying)
+  earningsUi?: string;
+  totalAssetsUi?: string;
+
+  decimals?: number;
+  error?: string;
+};
+
 const APY_URL = "/api/savings/plus/apy";
+const EARNINGS_URL = "/api/savings/plus/earnings";
 
 const toFxRate = (p: FxPayload | null) => {
   const r = Number(p?.rate);
@@ -135,16 +147,32 @@ const formatDayTime = (unixSeconds?: number | null) => {
   });
 };
 
-function formatCurrency(amount: number, currency: string) {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${currency} ${amount.toFixed(2)}`;
-  }
+// Compact currency:
+// - Always shows "$" prefix (not "CA$")
+// - Always 2 decimals (big balances / tx amounts)
+function formatCurrencyCompact(amount: number) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "—";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  return `${sign}$${abs.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+// Compact currency for earnings:
+// - Always "$" prefix
+// - Always 3 decimals (exactly), ex: $0.016
+function formatCurrencyCompact3(amount: number) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "—";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  return `${sign}$${abs.toLocaleString(undefined, {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  })}`;
 }
 
 function safeNum(v: unknown, fallback = 0): number {
@@ -154,6 +182,15 @@ function safeNum(v: unknown, fallback = 0): number {
     if (Number.isFinite(n)) return n;
   }
   return fallback;
+}
+
+function safeUiDecimalString(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return s;
 }
 
 /* =========================
@@ -299,7 +336,7 @@ export default function PlusSavingsAccountPage() {
 
   const walletAddress = user?.walletAddress || "";
 
-  // ✅ MODAL STATE
+  // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
 
@@ -321,6 +358,10 @@ export default function PlusSavingsAccountPage() {
   // Live APY (cached)
   const [apyPctLive, setApyPctLive] = useState<number | null>(null);
   const [apyLoading, setApyLoading] = useState(false);
+
+  // Live Earnings (UI string from server)
+  const [earningsUi, setEarningsUi] = useState<string | null>(null);
+  const [earningsLoading, setEarningsLoading] = useState(false);
 
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
@@ -540,16 +581,46 @@ export default function PlusSavingsAccountPage() {
     };
   }, []);
 
-  const hasMore = !exhausted;
+  // Earnings fetch (convert client-side using fxRate)
+  const refetchEarnings = useCallback(async () => {
+    try {
+      setEarningsLoading(true);
 
+      const res = await fetch(EARNINGS_URL, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+
+      const data = (await res.json().catch(() => ({}))) as EarningsResponse;
+
+      if (!res.ok) throw new Error(data?.error || `Earnings (${res.status})`);
+
+      const ui = safeUiDecimalString(data?.earningsUi) ?? "0";
+      setEarningsUi(ui);
+    } catch {
+      setEarningsUi(null);
+    } finally {
+      setEarningsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void refetchEarnings();
+  }, [user, refetchEarnings]);
+
+  const hasMore = !exhausted;
   const balancePending = userLoading || balanceLoading || !plusReady;
 
   const balUsd = safeNum(savingsPlusUsd, 0);
   const balUsdc = safeNum(savingsPlusAmount, 0);
 
+  // ✅ headline: compact "$", 2dp
   const balanceDisplay = useMemo(() => {
-    return formatCurrency(balUsd, (displayCurrency || "USD").toUpperCase());
-  }, [balUsd, displayCurrency]);
+    return formatCurrencyCompact(balUsd);
+  }, [balUsd]);
 
   const subBalanceLine = useMemo(() => {
     if (!balUsdc) return "Vault balance in USDC terms";
@@ -564,7 +635,18 @@ export default function PlusSavingsAccountPage() {
       ? "APY —"
       : `APY ${apyPctLive.toFixed(2)}%`;
 
-  // ✅ Deposit modal snapshot so it renders instantly
+  // ✅ earnings: compact "$", EXACTLY 3dp
+  const earningsText = useMemo(() => {
+    if (earningsLoading) return "Earnings …";
+    if (earningsUi === null) return "Earnings —";
+
+    const earningsUsd = safeNum(earningsUi, 0);
+    const converted = earningsUsd * fxRate;
+
+    return `Earnings ${formatCurrencyCompact3(converted)}`;
+  }, [earningsLoading, earningsUi, fxRate]);
+
+  // Deposit modal snapshot
   const depositPrefetch = useMemo(
     () => ({
       displayCurrency: (displayCurrency || "USD").toUpperCase(),
@@ -572,8 +654,6 @@ export default function PlusSavingsAccountPage() {
       plusReady,
       plusAmount: balUsdc,
       lastUpdated: Date.now(),
-      // If you expose wallet USDC in BalanceProvider, you can also pass:
-      // usdcBalanceDisplay: (useBalance() as any).usdcUsd ?? 0,
     }),
     [displayCurrency, fxRate, plusReady, balUsdc],
   );
@@ -614,6 +694,8 @@ export default function PlusSavingsAccountPage() {
             onClick={() => {
               void refreshNow();
               void refetchApy();
+              void refetchEarnings();
+
               setTxs([]);
               setNextBefore(null);
               setExhausted(false);
@@ -647,7 +729,11 @@ export default function PlusSavingsAccountPage() {
               ) : null}
             </div>
 
-            <span className="haven-pill">{apyText}</span>
+            {/* Stats pills */}
+            <div className="flex flex-col items-end gap-2">
+              <span className="haven-pill">{apyText}</span>
+              <span className="haven-pill">{earningsText}</span>
+            </div>
           </div>
 
           {/* Actions */}
@@ -669,7 +755,7 @@ export default function PlusSavingsAccountPage() {
             </button>
           </div>
 
-          {/* Small disclosure row */}
+          {/* Disclosure */}
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
             <p className="text-[8px] text-muted-foreground">
               APY is variable and can change. Yield is generated by
@@ -707,24 +793,20 @@ export default function PlusSavingsAccountPage() {
             ) : (
               <div className="space-y-2">
                 {activity.map((tx) => {
-                  const title = tx._title;
-                  const subtitle = tx._subtitle;
                   const direction = tx._direction;
 
                   const amountUsdc = safeNum(tx._amountUsdc, 0);
                   const amountDisplay =
                     amountUsdc > 0 ? amountUsdc * fxRate : 0;
 
+                  // ✅ compact "$", 2dp, with +/- for direction
                   const amountText =
                     amountUsdc > 0
                       ? direction === "in"
-                        ? `+${formatCurrency(amountDisplay, displayCurrency || "USD")}`
+                        ? `+${formatCurrencyCompact(amountDisplay)}`
                         : direction === "out"
-                          ? `-${formatCurrency(amountDisplay, displayCurrency || "USD")}`
-                          : formatCurrency(
-                              amountDisplay,
-                              displayCurrency || "USD",
-                            )
+                          ? `-${formatCurrencyCompact(amountDisplay)}`
+                          : formatCurrencyCompact(amountDisplay)
                       : "—";
 
                   const icon =
@@ -757,7 +839,7 @@ export default function PlusSavingsAccountPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 min-w-0">
                           <p className="text-sm font-semibold text-foreground truncate">
-                            {title}
+                            {tx._title}
                           </p>
                           <span className="haven-pill text-[10px] py-1 px-2">
                             {chip}
@@ -765,7 +847,7 @@ export default function PlusSavingsAccountPage() {
                         </div>
 
                         <p className="mt-0.5 text-xs text-muted-foreground truncate">
-                          {subtitle}
+                          {tx._subtitle}
                         </p>
 
                         <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -786,7 +868,9 @@ export default function PlusSavingsAccountPage() {
 
                         {tx.signature ? (
                           <a
-                            href={`https://orbmarkets.io/tx/${encodeURIComponent(tx.signature)}`}
+                            href={`https://orbmarkets.io/tx/${encodeURIComponent(
+                              tx.signature,
+                            )}`}
                             target="_blank"
                             rel="noreferrer"
                             className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
@@ -834,7 +918,7 @@ export default function PlusSavingsAccountPage() {
         </div>
       </div>
 
-      {/* ✅ RENDER MODALS OUTSIDE CARD LAYOUT (still within page) */}
+      {/* Modals */}
       <DepositPlus
         open={modalOpen && modalMode === "deposit"}
         onOpenChange={onModalChange}
