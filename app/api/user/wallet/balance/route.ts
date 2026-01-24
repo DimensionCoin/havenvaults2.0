@@ -9,8 +9,20 @@ export const dynamic = "force-dynamic";
 const SOLANA_RPC =
   process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
-// ✅ Exclude this mint entirely (don’t price it, don’t return it)
-const EXCLUDED_MINT = "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk";
+/**
+ * ✅ Hide these from the wallet asset list.
+ * - jlJupUSD share token mint (shows up when user deposits into Earn)
+ * - JupUSD underlying mint (treat like USD; don’t show as a wallet “asset”)
+ *
+ * IMPORTANT: We only hide them in *wallet balance list*.
+ * Your Plus/Earn APIs can still use these mints for position/earnings logic.
+ */
+const EXCLUDED_MINTS = new Set(
+  [
+    "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk", // jlJupUSD
+    "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD", // JupUSD (underlying)
+  ].map((m) => m.toLowerCase()),
+);
 
 // REAL mainnet USDC mint
 const REAL_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -116,7 +128,7 @@ async function getSplTokenPositions(owner: string) {
         "[wallet/balance] getTokenAccountsByOwner failed:",
         programId,
         res.status,
-        text
+        text,
       );
       return [] as RawTokenAccount[];
     }
@@ -132,7 +144,7 @@ async function getSplTokenPositions(owner: string) {
 
   const all = [...classic, ...t22];
 
-  // (Optional but recommended) sum multiple accounts of same mint
+  // Sum multiple accounts of same mint
   const byMint = new Map<
     string,
     { mint: string; uiAmount: number; decimals: number }
@@ -152,8 +164,8 @@ async function getSplTokenPositions(owner: string) {
 
       if (!mint || !Number.isFinite(ui) || ui <= 0) continue;
 
-      // ✅ Skip excluded mint at the source
-      if (mint === EXCLUDED_MINT) continue;
+      // ✅ Skip excluded mints at the source
+      if (EXCLUDED_MINTS.has(mint.toLowerCase())) continue;
 
       const prev = byMint.get(mint);
       if (!prev) byMint.set(mint, { mint, uiAmount: ui, decimals });
@@ -179,11 +191,11 @@ type JupPriceEntry = {
 };
 
 async function fetchJupPrices(
-  mints: string[]
+  mints: string[],
 ): Promise<Record<string, JupPriceEntry>> {
-  // ✅ Filter excluded mint before pricing
+  // ✅ Filter excluded mints before pricing
   const normalized = mints
-    .filter((m) => m && m !== EXCLUDED_MINT)
+    .filter((m) => m && !EXCLUDED_MINTS.has(m.toLowerCase()))
     .map(normalizeMintForPricing)
     .filter(Boolean);
 
@@ -210,7 +222,7 @@ async function fetchJupPrices(
       "[wallet/balance] Jup price fetch failed:",
       res.status,
       res.statusText,
-      text
+      text,
     );
     return {};
   }
@@ -226,20 +238,18 @@ export async function GET(req: NextRequest) {
   if (!owner) {
     return NextResponse.json(
       { error: "Missing owner query parameter" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   try {
     console.log("[/api/user/wallet/balance] owner:", owner);
 
-    // 🔹 Now we get SPL positions *and* raw native SOL
     const [splPositions, nativeSol] = await Promise.all([
       getSplTokenPositions(owner),
       getNativeSolBalance(owner),
     ]);
 
-    // Display layer only cares about SPL tokens (incl. wSOL)
     const positions: {
       mint: string;
       uiAmount: number;
@@ -255,7 +265,7 @@ export async function GET(req: NextRequest) {
         totalChange24hPct: 0,
         tokens: [],
         count: 0,
-        nativeSol, // ⬅️ still include for SolProvider
+        nativeSol,
       });
     }
 
@@ -280,7 +290,7 @@ export async function GET(req: NextRequest) {
 
     for (const p of positions) {
       // ✅ Extra guard (even though we filtered earlier)
-      if (p.mint === EXCLUDED_MINT) continue;
+      if (EXCLUDED_MINTS.has(p.mint.toLowerCase())) continue;
 
       const pricingMint = normalizeMintForPricing(p.mint);
       const entry = priceMap[pricingMint] as JupPriceEntry | undefined;
@@ -328,7 +338,7 @@ export async function GET(req: NextRequest) {
     // 🔗 Enrich from static tokenConfig
     const cluster = getCluster();
     const normalizedMints = Array.from(
-      new Set(baseTokens.map((t) => normalizeMintForPricing(t.mint)))
+      new Set(baseTokens.map((t) => normalizeMintForPricing(t.mint))),
     );
 
     const metaByMint = new Map<
@@ -386,13 +396,13 @@ export async function GET(req: NextRequest) {
       totalChange24hPct: totalChangePct,
       tokens: tokensEnriched,
       count: tokensEnriched.length,
-      nativeSol, // ⬅️ key piece SolProvider needs
+      nativeSol,
     });
   } catch (err) {
     console.error("[/api/user/wallet/balance] error:", err);
     return NextResponse.json(
       { error: "Failed to fetch wallet balance" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

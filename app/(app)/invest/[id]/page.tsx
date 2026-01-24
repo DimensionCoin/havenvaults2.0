@@ -1,3 +1,4 @@
+// app/(app)/invest/[id]/page.tsx
 "use client";
 
 import React, {
@@ -12,9 +13,12 @@ import { ArrowLeft } from "lucide-react";
 
 import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
+import type { WalletToken } from "@/providers/BalanceProvider";
+
 import { useServerSponsoredUsdcSwap } from "@/hooks/useServerSponsoredUsdcSwap";
 import { useServerSponsoredJLJupUSDSwap } from "@/hooks/Useserversponsoredjljupusdswap";
 import { useServerSponsoredToJLJupUSDSwap } from "@/hooks/Useserversponsoredtojljupusdswap";
+
 import About from "@/components/coinPage/About";
 
 import {
@@ -111,7 +115,6 @@ const CoinPage: React.FC = () => {
     "coingecko" | "jupiter" | null
   >(null);
 
-  // ✅ ADDED: description for <About />
   const [description, setDescription] = useState<string | null>(null);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -149,9 +152,8 @@ const CoinPage: React.FC = () => {
   const swapStatus = useMemo(() => {
     if (side === "buy") {
       return paymentAccount === "cash" ? usdcSwapStatus : jlJupUsdSwapStatus;
-    } else {
-      return receiveAccount === "cash" ? usdcSwapStatus : toJlJupUsdSwapStatus;
     }
+    return receiveAccount === "cash" ? usdcSwapStatus : toJlJupUsdSwapStatus;
   }, [
     side,
     paymentAccount,
@@ -164,9 +166,8 @@ const CoinPage: React.FC = () => {
   const swapError = useMemo(() => {
     if (side === "buy") {
       return paymentAccount === "cash" ? usdcSwapError : jlJupUsdSwapError;
-    } else {
-      return receiveAccount === "cash" ? usdcSwapError : toJlJupUsdSwapError;
     }
+    return receiveAccount === "cash" ? usdcSwapError : toJlJupUsdSwapError;
   }, [
     side,
     paymentAccount,
@@ -179,9 +180,8 @@ const CoinPage: React.FC = () => {
   const swapBusy = useMemo(() => {
     if (side === "buy") {
       return paymentAccount === "cash" ? usdcSwapBusy : jlJupUsdSwapBusy;
-    } else {
-      return receiveAccount === "cash" ? usdcSwapBusy : toJlJupUsdSwapBusy;
     }
+    return receiveAccount === "cash" ? usdcSwapBusy : toJlJupUsdSwapBusy;
   }, [
     side,
     paymentAccount,
@@ -199,16 +199,23 @@ const CoinPage: React.FC = () => {
 
   /* ───────── Balances ───────── */
 
-  const tokenPosition = useMemo(() => {
-    const t = tokens.find((x) => x.mint === mint);
+  // NOTE: token objects coming from BalanceProvider usually include decimals.
+  // Use tokenPosition decimals first; it's the most reliable.
+  const tokenPositionFull = useMemo(() => {
+    const t: WalletToken | undefined = tokens.find((x) => x.mint === mint);
     return {
       amount: t?.amount ?? 0,
       valueDisplay: typeof t?.usdValue === "number" ? t.usdValue : 0,
+      decimals:
+        typeof t?.decimals === "number"
+          ? t.decimals
+          : undefined,
     };
   }, [tokens, mint]);
 
-  const tokenBalance = clampNumber(tokenPosition.amount);
-  const tokenValueDisplay = clampNumber(tokenPosition.valueDisplay);
+  const tokenBalance = clampNumber(tokenPositionFull.amount);
+  const tokenValueDisplay = clampNumber(tokenPositionFull.valueDisplay);
+
   const cashBalanceInternal = clampNumber(Number(usdcAmount ?? 0));
   const cashBalanceDisplay = clampNumber(
     typeof usdcUsd === "number" ? usdcUsd : 0,
@@ -222,9 +229,12 @@ const CoinPage: React.FC = () => {
     paymentAccount === "cash" ? cashBalanceDisplay : plusBalanceDisplay;
 
   const tokenDecimals =
-    typeof meta?.decimals === "number" && Number.isFinite(meta.decimals)
-      ? meta.decimals
-      : 0;
+    typeof tokenPositionFull.decimals === "number" &&
+    Number.isFinite(tokenPositionFull.decimals)
+      ? tokenPositionFull.decimals
+      : typeof meta?.decimals === "number" && Number.isFinite(meta.decimals)
+        ? meta.decimals
+        : 6;
 
   /* ───────── Fetch Spot Price ───────── */
 
@@ -234,8 +244,6 @@ const CoinPage: React.FC = () => {
     const loadSpotPrice = async () => {
       try {
         setPriceLoading(true);
-
-        // ✅ ADDED: clear description each run
         setDescription(null);
 
         if (hasCoingeckoId) {
@@ -260,7 +268,6 @@ const CoinPage: React.FC = () => {
                   : null,
               );
 
-              // ✅ ADDED: description from CoinGecko API response (no `any`)
               const entryWithDesc = entry as typeof entry & {
                 description?: string | null;
               };
@@ -297,10 +304,7 @@ const CoinPage: React.FC = () => {
                   ? entry.priceChange24hPct
                   : null,
               );
-
-              // ✅ ADDED: Jupiter has no description
               setDescription(null);
-
               setPriceSource("jupiter");
               return;
             }
@@ -310,8 +314,6 @@ const CoinPage: React.FC = () => {
         setSpotPriceUsd(null);
         setPriceChange24hPct(null);
         setPriceSource(null);
-
-        // ✅ ADDED: keep description empty if nothing worked
         setDescription(null);
       } catch (err: unknown) {
         const e = err as { name?: string };
@@ -388,6 +390,7 @@ const CoinPage: React.FC = () => {
   const cashNum = safeParse(cashAmount);
   const assetNum = safeParse(assetAmount);
 
+  // cashAmount is in DISPLAY currency, convert to USD for calculations
   const cashUsd = fxRate && fxRate > 0 && cashNum > 0 ? cashNum / fxRate : 0;
   const assetUsd = spotPriceUsd && assetNum > 0 ? assetNum * spotPriceUsd : 0;
 
@@ -616,11 +619,13 @@ const CoinPage: React.FC = () => {
       if (!fxRate || fxRate <= 0) throw new Error("FX not ready yet.");
       if (!spotPriceUsd || spotPriceUsd <= 0)
         throw new Error("Price not ready.");
-      if (grossUsdSafe <= 0) throw new Error("Enter an amount.");
 
       let sig: string;
 
+      // ───────── BUY ─────────
       if (side === "buy") {
+        if (grossUsdSafe <= 0) throw new Error("Enter an amount.");
+
         if (grossUsdSafe > activeBalanceInternal + 0.000001) {
           throw new Error(
             paymentAccount === "cash"
@@ -629,6 +634,7 @@ const CoinPage: React.FC = () => {
           );
         }
 
+        // amountDisplay should be in DISPLAY currency for the usdcSwap buy path
         let amountDisplay: number;
 
         if (lastEdited === "cash") {
@@ -642,12 +648,13 @@ const CoinPage: React.FC = () => {
             kind: "buy",
             fromOwnerBase58: ownerBase58,
             outputMint: mint,
-            amountDisplay,
+            amountDisplay, // display currency
             fxRate,
             slippageBps: 50,
           });
           sig = result.signature;
         } else {
+          // Plus account uses underlying USD units (jlJupUSD), so pass USD amount
           const jlJupUsdAmount = amountDisplay / fxRate;
 
           const result = await jlJupUsdSwap({
@@ -658,15 +665,33 @@ const CoinPage: React.FC = () => {
           });
           sig = result.signature;
         }
-      } else {
-        const sellAmountUi =
-          lastEdited === "asset"
-            ? assetNum
-            : spotPriceUsd && fxRate && fxRate > 0
-              ? tradeCalculations.payAsset
-              : 0;
+      }
 
-        if (sellAmountUi <= 0) throw new Error("Enter an amount.");
+      // ───────── SELL ─────────
+      else {
+        const cashDisplayInput = safeParse(cashAmount); // display currency (CAD)
+        const assetInputUi = safeParse(assetAmount); // token units
+
+        let sellAmountUi = 0;
+
+        if (inputUnit === "asset") {
+          // user typed asset directly
+          sellAmountUi = assetInputUi;
+        } else {
+          // user typed cash in display currency, interpret as "receive this much cash (net)"
+          const desiredNetUsd =
+            cashDisplayInput > 0 && fxRate > 0 ? cashDisplayInput / fxRate : 0;
+
+          if (desiredNetUsd <= 0) throw new Error("Enter an amount.");
+
+          const grossUsdNeeded = grossUpForFee(desiredNetUsd, SWAP_FEE_PCT);
+          sellAmountUi = grossUsdNeeded / spotPriceUsd;
+        }
+
+        if (!Number.isFinite(sellAmountUi) || sellAmountUi <= 0) {
+          throw new Error("Enter an amount.");
+        }
+
         if (!isMaxSell && sellAmountUi > tokenBalance + 1e-12) {
           throw new Error("Not enough balance to sell that amount.");
         }
@@ -676,8 +701,8 @@ const CoinPage: React.FC = () => {
             kind: "sell",
             fromOwnerBase58: ownerBase58,
             inputMint: mint,
-            amountUi: sellAmountUi,
-            inputDecimals: tokenDecimals,
+            amountUi: sellAmountUi, // ✅ always token amount
+            inputDecimals: tokenDecimals, // ✅ correct decimals
             slippageBps: 50,
             isMax: isMaxSell,
           });
@@ -686,7 +711,7 @@ const CoinPage: React.FC = () => {
           const result = await toJlJupUsdSwap({
             fromOwnerBase58: ownerBase58,
             inputMint: mint,
-            inputDecimals: tokenDecimals,
+            inputDecimals: tokenDecimals, // ✅ correct decimals
             amountUi: sellAmountUi,
             slippageBps: 50,
             isMax: isMaxSell,
@@ -733,11 +758,12 @@ const CoinPage: React.FC = () => {
     mint,
     jlJupUsdSwap,
     toJlJupUsdSwap,
-    assetNum,
-    tradeCalculations.payAsset,
-    isMaxSell,
     tokenBalance,
     tokenDecimals,
+    isMaxSell,
+    inputUnit,
+    cashAmount,
+    assetAmount,
     refreshBalances,
     resetInputs,
   ]);
@@ -774,7 +800,6 @@ const CoinPage: React.FC = () => {
 
   return (
     <main className="haven-app">
-      {/* Modal */}
       <TradeModal
         modal={modal}
         stageConfig={stageConfig}
