@@ -8,6 +8,7 @@ import React, {
   useRef,
   useCallback,
 } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import {
   ArrowDown,
@@ -18,6 +19,7 @@ import {
   Wallet,
   ExternalLink,
   X,
+  RefreshCw,
 } from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
 
@@ -123,14 +125,14 @@ function formatUnits(units: string | bigint, decimals: number, maxFrac = 6) {
 }
 
 async function fetchMintDecimalsBestEffort(
-  mint: string
+  mint: string,
 ): Promise<number | null> {
   if (!RPC) return null;
   try {
     const conn = new Connection(RPC, "confirmed");
     const info = await conn.getParsedAccountInfo(
       new PublicKey(mint),
-      "confirmed"
+      "confirmed",
     );
     const parsed = info.value?.data as {
       parsed?: { info?: { decimals?: unknown } };
@@ -206,9 +208,9 @@ type ModalState = {
 
 function ProgressBar({ progress }: { progress: number }) {
   return (
-    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+    <div className="w-full h-1.5 bg-secondary rounded-full overflow-hidden">
       <div
-        className="h-full bg-emerald-500 rounded-full transition-all duration-500 ease-out"
+        className="h-full bg-primary rounded-full transition-all duration-500 ease-out"
         style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
       />
     </div>
@@ -220,37 +222,33 @@ function StageIcon({
 }: {
   icon: "spinner" | "wallet" | "success" | "error";
 }) {
-  const base = "flex h-14 w-14 items-center justify-center rounded-2xl border";
-
   if (icon === "success") {
     return (
-      <div className={`${base} border-emerald-400/30 bg-emerald-500/20`}>
-        <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+        <CheckCircle2 className="h-10 w-10 text-primary" />
       </div>
     );
   }
 
   if (icon === "error") {
     return (
-      <div className={`${base} border-rose-400/30 bg-rose-500/20`}>
-        <XCircle className="h-7 w-7 text-rose-400" />
+      <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
+        <XCircle className="h-10 w-10 text-destructive" />
       </div>
     );
   }
 
   if (icon === "wallet") {
     return (
-      <div
-        className={`${base} border-amber-400/30 bg-amber-500/20 animate-pulse`}
-      >
-        <Wallet className="h-7 w-7 text-amber-400" />
+      <div className="w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center animate-pulse">
+        <Wallet className="h-10 w-10 text-amber-500" />
       </div>
     );
   }
 
   return (
-    <div className={`${base} border-white/10 bg-white/5`}>
-      <Loader2 className="h-7 w-7 text-white/60 animate-spin" />
+    <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center">
+      <RefreshCw className="h-10 w-10 text-muted-foreground animate-spin" />
     </div>
   );
 }
@@ -309,6 +307,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
   const { tokens, refresh } = useBalance();
   const { user } = useUser();
 
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const {
     swap,
     reset: resetSwap,
@@ -362,12 +363,12 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
         name: t.name || t.symbol || "Unknown token",
         logo: t.logoURI ?? null,
       })),
-    [tokens]
+    [tokens],
   );
 
   const ownedMintSet = useMemo(
     () => new Set(tokens.map((t) => t.mint)),
-    [tokens]
+    [tokens],
   );
 
   const configTokens: SwapToken[] = useMemo(() => {
@@ -437,7 +438,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     (mint: string, decimals: number) => {
       mintDecimalsRef.current[mint] = decimals;
     },
-    []
+    [],
   );
 
   const getMintDecimalsCached = useCallback(
@@ -451,7 +452,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       const cached = mintDecimalsRef.current[mint];
       return typeof cached === "number" ? cached : null;
     },
-    [tokens]
+    [tokens],
   );
 
   /* -------------------- keep from/to valid -------------------- */
@@ -503,6 +504,16 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     }
   }, [open, resetSwap]);
 
+  // Lock body scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+    };
+  }, [open]);
+
   const fromToken =
     walletTokens.find((t) => t.mint === fromMint) || walletTokens[0];
   const toToken =
@@ -541,7 +552,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     const q = pickerSearch.trim().toLowerCase();
     return base.filter(
       (t) =>
-        t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)
+        t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q),
     );
   }, [pickerSide, pickerSearch, walletTokens, toTokenOptions]);
 
@@ -644,7 +655,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
     if (netUnits <= BI_ZERO) {
       setQuote(null);
-      setQuoteErr("Amount is too small to cover Haven’s fee.");
+      setQuoteErr("Amount is too small to cover Haven's fee.");
       return;
     }
 
@@ -678,7 +689,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
           if (!res.ok) {
             throw new Error(
-              String(json?.error || `Quote failed (HTTP ${res.status})`)
+              String(json?.error || `Quote failed (HTTP ${res.status})`),
             );
           }
 
@@ -688,7 +699,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           const minUi = formatUnits(
             String(json?.otherAmountThreshold || "0"),
             outDec,
-            6
+            6,
           );
 
           const labels = Array.isArray(json?.routeLabels)
@@ -837,541 +848,566 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const errorToShow = swapErr?.message || null;
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={[
-          // base (theme)
-          "p-0 overflow-hidden border border-border bg-background py-2",
+  if (!mounted) return null;
 
-          // desktop
-          "sm:w-[min(92vw,420px)] sm:max-w-[420px] sm:max-h-[90dvh] sm:rounded-[28px]",
-          "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
+  // Render processing/success/error modal via portal (matches Deposit pattern)
+  const renderSwapModal = () => {
+    if (!modal) return null;
 
-          // mobile fullscreen
-          "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-          "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-          "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-        ].join(" ")}
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget && modal.kind !== "processing") {
+            closeModal();
+          }
+        }}
       >
-        {/* ───────── CoinPage-style modal overlay ───────── */}
-        {modal && (
-          <div
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
-            onClick={(e) => {
-              if (e.target === e.currentTarget && modal.kind !== "processing") {
-                closeModal();
-              }
-            }}
-          >
-            <div
-              className="w-full max-w-sm rounded-3xl border border-border bg-background p-5 shadow-[0_20px_70px_rgba(0,0,0,0.7)]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Close button */}
-              {modal.kind !== "processing" && (
-                <div className="flex justify-end mb-2">
-                  <button
-                    onClick={closeModal}
-                    className="rounded-xl border border-border bg-background/60 p-2 text-muted-foreground hover:text-foreground transition"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
-
-              {/* Content */}
-              <div className="flex flex-col items-center text-center pt-2">
-                {modal.kind === "processing" && stageConfig ? (
-                  <>
-                    <StageIcon icon={stageConfig.icon} />
-                    <div className="mt-4">
-                      <div className="text-base font-semibold text-foreground">
-                        {stageConfig.title}
-                      </div>
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        {stageConfig.subtitle}
-                      </div>
-                    </div>
-                    <div className="mt-5 w-full max-w-[200px]">
-                      <ProgressBar progress={stageConfig.progress} />
-                    </div>
-
-                    {modal.fromSymbol && modal.toSymbol && (
-                      <div className="mt-4 text-[11px] text-muted-foreground">
-                        {modal.fromSymbol} → {modal.toSymbol}
-                      </div>
-                    )}
-                  </>
-                ) : modal.kind === "success" ? (
-                  <>
-                    <StageIcon icon="success" />
-                    <div className="mt-4">
-                      <div className="text-base font-semibold text-primary">
-                        Swap complete!
-                      </div>
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        Your trade was successful
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <StageIcon icon="error" />
-                    <div className="mt-4">
-                      <div className="text-base font-semibold text-destructive">
-                        Order failed
-                      </div>
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        Something went wrong
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Error message */}
-              {modal.kind === "error" && modal.errorMessage && (
-                <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3">
-                  <div className="text-xs text-destructive text-center">
-                    {modal.errorMessage}
+        <div
+          className="relative w-full sm:max-w-md haven-card overflow-hidden h-auto max-h-[90vh] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+            {modal.kind === "processing" && stageConfig ? (
+              <>
+                <StageIcon icon={stageConfig.icon} />
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-foreground">
+                    {stageConfig.title}
+                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    {stageConfig.subtitle}
                   </div>
                 </div>
-              )}
+                <div className="w-full max-w-[200px]">
+                  <ProgressBar progress={stageConfig.progress} />
+                </div>
+                {modal.fromSymbol && modal.toSymbol && (
+                  <div className="mt-2 text-[11px] text-muted-foreground">
+                    {modal.fromSymbol} → {modal.toSymbol}
+                  </div>
+                )}
+                <div className="mt-4 text-center text-xs text-muted-foreground">
+                  Please don&apos;t close this window
+                </div>
+              </>
+            ) : modal.kind === "success" ? (
+              <>
+                <StageIcon icon="success" />
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-foreground">
+                    Swap complete!
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Your trade was successful
+                  </div>
+                </div>
 
-              {/* Transaction link */}
-              {modal.kind === "success" && modal.signature && (
-                <div className="mt-5">
+                {modal.signature && (
                   <a
                     href={explorerUrl(modal.signature)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-foreground/90 hover:bg-accent transition group"
+                    className="mt-4 w-full haven-card-soft px-4 py-3 flex items-center justify-between hover:bg-accent transition group"
                   >
-                    <span>View transaction</span>
-                    <ExternalLink className="h-4 w-4 opacity-60 group-hover:opacity-100" />
+                    <span className="text-sm text-foreground">
+                      View transaction
+                    </span>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
                   </a>
-                </div>
-              )}
+                )}
 
-              {/* Action buttons */}
-              {modal.kind !== "processing" && (
-                <div className="mt-5 flex gap-2">
+                <div className="mt-4 flex gap-2 w-full">
                   <button
                     onClick={closeModal}
-                    className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold transition border bg-background/60 border-border text-foreground/90 hover:bg-accent"
+                    className="haven-btn-secondary flex-1"
                   >
                     Close
                   </button>
-
-                  {modal.kind === "success" && (
-                    <button
-                      onClick={() => {
-                        void closeAfterSuccess();
-                      }}
-                      className="flex-1 rounded-2xl border border-primary/30 bg-primary/10 px-4 py-3 text-center text-sm font-semibold text-primary hover:bg-primary/15 transition"
-                    >
-                      Done
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      void closeAfterSuccess();
+                    }}
+                    className="haven-btn-primary flex-1"
+                  >
+                    Done
+                  </button>
                 </div>
-              )}
-
-              {/* Processing footer */}
-              {modal.kind === "processing" && (
-                <div className="mt-6 text-center text-xs text-muted-foreground">
-                  Please don&apos;t close this window
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="flex h-full flex-col">
-          {/* Scrollable body */}
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 pt-[calc(env(safe-area-inset-top)+10px)] sm:px-4 sm:pb-4 sm:pt-3">
-            {!hasWalletTokens ? (
-              <DialogHeader className="pb-3">
-                <DialogTitle className="text-sm font-semibold text-foreground">
-                  Sell from your portfolio
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-foreground">
-                  You don’t have any tokens to sell yet.
-                </DialogDescription>
-              </DialogHeader>
+              </>
             ) : (
               <>
-                <DialogHeader className="pb-3">
-                  <DialogTitle className="text-sm font-semibold text-foreground">
-                    Sell
-                  </DialogTitle>
-                  <DialogDescription className="text-[11px] text-muted-foreground">
-                    Sell your assets for cash or swap to another asset.
-                  </DialogDescription>
-                </DialogHeader>
-
-                <div className="flex flex-col gap-3 text-xs text-foreground">
-                  {/* SELL panel */}
-                  <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
-                    <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="text-muted-foreground">Sell</span>
-                      {fromWallet && (
-                        <div className="flex items-center gap-2">
-                          {isMax && (
-                            <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                              Max
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            disabled={swapBusy}
-                            onClick={handleMax}
-                            className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
-                          >
-                            Max
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex-1">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          disabled={swapBusy}
-                          value={amount}
-                          onChange={(e) => {
-                            setIsMax(false);
-                            setAmount(sanitizeAmount(e.target.value));
-                          }}
-                          placeholder="0.00"
-                          className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
-                        />
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {estFromUsd > 0
-                            ? estFromUsd.toLocaleString("en-US", {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 2,
-                              })
-                            : "$0.00"}
-                        </p>
-                      </div>
-
-                      <div className="w-[152px] text-left">
-                        <button
-                          type="button"
-                          disabled={swapBusy}
-                          onClick={() => openPicker("from")}
-                          className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
-                        >
-                          <div className="flex items-center gap-2">
-                            <TokenAvatar token={fromToken} />
-                            <div className="flex flex-col">
-                              <span className="text-[11px] font-semibold">
-                                {fromToken?.symbol}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {fromToken?.name}
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {fromWallet && (
-                      <p className="mt-2 text-[10px] text-muted-foreground">
-                        Available:{" "}
-                        {fromWallet.amount.toLocaleString("en-US", {
-                          maximumFractionDigits: 4,
-                        })}{" "}
-                        {fromToken?.symbol}
-                      </p>
-                    )}
-
-                    {feePreview && (
-                      <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
-                        <div className="flex items-center justify-between">
-                          <span>
-                            Haven fee ({(feePreview.feeBps / 100).toFixed(2)}%)
-                          </span>
-                          <span className="text-foreground">
-                            ~{feePreview.feeUi} {fromToken?.symbol}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span>Amount swapped (net)</span>
-                          <span className="text-foreground">
-                            ~{feePreview.netUi} {fromToken?.symbol}
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                <StageIcon icon="error" />
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-destructive">
+                    Order failed
                   </div>
-
-                  {/* Arrow */}
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      disabled={swapBusy}
-                      onClick={handleSwapSides}
-                      className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/60 text-foreground hover:bg-accent disabled:opacity-60"
-                      title="Swap sides (only works if the Receive token is one you own)"
-                    >
-                      <ArrowDown className="h-4 w-4" />
-                    </button>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    Something went wrong
                   </div>
+                </div>
 
-                  {/* RECEIVE panel */}
-                  <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
-                    <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="text-muted-foreground">Receive</span>
-                      {cashToken && toToken?.kind === "cash" && (
-                        <span className="text-[10px] text-muted-foreground">
-                          {cashDisplayName} (cash)
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="w-[152px] text-left">
-                        <button
-                          type="button"
-                          disabled={swapBusy}
-                          onClick={() => openPicker("to")}
-                          className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
-                        >
-                          <div className="flex items-center gap-2">
-                            <TokenAvatar token={toToken} />
-                            <div className="flex flex-col">
-                              <span className="text-[11px] font-semibold">
-                                {toToken?.symbol}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {toToken?.name}
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                        </button>
-                      </div>
-
-                      <div className="flex-1 text-right">
-                        <p className="text-xl font-semibold text-foreground">
-                          {quoteLoading
-                            ? "…"
-                            : quote
-                              ? `~ ${quote.outUi}`
-                              : "—"}
-                        </p>
-                        <p className="mt-1 text-[10px] text-muted-foreground">
-                          {quoteLoading
-                            ? "Fetching live quote…"
-                            : quote
-                              ? `Min received: ${quote.minOutUi}`
-                              : "Enter an amount to see an estimate."}
-                        </p>
-                      </div>
-                    </div>
-
-                    {(quote?.routeText || quote?.priceImpactPctText) && (
-                      <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
-                        {quote?.routeText && (
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-muted-foreground">Route</span>
-                            <span className="truncate text-foreground">
-                              {quote.routeText}
-                            </span>
-                          </div>
-                        )}
-                        {quote?.priceImpactPctText && (
-                          <div className="mt-1 flex items-center justify-between">
-                            <span className="text-muted-foreground">
-                              Price impact
-                            </span>
-                            <span className="text-foreground">
-                              {quote.priceImpactPctText}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {quoteErr && (
-                      <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                        {quoteErr}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* rate row */}
-                  <div className="mt-1 rounded-full border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
-                    1 {fromToken?.symbol} ≈{" "}
-                    {quote && feePreview
-                      ? (() => {
-                          const netUiNum = Number(feePreview.netUi);
-                          const outUiNum = Number(quote.outUi);
-                          if (
-                            !Number.isFinite(netUiNum) ||
-                            !Number.isFinite(outUiNum) ||
-                            netUiNum <= 0
-                          )
-                            return "—";
-                          const r = outUiNum / netUiNum;
-                          return r > 0
-                            ? r.toLocaleString("en-US", {
-                                maximumFractionDigits: 6,
-                              })
-                            : "—";
-                        })()
-                      : "—"}{" "}
-                    {toToken?.symbol}
-                  </div>
-
-                  {cashToken && (
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      {cashDisplayName} is your Haven cash balance.
+                {modal.errorMessage && (
+                  <div className="mt-4 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-xl">
+                    <p className="text-[12px] text-destructive text-center">
+                      {modal.errorMessage}
                     </p>
-                  )}
+                  </div>
+                )}
 
-                  {errorToShow && modal?.kind !== "error" && (
-                    <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-                      {errorToShow}
-                    </div>
-                  )}
-
-                  {hookSig && (
-                    <div className="mt-1 text-[10px] text-muted-foreground">
-                      Last tx:{" "}
-                      <a
-                        href={explorerUrl(hookSig)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary hover:opacity-90 underline underline-offset-2"
-                      >
-                        view
-                      </a>
-                    </div>
-                  )}
+                <div className="mt-4 flex gap-2 w-full">
+                  <button
+                    onClick={closeModal}
+                    className="haven-btn-secondary flex-1"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      setModal(null);
+                      // Allow retry
+                    }}
+                    className="haven-btn-primary flex-1"
+                  >
+                    Try again
+                  </button>
                 </div>
               </>
             )}
           </div>
-
-          {/* Pinned footer */}
-          <DialogFooter className="shrink-0 border-t border-border bg-background/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
-            {!hasWalletTokens ? (
-              <DialogClose asChild>
-                <Button variant="outline" className="w-full">
-                  Close
-                </Button>
-              </DialogClose>
-            ) : (
-              <Button
-                className="w-full rounded-full"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
-              >
-                {swapBusy ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Processing...
-                  </span>
-                ) : (
-                  <span className="text-black">Swap</span>
-                )}
-              </Button>
-            )}
-          </DialogFooter>
         </div>
+      </div>,
+      document.body,
+    );
+  };
 
-        {/* Picker modal (above dialog) */}
-        {pickerSide && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
-            <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-3.5 shadow-2xl">
-              <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-foreground">
-                  {pickerSide === "from"
-                    ? "Choose token to sell"
-                    : "Choose token to receive"}
-                </h2>
-                <button
-                  type="button"
-                  onClick={closePicker}
-                  className="text-[11px] text-muted-foreground hover:text-foreground"
-                >
-                  Close
-                </button>
-              </div>
+  // Render token picker modal via portal (matches Deposit pattern)
+  const renderPickerModal = () => {
+    if (!pickerSide) return null;
 
-              <div className="mb-2">
-                <input
-                  value={pickerSearch}
-                  onChange={(e) => setPickerSearch(e.target.value)}
-                  placeholder="Search by name or symbol"
-                  className="w-full rounded-xl border border-border bg-background/60 px-3 py-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
-                />
-              </div>
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[85] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) closePicker();
+        }}
+      >
+        <div
+          className="relative w-full sm:max-w-md haven-card overflow-hidden h-[70vh] sm:h-auto sm:max-h-[70vh] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[15px] font-semibold text-foreground">
+                {pickerSide === "from"
+                  ? "Choose token to sell"
+                  : "Choose token to receive"}
+              </h2>
+              <button
+                onClick={closePicker}
+                className="haven-icon-btn !w-9 !h-9"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-              <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
-                {currentPickerTokens.map((t) => (
-                  <button
-                    key={t.mint + t.kind}
-                    type="button"
-                    onClick={() => handlePickToken(t)}
-                    className={[
-                      "flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[11px] hover:bg-accent",
-                      (pickerSide === "from" && t.mint === fromMint) ||
-                      (pickerSide === "to" && t.mint === toMint)
-                        ? "bg-accent"
-                        : "",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center gap-2">
-                      <TokenAvatar token={t} />
-                      <div className="flex flex-col">
-                        <span className="font-medium text-foreground">
-                          {t.symbol}
-                          {t.kind === "cash" && (
-                            <span className="ml-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-[1px] text-[9px] text-primary">
-                              cash
-                            </span>
-                          )}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {t.name}
-                        </span>
-                      </div>
-                    </div>
-
-                    {pickerSide === "from" && (
-                      <span className="text-[10px] text-muted-foreground">
-                        {tokens
-                          .find((wt) => wt.mint === t.mint)
-                          ?.amount?.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
-                          }) ?? "0"}
-                      </span>
-                    )}
-                  </button>
-                ))}
-
-                {currentPickerTokens.length === 0 && (
-                  <p className="pt-4 text-center text-[11px] text-muted-foreground">
-                    No tokens found.
-                  </p>
-                )}
-              </div>
+            <div className="mt-4">
+              <input
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                placeholder="Search by name or symbol"
+                className="w-full rounded-xl border border-border bg-secondary px-4 py-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
+              />
             </div>
           </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
 
+          {/* Token list */}
+          <div className="flex-1 overflow-y-auto overscroll-contain p-2">
+            <div className="space-y-1">
+              {currentPickerTokens.map((t) => (
+                <button
+                  key={t.mint + t.kind}
+                  type="button"
+                  onClick={() => handlePickToken(t)}
+                  className={[
+                    "flex w-full items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-accent transition",
+                    (pickerSide === "from" && t.mint === fromMint) ||
+                    (pickerSide === "to" && t.mint === toMint)
+                      ? "bg-accent"
+                      : "",
+                  ].join(" ")}
+                >
+                  <div className="flex items-center gap-3">
+                    <TokenAvatar token={t} />
+                    <div className="flex flex-col">
+                      <span className="text-[13px] font-medium text-foreground">
+                        {t.symbol}
+                        {t.kind === "cash" && (
+                          <span className="ml-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                            cash
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {t.name}
+                      </span>
+                    </div>
+                  </div>
+
+                  {pickerSide === "from" && (
+                    <span className="text-[12px] text-muted-foreground">
+                      {tokens
+                        .find((wt) => wt.mint === t.mint)
+                        ?.amount?.toLocaleString("en-US", {
+                          maximumFractionDigits: 4,
+                        }) ?? "0"}
+                    </span>
+                  )}
+                </button>
+              ))}
+
+              {currentPickerTokens.length === 0 && (
+                <p className="py-8 text-center text-[13px] text-muted-foreground">
+                  No tokens found.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  };
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          className={[
+            // base (theme)
+            "p-0 overflow-hidden border border-border bg-background py-2",
+
+            // desktop
+            "sm:w-[min(92vw,420px)] sm:max-w-[420px] sm:max-h-[90dvh] sm:rounded-[28px]",
+            "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
+
+            // mobile fullscreen
+            "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
+            "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
+            "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
+          ].join(" ")}
+        >
+          <div className="flex h-full flex-col">
+            {/* Scrollable body */}
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 pt-[calc(env(safe-area-inset-top)+10px)] sm:px-4 sm:pb-4 sm:pt-3">
+              {!hasWalletTokens ? (
+                <DialogHeader className="pb-3">
+                  <DialogTitle className="text-sm font-semibold text-foreground">
+                    Sell from your portfolio
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground">
+                    You don&apos;t have any tokens to sell yet.
+                  </DialogDescription>
+                </DialogHeader>
+              ) : (
+                <>
+                  <DialogHeader className="pb-3">
+                    <DialogTitle className="text-sm font-semibold text-foreground">
+                      Sell
+                    </DialogTitle>
+                    <DialogDescription className="text-[11px] text-muted-foreground">
+                      Sell your assets for cash or swap to another asset.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="flex flex-col gap-3 text-xs text-foreground">
+                    {/* SELL panel */}
+                    <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
+                      <div className="mb-2 flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Sell</span>
+                        {fromWallet && (
+                          <div className="flex items-center gap-2">
+                            {isMax && (
+                              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                                Max
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={swapBusy}
+                              onClick={handleMax}
+                              className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
+                            >
+                              Max
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            disabled={swapBusy}
+                            value={amount}
+                            onChange={(e) => {
+                              setIsMax(false);
+                              setAmount(sanitizeAmount(e.target.value));
+                            }}
+                            placeholder="0.00"
+                            className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+                          />
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {estFromUsd > 0
+                              ? estFromUsd.toLocaleString("en-US", {
+                                  style: "currency",
+                                  currency: "USD",
+                                  maximumFractionDigits: 2,
+                                })
+                              : "$0.00"}
+                          </p>
+                        </div>
+
+                        <div className="w-[152px] text-left">
+                          <button
+                            type="button"
+                            disabled={swapBusy}
+                            onClick={() => openPicker("from")}
+                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                          >
+                            <div className="flex items-center gap-2">
+                              <TokenAvatar token={fromToken} />
+                              <div className="flex flex-col">
+                                <span className="text-[11px] font-semibold">
+                                  {fromToken?.symbol}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {fromToken?.name}
+                                </span>
+                              </div>
+                            </div>
+                            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {fromWallet && (
+                        <p className="mt-2 text-[10px] text-muted-foreground">
+                          Available:{" "}
+                          {fromWallet.amount.toLocaleString("en-US", {
+                            maximumFractionDigits: 4,
+                          })}{" "}
+                          {fromToken?.symbol}
+                        </p>
+                      )}
+
+                      {feePreview && (
+                        <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                          <div className="flex items-center justify-between">
+                            <span>
+                              Haven fee ({(feePreview.feeBps / 100).toFixed(2)}
+                              %)
+                            </span>
+                            <span className="text-foreground">
+                              ~{feePreview.feeUi} {fromToken?.symbol}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <span>Amount swapped (net)</span>
+                            <span className="text-foreground">
+                              ~{feePreview.netUi} {fromToken?.symbol}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Arrow */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        disabled={swapBusy}
+                        onClick={handleSwapSides}
+                        className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/60 text-foreground hover:bg-accent disabled:opacity-60"
+                        title="Swap sides (only works if the Receive token is one you own)"
+                      >
+                        <ArrowDown className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* RECEIVE panel */}
+                    <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
+                      <div className="mb-2 flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Receive</span>
+                        {cashToken && toToken?.kind === "cash" && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {cashDisplayName} (cash)
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="w-[152px] text-left">
+                          <button
+                            type="button"
+                            disabled={swapBusy}
+                            onClick={() => openPicker("to")}
+                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                          >
+                            <div className="flex items-center gap-2">
+                              <TokenAvatar token={toToken} />
+                              <div className="flex flex-col">
+                                <span className="text-[11px] font-semibold">
+                                  {toToken?.symbol}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {toToken?.name}
+                                </span>
+                              </div>
+                            </div>
+                            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                          </button>
+                        </div>
+
+                        <div className="flex-1 text-right">
+                          <p className="text-xl font-semibold text-foreground">
+                            {quoteLoading
+                              ? "…"
+                              : quote
+                                ? `~ ${quote.outUi}`
+                                : "—"}
+                          </p>
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            {quoteLoading
+                              ? "Fetching live quote…"
+                              : quote
+                                ? `Min received: ${quote.minOutUi}`
+                                : "Enter an amount to see an estimate."}
+                          </p>
+                        </div>
+                      </div>
+
+                      {(quote?.routeText || quote?.priceImpactPctText) && (
+                        <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                          {quote?.routeText && (
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-muted-foreground">
+                                Route
+                              </span>
+                              <span className="truncate text-foreground">
+                                {quote.routeText}
+                              </span>
+                            </div>
+                          )}
+                          {quote?.priceImpactPctText && (
+                            <div className="mt-1 flex items-center justify-between">
+                              <span className="text-muted-foreground">
+                                Price impact
+                              </span>
+                              <span className="text-foreground">
+                                {quote.priceImpactPctText}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {quoteErr && (
+                        <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                          {quoteErr}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* rate row */}
+                    <div className="mt-1 rounded-full border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                      1 {fromToken?.symbol} ≈{" "}
+                      {quote && feePreview
+                        ? (() => {
+                            const netUiNum = Number(feePreview.netUi);
+                            const outUiNum = Number(quote.outUi);
+                            if (
+                              !Number.isFinite(netUiNum) ||
+                              !Number.isFinite(outUiNum) ||
+                              netUiNum <= 0
+                            )
+                              return "—";
+                            const r = outUiNum / netUiNum;
+                            return r > 0
+                              ? r.toLocaleString("en-US", {
+                                  maximumFractionDigits: 6,
+                                })
+                              : "—";
+                          })()
+                        : "—"}{" "}
+                      {toToken?.symbol}
+                    </div>
+
+                    {cashToken && (
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        {cashDisplayName} is your Haven cash balance.
+                      </p>
+                    )}
+
+                    {errorToShow && modal?.kind !== "error" && (
+                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                        {errorToShow}
+                      </div>
+                    )}
+
+                    {hookSig && (
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        Last tx:{" "}
+                        <a
+                          href={explorerUrl(hookSig)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary hover:opacity-90 underline underline-offset-2"
+                        >
+                          view
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Pinned footer */}
+            <DialogFooter className="shrink-0 border-t border-border bg-background/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
+              {!hasWalletTokens ? (
+                <DialogClose asChild>
+                  <Button variant="outline" className="w-full">
+                    Close
+                  </Button>
+                </DialogClose>
+              ) : (
+                <Button
+                  className="w-full rounded-full"
+                  disabled={!canSubmit}
+                  onClick={handleSubmit}
+                >
+                  {swapBusy ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Processing...
+                    </span>
+                  ) : (
+                    <span className="text-black">Swap</span>
+                  )}
+                </Button>
+              )}
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Render modals via portal - outside Dialog to avoid z-index issues */}
+      {renderPickerModal()}
+      {renderSwapModal()}
+    </>
+  );
 };
 
 /* -------------------- avatar -------------------- */
