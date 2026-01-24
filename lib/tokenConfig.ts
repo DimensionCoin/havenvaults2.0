@@ -644,17 +644,6 @@ export const STOCK_TOKENS: TokenMeta[] = [
     mints: { mainnet: "Xs6B6zawENwAbWVi7w92rjazLuAr5Az59qgWKcNb45x" },
   },
   {
-    name: "Oracle",
-    symbol: "ORCL",
-    id: "oracle-xstock",
-    logo: "/logos/orcl.png",
-    kind: "stock",
-    categories: ["Stocks"],
-    tags: ["Index"],
-    decimals: 8,
-    mints: { mainnet: "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL" },
-  },
-  {
     name: "McDonald's",
     symbol: "MCD",
     id: "mcdonald-s-xstock",
@@ -698,7 +687,28 @@ export const STOCK_TOKENS: TokenMeta[] = [
     decimals: 8,
     mints: { mainnet: "XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ" },
   },
-
+  {
+    name: "Netflix",
+    symbol: "NFLX",
+    id: "netflix-xstock",
+    logo: "/logos/nflx.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL" },
+  },
+  {
+    name: "Oracle",
+    symbol: "ORCL",
+    id: "oracle-xstock",
+    logo: "/logos/orcl.png",
+    kind: "stock",
+    categories: ["Stocks"],
+    tags: ["Index"],
+    decimals: 8,
+    mints: { mainnet: "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL" },
+  },
   // ---------------- PreMarket (tokenized)
   {
     name: "SpaceX",
@@ -746,7 +756,7 @@ export const STOCK_TOKENS: TokenMeta[] = [
   },
   //--------------------- Commodity
   {
-    name: "GOLD(1 troy ounce)",
+    name: "GOLD(1 T oz)",
     symbol: "GLD",
     id: "",
     logo: "/logos/gldoz.png",
