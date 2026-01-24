@@ -20,6 +20,7 @@ import {
   ExternalLink,
   X,
   RefreshCw,
+  Search,
 } from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
 
@@ -111,6 +112,24 @@ function formatUnits(units: string | bigint, decimals: number, maxFrac = 6) {
 
   const out = fracStr ? `${whole.toString()}.${fracStr}` : whole.toString();
   return neg ? `-${out}` : out;
+}
+
+function fmtFiat(n: number, currency: string) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  try {
+    return x.toLocaleString("en-US", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    });
+  } catch {
+    return x.toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    });
+  }
 }
 
 async function fetchMintDecimalsBestEffort(
@@ -243,7 +262,12 @@ function StageIcon({
 }
 
 function explorerUrl(sig: string) {
-  return `https://solscan.io/tx/${sig}`;
+  const cluster = String(CLUSTER || "");
+  const isMainnet = cluster === "" || cluster === "mainnet-beta";
+  const clusterQuery = !isMainnet
+    ? `?cluster=${encodeURIComponent(cluster)}`
+    : "";
+  return `https://solscan.io/tx/${sig}${clusterQuery}`;
 }
 
 /* --------------------------------------------------------------------- */
@@ -288,6 +312,126 @@ type QuoteView = {
   routeText: string | null;
 };
 
+/* --------------------------------------------------------------------- */
+/* Transfer-style picker (same shell + search + row styling)              */
+/* --------------------------------------------------------------------- */
+
+function TokenPickerModal({
+  open,
+  title,
+  subtitle,
+  tokens,
+  selectedMint,
+  search,
+  onSearch,
+  onClose,
+  onPick,
+  rightSlotForMint,
+}: {
+  open: boolean;
+  title: string;
+  subtitle: string;
+  tokens: SwapToken[];
+  selectedMint: string;
+  search: string;
+  onSearch: (v: string) => void;
+  onClose: () => void;
+  onPick: (t: SwapToken) => void;
+  rightSlotForMint?: (mint: string) => React.ReactNode;
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="relative w-full sm:max-w-md haven-card overflow-hidden max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
+          <div>
+            <h3 className="text-[15px] font-semibold text-foreground tracking-tight">
+              {title}
+            </h3>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              {subtitle}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="haven-icon-btn !w-9 !h-9"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder="Search by name or symbol"
+              className="haven-input pl-10 text-black"
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-5 space-y-1.5">
+          {tokens.length === 0 ? (
+            <div className="py-10 text-center text-[12px] text-muted-foreground">
+              No assets found
+            </div>
+          ) : (
+            tokens.map((t) => {
+              const isSelected = t.mint === selectedMint;
+              return (
+                <button
+                  key={`${t.mint}:${t.kind}`}
+                  type="button"
+                  onClick={() => onPick(t)}
+                  className={[
+                    "w-full flex items-center justify-between gap-3 p-3 rounded-xl transition-all",
+                    isSelected
+                      ? "bg-primary/10 border border-primary/30"
+                      : "bg-background hover:bg-accent border border-transparent",
+                  ].join(" ")}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <TokenAvatar token={t} size="lg" />
+                    <div className="min-w-0 text-left">
+                      <p className="text-[13px] font-medium text-foreground truncate">
+                        {t.symbol}
+                        {t.kind === "cash" && (
+                          <span className="ml-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                            cash
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {t.name}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">{rightSlotForMint?.(t.mint)}</div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 const SellDrawer: React.FC<SellDrawerProps> = ({
   open,
   onOpenChange,
@@ -295,6 +439,10 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 }) => {
   const { tokens, refresh } = useBalance();
   const { user } = useUser();
+
+  // IMPORTANT: BalanceProvider already converts balances/prices into the user's display currency.
+  // So we only *format* using the displayCurrency; we do not convert here.
+  const displayCurrency = user?.displayCurrency || "USD";
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -384,7 +532,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     return list;
   }, []);
 
-  const cashDisplayName = user?.displayCurrency || "Cash";
+  const cashDisplayName = displayCurrency;
 
   const cashToken: SwapToken | null = useMemo(() => {
     if (!ENV_USDC_MINT) return null;
@@ -514,10 +662,11 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const parsedAmount = parseFloat(amount || "0") || 0;
 
-  const fromUsdPrice = fromWallet?.usdPrice ?? 0;
-  const estFromUsd =
+  // NOTE: usdPrice is already in displayCurrency (provided by BalanceProvider)
+  const fromFxPrice = fromWallet?.usdPrice ?? 0;
+  const estFromFiat =
     (isMax ? (fromWallet?.amount ?? 0) : parsedAmount) *
-    (Number(fromUsdPrice) || 0);
+    (Number(fromFxPrice) || 0);
 
   const canSubmit =
     !!fromToken &&
@@ -787,9 +936,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       });
     } catch (e) {
       const msg =
-        swapErr?.message ||
-        (e instanceof Error ? e.message : "Swap failed. Please try again.");
-
+        e instanceof Error ? e.message : "Swap failed. Please try again.";
       setModal({
         kind: "error",
         errorMessage: msg,
@@ -852,7 +999,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
     return createPortal(
       <div
-        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+        className="fixed inset-0 z-[95] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
         onClick={(e) => {
           if (e.target === e.currentTarget && modal.kind !== "processing")
             closeModal();
@@ -866,7 +1013,6 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           ].join(" ")}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Top bar (Deposit-style) */}
           <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
             <div className="flex flex-col">
               <div className="text-[15px] font-semibold text-foreground">
@@ -1015,109 +1161,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     );
   };
 
-  const renderPickerModal = () => {
-    if (!pickerSide) return null;
-
-    return createPortal(
-      <div
-        className="fixed inset-0 z-[85] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) closePicker();
-        }}
-      >
-        <div
-          className={[
-            "relative w-full sm:max-w-md haven-card overflow-hidden",
-            "max-sm:rounded-t-[28px] sm:rounded-[28px]",
-            "h-[75vh] sm:h-auto sm:max-h-[70vh] flex flex-col",
-          ].join(" ")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold text-foreground">
-                {pickerSide === "from"
-                  ? "Choose token to sell"
-                  : "Choose token to receive"}
-              </h2>
-              <button
-                onClick={closePicker}
-                className="haven-icon-btn !w-9 !h-9"
-                aria-label="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="mt-4">
-              <input
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                placeholder="Search by name or symbol"
-                className="w-full rounded-2xl border border-border bg-secondary px-4 py-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
-              />
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto overscroll-contain p-2">
-            <div className="space-y-1">
-              {currentPickerTokens.map((t) => (
-                <button
-                  key={t.mint + t.kind}
-                  type="button"
-                  onClick={() => handlePickToken(t)}
-                  className={[
-                    "flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left hover:bg-accent transition",
-                    (pickerSide === "from" && t.mint === fromMint) ||
-                    (pickerSide === "to" && t.mint === toMint)
-                      ? "bg-accent"
-                      : "",
-                  ].join(" ")}
-                >
-                  <div className="flex items-center gap-3">
-                    <TokenAvatar token={t} />
-                    <div className="flex flex-col">
-                      <span className="text-[13px] font-medium text-foreground">
-                        {t.symbol}
-                        {t.kind === "cash" && (
-                          <span className="ml-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
-                            cash
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground">
-                        {t.name}
-                      </span>
-                    </div>
-                  </div>
-
-                  {pickerSide === "from" && (
-                    <span className="text-[12px] text-muted-foreground">
-                      {tokens
-                        .find((wt) => wt.mint === t.mint)
-                        ?.amount?.toLocaleString("en-US", {
-                          maximumFractionDigits: 4,
-                        }) ?? "0"}
-                    </span>
-                  )}
-                </button>
-              ))}
-
-              {currentPickerTokens.length === 0 && (
-                <p className="py-8 text-center text-[13px] text-muted-foreground">
-                  No tokens found.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>,
-      document.body,
-    );
-  };
-
   /* ------------------------------------------------------------------ */
-  /* Deposit-style main modal (no Drawer, no shadcn Dialog)              */
+  /* Main modal (Deposit-style shell)                                    */
   /* ------------------------------------------------------------------ */
 
   const body = (
@@ -1210,13 +1255,9 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     />
 
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      {estFromUsd > 0
-                        ? estFromUsd.toLocaleString("en-US", {
-                            style: "currency",
-                            currency: "USD",
-                            maximumFractionDigits: 2,
-                          })
-                        : "$0.00"}
+                      {estFromFiat > 0
+                        ? fmtFiat(estFromFiat, displayCurrency)
+                        : fmtFiat(0, displayCurrency)}
                     </p>
                   </div>
 
@@ -1273,7 +1314,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                 )}
               </div>
 
-              {/* Middle control (Deposit-ish pill) */}
+              {/* Middle control */}
               <div className="flex justify-center">
                 <button
                   type="button"
@@ -1446,9 +1487,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   Processing…
                 </>
               ) : (
-                <>
-                  <span className="text-black">Swap</span>
-                </>
+                <span className="text-black">Swap</span>
               )}
             </button>
           )}
@@ -1461,10 +1500,56 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     </div>
   );
 
+  /* ------------------------------------------------------------------ */
+  /* Picker modal (NOW matches TransferSPL asset picker exactly)         */
+  /* ------------------------------------------------------------------ */
+
+  const pickerTitle = pickerSide === "from" ? "Choose asset" : "Choose asset";
+  const pickerSubtitle =
+    pickerSide === "from"
+      ? "Select the token you want to sell"
+      : "Select the token you want to receive";
+
+  const pickerSelectedMint = pickerSide === "from" ? fromMint : toMint;
+
+  const rightSlotForMint = (mint: string) => {
+    if (pickerSide === "from") {
+      const wt = tokens.find((x) => x.mint === mint);
+      const amt = wt?.amount ?? 0;
+      const fx = Number(wt?.usdValue ?? 0); // already display-currency valued
+      return (
+        <>
+          <p className="text-[12px] font-medium text-foreground">
+            {amt.toLocaleString("en-US", { maximumFractionDigits: 6 })}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {fx > 0 ? `~${fmtFiat(fx, displayCurrency)}` : ""}
+          </p>
+        </>
+      );
+    }
+
+    // "to" picker: show nothing (Transfer picker shows balances; receive list doesn’t need it)
+    return null;
+  };
+
   return (
     <>
       {createPortal(body, document.body)}
-      {renderPickerModal()}
+
+      <TokenPickerModal
+        open={!!pickerSide}
+        title={pickerTitle}
+        subtitle={pickerSubtitle}
+        tokens={pickerSide ? currentPickerTokens : []}
+        selectedMint={pickerSelectedMint || ""}
+        search={pickerSearch}
+        onSearch={setPickerSearch}
+        onClose={closePicker}
+        onPick={handlePickToken}
+        rightSlotForMint={rightSlotForMint}
+      />
+
       {renderSwapModal()}
     </>
   );
@@ -1472,10 +1557,18 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
 /* -------------------- avatar -------------------- */
 
-const TokenAvatar: React.FC<{ token: SwapToken | undefined }> = ({ token }) => {
+const TokenAvatar: React.FC<{
+  token: SwapToken | undefined;
+  size?: "sm" | "lg";
+}> = ({ token, size = "sm" }) => {
+  const dim = size === "lg" ? "w-10 h-10" : "h-7 w-7";
+  const border = size === "lg" ? "" : "border border-zinc-700";
+
   if (!token) {
     return (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 text-[10px] text-zinc-300">
+      <div
+        className={`flex ${dim} items-center justify-center rounded-full bg-zinc-800 text-[10px] text-zinc-300`}
+      >
         ?
       </div>
     );
@@ -1483,12 +1576,14 @@ const TokenAvatar: React.FC<{ token: SwapToken | undefined }> = ({ token }) => {
 
   if (token.logo) {
     return (
-      <div className="relative h-7 w-7 overflow-hidden rounded-full border border-zinc-700 bg-zinc-900">
+      <div
+        className={`relative ${dim} overflow-hidden rounded-full ${border} bg-zinc-900 flex-shrink-0`}
+      >
         <Image
           src={token.logo}
           alt={token.name}
           fill
-          sizes="28px"
+          sizes={size === "lg" ? "40px" : "28px"}
           className="object-cover"
         />
       </div>
@@ -1496,7 +1591,9 @@ const TokenAvatar: React.FC<{ token: SwapToken | undefined }> = ({ token }) => {
   }
 
   return (
-    <div className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] font-semibold text-zinc-100">
+    <div
+      className={`flex ${dim} items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] font-semibold text-zinc-100 flex-shrink-0`}
+    >
       {token.symbol.slice(0, 3).toUpperCase()}
     </div>
   );
