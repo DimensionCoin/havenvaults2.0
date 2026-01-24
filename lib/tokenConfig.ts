@@ -442,6 +442,17 @@ export const CRYPTO_TOKENS: TokenMeta[] = [
     mints: { mainnet: "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g" },
   },
   {
+    name: "Avalanche",
+    symbol: "AVAX",
+    id: "avalanche-wormhole",
+    logo: "/logos/avax.png",
+    kind: "crypto",
+    categories: ["DeFi", "Infrastructure"],
+    tags: ["DEX"],
+    decimals: 9,
+    mints: { mainnet: "KgV1GvrHQmRBY8sHQQeUKwTm2r2h8t4C8qt12Cw1HVE" },
+  },
+  {
     name: "Jito",
     symbol: "JTO",
     id: "jito-governance-token",

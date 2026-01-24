@@ -209,7 +209,7 @@ const Deposit: React.FC<DepositProps> = ({
   onSuccess,
 }) => {
   const { user } = useUser();
-  const { displayCurrency: balanceDisplayCurrency, fxRate } = useBalance();
+  const { displayCurrency: balanceDisplayCurrency } = useBalance();
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -248,8 +248,7 @@ const Deposit: React.FC<DepositProps> = ({
   }, [balanceDisplayCurrency, user?.displayCurrency]);
 
   const symbol = CURRENCY_SYMBOLS[currency] || currency;
-  const effectiveFx = fxRate > 0 ? fxRate : 1;
-  const laneBalanceDisplay = balanceUsd * effectiveFx || 0;
+  const laneBalanceDisplay = Number.isFinite(balanceUsd) ? balanceUsd : 0;
 
   // Determine if user is in a Guest Checkout eligible country
   const userCountry = useMemo(() => {

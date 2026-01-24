@@ -1,4 +1,3 @@
-// components/exchange/FeaturedMovers.tsx
 "use client";
 
 import React from "react";
@@ -6,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import type { AssetRow, Movers } from "./types";
+import { useBalance } from "@/providers/BalanceProvider";
 
 type Props = {
   title?: string; // optional, but we’ll keep the “two sections” look
@@ -25,10 +25,32 @@ type Props = {
   loading?: boolean;
 };
 
-function fmtUsd(n?: number) {
+function norm3(s?: string) {
+  return (s || "").trim().toUpperCase();
+}
+
+// Intl doesn't know "USDC", format as USD symbol
+function intlCurrencyCode(displayCurrency?: string) {
+  const c = norm3(displayCurrency);
+  return c === "USDC" ? "USD" : c || "USD";
+}
+
+function fmtMoney(n: number | undefined, displayCurrency?: string) {
   if (n === undefined || n === null || Number.isNaN(n)) return "—";
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  return `$${n.toFixed(6)}`;
+
+  const code = intlCurrencyCode(displayCurrency);
+
+  const opts: Intl.NumberFormatOptions =
+    n >= 1
+      ? { style: "currency", currency: code, maximumFractionDigits: 2 }
+      : { style: "currency", currency: code, maximumFractionDigits: 6 };
+
+  try {
+    return new Intl.NumberFormat(undefined, opts).format(n);
+  } catch {
+    const prefix = code === "USD" ? "$" : `${code} `;
+    return n >= 1 ? `${prefix}${n.toFixed(2)}` : `${prefix}${n.toFixed(6)}`;
+  }
 }
 
 function fmtChange(n?: number) {
@@ -62,14 +84,25 @@ function MoverCard({
   type,
   href,
   onClick,
+  displayCurrency,
+  fxRate,
 }: {
   asset: AssetRow;
   type: "gainer" | "loser";
   href: string;
   onClick?: () => void;
+  displayCurrency: string;
+  fxRate: number;
 }) {
   const isGainer = type === "gainer";
   const change = asset.changePct24h;
+
+  const rate = Number.isFinite(fxRate) && fxRate > 0 ? fxRate : 1;
+
+  const priceDisplay =
+    typeof asset.priceUsd === "number" && Number.isFinite(asset.priceUsd)
+      ? asset.priceUsd * rate
+      : undefined;
 
   return (
     <Link
@@ -123,7 +156,7 @@ function MoverCard({
         <div className="mt-3 flex items-end justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[13px] font-semibold text-foreground">
-              {fmtUsd(asset.priceUsd)}
+              {fmtMoney(priceDisplay, displayCurrency)}
             </div>
             <div className="mt-1 text-[11px] text-muted-foreground">Price</div>
           </div>
@@ -158,45 +191,46 @@ export default function FeaturedMovers({
   onAssetClick,
   loading = false,
 }: Props) {
+  const { displayCurrency, fxRate } = useBalance();
+
   const gainers = movers.gainers.slice(0, limit);
   const losers = movers.losers.slice(0, limit);
 
- if (loading) {
-   return (
-     <div className={["space-y-6", className ?? ""].join(" ")}>
-       <div>
-         <div className="mb-2 flex items-center justify-between">
-           <div className="h-5 w-28 animate-pulse rounded-full bg-border/60" />
-           <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
-         </div>
-         <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
-           {Array.from({ length: limit }).map((_, i) => (
-             <div
-               key={i}
-               className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
-             />
-           ))}
-         </div>
-       </div>
+  if (loading) {
+    return (
+      <div className={["space-y-6", className ?? ""].join(" ")}>
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="h-5 w-28 animate-pulse rounded-full bg-border/60" />
+            <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
+          </div>
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+            {Array.from({ length: limit }).map((_, i) => (
+              <div
+                key={i}
+                className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
+              />
+            ))}
+          </div>
+        </div>
 
-       <div>
-         <div className="mb-2 flex items-center justify-between">
-           <div className="h-5 w-24 animate-pulse rounded-full bg-border/60" />
-           <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
-         </div>
-         <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
-           {Array.from({ length: limit }).map((_, i) => (
-             <div
-               key={i}
-               className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
-             />
-           ))}
-         </div>
-       </div>
-     </div>
-   );
- }
-
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="h-5 w-24 animate-pulse rounded-full bg-border/60" />
+            <div className="h-3 w-10 animate-pulse rounded bg-border/60" />
+          </div>
+          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+            {Array.from({ length: limit }).map((_, i) => (
+              <div
+                key={i}
+                className="h-[112px] w-[178px] shrink-0 animate-pulse rounded-3xl border border-border bg-card/60"
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (gainers.length === 0 && losers.length === 0) return null;
 
@@ -220,6 +254,8 @@ export default function FeaturedMovers({
                 type="gainer"
                 href={toHref(a)}
                 onClick={() => onAssetClick?.(a)}
+                displayCurrency={displayCurrency}
+                fxRate={fxRate}
               />
             ))}
           </div>
@@ -242,6 +278,8 @@ export default function FeaturedMovers({
                 type="loser"
                 href={toHref(a)}
                 onClick={() => onAssetClick?.(a)}
+                displayCurrency={displayCurrency}
+                fxRate={fxRate}
               />
             ))}
           </div>
