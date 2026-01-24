@@ -14,11 +14,13 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  CheckCircle2,
   Copy,
   CreditCard,
   ExternalLink,
   Info,
   Loader2,
+  RefreshCw,
   Shield,
   ShieldCheck,
   Wallet,
@@ -40,6 +42,7 @@ type DepositProps = {
 type DepositTab = "bank" | "crypto";
 type BankStep = "amount" | "confirm";
 type FlowType = "guest" | "coinbase_login";
+type PostCheckoutState = "checking" | "success" | "no_change" | null;
 
 type FeeInfo = {
   coinbaseFee?: { currency: string; value: string };
@@ -209,7 +212,12 @@ const Deposit: React.FC<DepositProps> = ({
   onSuccess,
 }) => {
   const { user } = useUser();
-  const { displayCurrency: balanceDisplayCurrency } = useBalance();
+  const {
+    displayCurrency: balanceDisplayCurrency,
+    usdcUsd,
+    refresh,
+    refreshNow,
+  } = useBalance();
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -229,6 +237,19 @@ const Deposit: React.FC<DepositProps> = ({
     null,
   );
   const [feeInfo, setFeeInfo] = useState<FeeInfo | null>(null);
+
+  // Post-checkout state for balance checking
+  const [postCheckoutState, setPostCheckoutState] =
+    useState<PostCheckoutState>(null);
+
+  const [balanceBeforeCheckout, setBalanceBeforeCheckout] = useState<
+    number | null
+  >(null);
+
+  const [newBalance, setNewBalance] = useState<number | null>(null);
+
+  const pollCountRef = useRef(0);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Crypto deposit state
   const [copied, setCopied] = useState(false);
@@ -282,13 +303,23 @@ const Deposit: React.FC<DepositProps> = ({
     ? canProceedToConfirm && acknowledged
     : acknowledged;
 
+  // Cleanup polling on unmount
+  const cleanupPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    pollCountRef.current = 0;
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       popupRef.current?.cleanup?.();
       popupRef.current = null;
+      cleanupPolling();
     };
-  }, []);
+  }, [cleanupPolling]);
 
   // Lock body scroll while open
   useEffect(() => {
@@ -314,9 +345,13 @@ const Deposit: React.FC<DepositProps> = ({
     setFlowType(null);
     setQuoteMethod(null);
     setFeeInfo(null);
+    setPostCheckoutState(null);
+    setBalanceBeforeCheckout(null);
+    setNewBalance(null);
+    cleanupPolling();
     popupRef.current?.cleanup?.();
     popupRef.current = null;
-  }, [open]);
+  }, [open, cleanupPolling]);
 
   const handleCopy = async () => {
     try {
@@ -328,15 +363,93 @@ const Deposit: React.FC<DepositProps> = ({
     }
   };
 
-  const handleOnrampSuccess = useCallback(async () => {
+  // Smart balance polling after checkout
+  const startBalancePolling = useCallback(
+    (balanceBefore: number) => {
+      cleanupPolling();
+      setPostCheckoutState("checking");
+      pollCountRef.current = 0;
+
+      const checkBalance = async () => {
+        pollCountRef.current += 1;
+
+        try {
+          await refreshNow();
+
+          // Small delay to let state update
+          await new Promise((r) => setTimeout(r, 100));
+        } catch (e) {
+          console.error("[Deposit] Balance refresh failed:", e);
+        }
+      };
+
+      // Initial check after 2 seconds (give Solana time to confirm)
+      setTimeout(async () => {
+        await checkBalance();
+      }, 2000);
+
+      // Then poll every 3 seconds for up to 30 seconds (10 attempts)
+      pollIntervalRef.current = setInterval(async () => {
+        if (pollCountRef.current >= 10) {
+          cleanupPolling();
+          // After 30 seconds of polling, show "no change detected" but still let them close
+          setPostCheckoutState("no_change");
+          return;
+        }
+
+        await checkBalance();
+      }, 3000);
+    },
+    [refreshNow, cleanupPolling],
+  );
+
+  // Watch for balance changes during polling
+  useEffect(() => {
+    if (postCheckoutState !== "checking" || balanceBeforeCheckout === null)
+      return;
+
+    // Check if balance increased
+    const currentBalance = usdcUsd;
+    if (currentBalance > balanceBeforeCheckout + 0.01) {
+      // At least 1 cent increase
+      cleanupPolling();
+      setNewBalance(currentBalance);
+      setPostCheckoutState("success");
+
+      // Call parent onSuccess
+      if (onSuccess) {
+        Promise.resolve(onSuccess()).catch(console.error);
+      }
+    }
+  }, [
+    usdcUsd,
+    postCheckoutState,
+    balanceBeforeCheckout,
+    cleanupPolling,
+    onSuccess,
+  ]);
+
+  const handleOnrampComplete = useCallback(async () => {
+    // Store current balance before we start checking
+    setBalanceBeforeCheckout(usdcUsd);
+
     setCheckoutOpen(false);
     setCoinbaseLaunching(false);
     setFlowType(null);
     setQuoteMethod(null);
     setFeeInfo(null);
-    if (onSuccess) await onSuccess();
-    setTimeout(() => onOpenChange(false), 500);
-  }, [onSuccess, onOpenChange]);
+
+    // Start polling for balance changes
+    startBalancePolling(usdcUsd);
+  }, [usdcUsd, startBalancePolling]);
+
+  const handleCloseAfterCheckout = useCallback(() => {
+    cleanupPolling();
+    setPostCheckoutState(null);
+    setBalanceBeforeCheckout(null);
+    setNewBalance(null);
+    onOpenChange(false);
+  }, [cleanupPolling, onOpenChange]);
 
   const launchCoinbase = useCallback(async () => {
     if (!canLaunchCoinbase) {
@@ -346,6 +459,9 @@ const Deposit: React.FC<DepositProps> = ({
 
     setCoinbaseError(null);
     setCoinbaseLaunching(true);
+
+    // Store balance before checkout
+    setBalanceBeforeCheckout(usdcUsd);
 
     try {
       const requestBody: OnrampSessionRequest = {
@@ -406,7 +522,7 @@ const Deposit: React.FC<DepositProps> = ({
       popupRef.current?.cleanup?.();
       popupRef.current = null;
 
-      const result = openCoinbasePopup(url, { onClosed: handleOnrampSuccess });
+      const result = openCoinbasePopup(url, { onClosed: handleOnrampComplete });
       popupRef.current = result;
 
       if (result.type === "popup") {
@@ -428,7 +544,8 @@ const Deposit: React.FC<DepositProps> = ({
     amountDisplay,
     isGuestCheckoutEligible,
     user?.country,
-    handleOnrampSuccess,
+    usdcUsd,
+    handleOnrampComplete,
   ]);
 
   const pressKey = useCallback((k: string) => {
@@ -453,13 +570,162 @@ const Deposit: React.FC<DepositProps> = ({
   const solanaAddressUri = `solana:${walletAddress}`;
 
   const close = () => {
-    if (coinbaseLaunching) return;
+    if (coinbaseLaunching || postCheckoutState === "checking") return;
     onOpenChange(false);
   };
 
   if (!open || !mounted) return null;
 
-  const canClose = !coinbaseLaunching;
+  const canClose = !coinbaseLaunching && postCheckoutState !== "checking";
+
+  // Post-checkout state - show checking/success/no_change screen
+  if (postCheckoutState) {
+    return createPortal(
+      <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+        <div className="relative w-full sm:max-w-md haven-card overflow-hidden h-[92dvh] sm:h-auto sm:max-h-[90vh] flex flex-col">
+          <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+            {postCheckoutState === "checking" && (
+              <>
+                <div className="relative">
+                  <RefreshCw className="h-10 w-10 text-primary animate-spin" />
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-foreground">
+                    Checking for your deposit...
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    We&apos;re watching for your funds to arrive. This usually
+                    takes 10-30 seconds.
+                  </div>
+                  <div className="mt-4 haven-card-soft px-4 py-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Balance before
+                      </span>
+                      <span className="font-medium text-foreground">
+                        {formatCurrency(balanceBeforeCheckout ?? 0, currency)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm mt-2">
+                      <span className="text-muted-foreground">Current</span>
+                      <span className="font-medium text-foreground">
+                        {formatCurrency(usdcUsd, currency)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    cleanupPolling();
+                    setPostCheckoutState(null);
+                    setCheckoutOpen(false);
+                  }}
+                  className="mt-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Cancel and return to deposit
+                </button>
+              </>
+            )}
+
+            {postCheckoutState === "success" && (
+              <>
+                <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                  <CheckCircle2 className="h-10 w-10 text-primary" />
+                </div>
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-foreground">
+                    Deposit received!
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Your funds have arrived in your account.
+                  </div>
+                  <div className="mt-4 haven-card-soft px-4 py-3 border-primary/20 bg-primary/5">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">New balance</span>
+                      <span className="font-semibold text-primary text-lg">
+                        {formatCurrency(newBalance ?? usdcUsd, currency)}
+                      </span>
+                    </div>
+                    {balanceBeforeCheckout !== null && newBalance !== null && (
+                      <div className="flex items-center justify-between text-sm mt-2">
+                        <span className="text-muted-foreground">Deposited</span>
+                        <span className="font-medium text-foreground">
+                          +
+                          {formatCurrency(
+                            newBalance - balanceBeforeCheckout,
+                            currency,
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={handleCloseAfterCheckout}
+                  className="mt-4 haven-btn-primary w-full"
+                >
+                  <Check className="w-4 h-4" />
+                  Done
+                </button>
+              </>
+            )}
+
+            {postCheckoutState === "no_change" && (
+              <>
+                <div className="w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center">
+                  <Info className="h-8 w-8 text-amber-500" />
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-foreground">
+                    No deposit detected yet
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    If you completed the purchase, your funds may still be
+                    processing. Coinbase deposits can take a few minutes to
+                    appear.
+                  </div>
+                  <div className="mt-4 haven-card-soft px-4 py-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Current balance
+                      </span>
+                      <span className="font-medium text-foreground">
+                        {formatCurrency(usdcUsd, currency)}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Don&apos;t worry - if you completed the purchase, your funds
+                    will appear soon. You can safely close this and check back
+                    later.
+                  </p>
+                </div>
+                <div className="mt-4 flex gap-2 w-full">
+                  <button
+                    onClick={() => {
+                      setPostCheckoutState("checking");
+                      startBalancePolling(balanceBeforeCheckout ?? usdcUsd);
+                    }}
+                    className="haven-btn-secondary flex-1"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Check again
+                  </button>
+                  <button
+                    onClick={handleCloseAfterCheckout}
+                    className="haven-btn-primary flex-1"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   // Checkout open state - show waiting screen
   if (checkoutOpen) {
@@ -484,7 +750,7 @@ const Deposit: React.FC<DepositProps> = ({
                     </span>
                   </>
                 ) : (
-                  "Finish in the secure Coinbase window. You can close it when done."
+                  "Finish in the secure Coinbase window. We'll check for your deposit when you're done."
                 )}
               </div>
               {quoteMethod === "quote" && (
@@ -492,9 +758,17 @@ const Deposit: React.FC<DepositProps> = ({
                   ✓ Your amount has been pre-filled
                 </div>
               )}
+              <div className="mt-3 haven-card-soft px-4 py-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Current balance</span>
+                  <span className="font-medium text-foreground">
+                    {formatCurrency(usdcUsd, currency)}
+                  </span>
+                </div>
+              </div>
               <div className="mt-2 text-[12px] text-muted-foreground/70">
-                After checkout, funds may take a moment to appear depending on
-                Coinbase processing times.
+                Close the Coinbase window when done and we&apos;ll check for
+                your deposit.
               </div>
             </div>
             <button
@@ -510,7 +784,7 @@ const Deposit: React.FC<DepositProps> = ({
               className="mt-2 haven-btn-secondary"
             >
               <X className="h-4 w-4" />
-              Close
+              Cancel
             </button>
           </div>
         </div>
@@ -1192,6 +1466,6 @@ const Deposit: React.FC<DepositProps> = ({
     </div>,
     document.body,
   );
-};
+};;
 
 export default Deposit;
