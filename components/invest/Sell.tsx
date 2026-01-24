@@ -224,31 +224,31 @@ function StageIcon({
 }) {
   if (icon === "success") {
     return (
-      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
-        <CheckCircle2 className="h-10 w-10 text-primary" />
+      <div className="w-14 h-14 rounded-2xl bg-primary/15 border border-primary/20 flex items-center justify-center">
+        <CheckCircle2 className="h-8 w-8 text-primary" />
       </div>
     );
   }
 
   if (icon === "error") {
     return (
-      <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
-        <XCircle className="h-10 w-10 text-destructive" />
+      <div className="w-14 h-14 rounded-2xl bg-destructive/15 border border-destructive/20 flex items-center justify-center">
+        <XCircle className="h-8 w-8 text-destructive" />
       </div>
     );
   }
 
   if (icon === "wallet") {
     return (
-      <div className="w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center animate-pulse">
-        <Wallet className="h-10 w-10 text-amber-500" />
+      <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/20 flex items-center justify-center animate-pulse">
+        <Wallet className="h-8 w-8 text-amber-500" />
       </div>
     );
   }
 
   return (
-    <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center">
-      <RefreshCw className="h-10 w-10 text-muted-foreground animate-spin" />
+    <div className="w-14 h-14 rounded-2xl bg-secondary border border-border flex items-center justify-center">
+      <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
     </div>
   );
 }
@@ -812,7 +812,6 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
   };
 
   const closeAfterSuccess = async () => {
-    // If success modal is showing, close drawer too (CoinPage-style)
     setModal(null);
     onOpenChange(false);
   };
@@ -850,13 +849,13 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   if (!mounted) return null;
 
-  // Render processing/success/error modal via portal (matches Deposit pattern)
+  // ✅ RESTYLED sell modal (processing/success/error) — functionality unchanged
   const renderSwapModal = () => {
     if (!modal) return null;
 
     return createPortal(
       <div
-        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-md px-3 sm:px-4"
         onClick={(e) => {
           if (e.target === e.currentTarget && modal.kind !== "processing") {
             closeModal();
@@ -864,116 +863,165 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
         }}
       >
         <div
-          className="relative w-full sm:max-w-md haven-card overflow-hidden h-auto max-h-[90vh] flex flex-col"
+          className={[
+            "relative w-full sm:max-w-md overflow-hidden",
+            "rounded-t-[28px] sm:rounded-[28px]",
+            "border border-border bg-background",
+            "shadow-[0_22px_80px_rgba(0,0,0,0.75)]",
+          ].join(" ")}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
-            {modal.kind === "processing" && stageConfig ? (
-              <>
-                <StageIcon icon={stageConfig.icon} />
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-foreground">
-                    {stageConfig.title}
-                  </div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    {stageConfig.subtitle}
-                  </div>
-                </div>
-                <div className="w-full max-w-[200px]">
-                  <ProgressBar progress={stageConfig.progress} />
-                </div>
-                {modal.fromSymbol && modal.toSymbol && (
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    {modal.fromSymbol} → {modal.toSymbol}
-                  </div>
-                )}
-                <div className="mt-4 text-center text-xs text-muted-foreground">
-                  Please don&apos;t close this window
-                </div>
-              </>
-            ) : modal.kind === "success" ? (
-              <>
-                <StageIcon icon="success" />
-                <div className="text-center">
-                  <div className="text-xl font-semibold text-foreground">
-                    Swap complete!
-                  </div>
-                  <div className="mt-2 text-sm text-muted-foreground">
-                    Your trade was successful
-                  </div>
-                </div>
+          {/* top glow */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent" />
 
-                {modal.signature && (
-                  <a
-                    href={explorerUrl(modal.signature)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-4 w-full haven-card-soft px-4 py-3 flex items-center justify-between hover:bg-accent transition group"
-                  >
-                    <span className="text-sm text-foreground">
-                      View transaction
-                    </span>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
-                  </a>
-                )}
+          {/* header */}
+          <div className="relative flex items-center justify-between px-5 pt-5">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-primary/70" />
+              <p className="text-[11px] font-medium text-muted-foreground">
+                Haven Swap
+              </p>
+            </div>
 
-                <div className="mt-4 flex gap-2 w-full">
-                  <button
-                    onClick={closeModal}
-                    className="haven-btn-secondary flex-1"
-                  >
-                    Close
-                  </button>
-                  <button
-                    onClick={() => {
-                      void closeAfterSuccess();
-                    }}
-                    className="haven-btn-primary flex-1"
-                  >
-                    Done
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <StageIcon icon="error" />
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-destructive">
-                    Order failed
-                  </div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    Something went wrong
-                  </div>
-                </div>
-
-                {modal.errorMessage && (
-                  <div className="mt-4 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-xl">
-                    <p className="text-[12px] text-destructive text-center">
-                      {modal.errorMessage}
-                    </p>
-                  </div>
-                )}
-
-                <div className="mt-4 flex gap-2 w-full">
-                  <button
-                    onClick={closeModal}
-                    className="haven-btn-secondary flex-1"
-                  >
-                    Close
-                  </button>
-                  <button
-                    onClick={() => {
-                      setModal(null);
-                      // Allow retry
-                    }}
-                    className="haven-btn-primary flex-1"
-                  >
-                    Try again
-                  </button>
-                </div>
-              </>
+            {modal.kind !== "processing" && (
+              <button
+                onClick={closeModal}
+                className="rounded-full border border-border bg-background/70 p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
             )}
           </div>
+
+          <div className="relative px-5 pb-5 pt-4">
+            <div className="flex flex-col items-center text-center gap-3">
+              {modal.kind === "processing" && stageConfig ? (
+                <>
+                  <StageIcon icon={stageConfig.icon} />
+
+                  <div>
+                    <div className="text-[18px] leading-tight font-semibold text-foreground">
+                      {stageConfig.title}
+                    </div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">
+                      {stageConfig.subtitle}
+                    </div>
+                  </div>
+
+                  <div className="w-full max-w-[240px] pt-1">
+                    <ProgressBar progress={stageConfig.progress} />
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span>Processing</span>
+                      <span>{stageConfig.progress}%</span>
+                    </div>
+                  </div>
+
+                  {modal.fromSymbol && modal.toSymbol && (
+                    <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-border bg-secondary/60 px-3 py-1 text-[11px] text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {modal.fromSymbol}
+                      </span>
+                      <span>→</span>
+                      <span className="font-medium text-foreground">
+                        {modal.toSymbol}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="mt-3 w-full rounded-2xl border border-border bg-secondary/40 px-4 py-3 text-[11px] text-muted-foreground">
+                    Please don&apos;t close this window while we submit and
+                    confirm your transaction.
+                  </div>
+                </>
+              ) : modal.kind === "success" ? (
+                <>
+                  <StageIcon icon="success" />
+
+                  <div>
+                    <div className="text-[20px] leading-tight font-semibold text-foreground">
+                      Swap complete
+                    </div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">
+                      Your trade was successful.
+                    </div>
+                  </div>
+
+                  {modal.signature && (
+                    <a
+                      href={explorerUrl(modal.signature)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 w-full rounded-2xl border border-border bg-secondary/40 px-4 py-3 flex items-center justify-between hover:bg-accent transition group"
+                    >
+                      <span className="text-[13px] text-foreground">
+                        View transaction
+                      </span>
+                      <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                    </a>
+                  )}
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 w-full">
+                    <button
+                      onClick={closeModal}
+                      className="h-11 rounded-full border border-border bg-secondary/40 text-[13px] font-semibold text-foreground hover:bg-accent transition"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => {
+                        void closeAfterSuccess();
+                      }}
+                      className="h-11 rounded-full bg-primary text-[13px] font-semibold text-black hover:opacity-90 transition"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <StageIcon icon="error" />
+
+                  <div>
+                    <div className="text-[18px] leading-tight font-semibold text-destructive">
+                      Order failed
+                    </div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">
+                      Something went wrong. You can try again.
+                    </div>
+                  </div>
+
+                  {modal.errorMessage && (
+                    <div className="mt-2 w-full rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3">
+                      <p className="text-[12px] text-destructive text-center">
+                        {modal.errorMessage}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 w-full">
+                    <button
+                      onClick={closeModal}
+                      className="h-11 rounded-full border border-border bg-secondary/40 text-[13px] font-semibold text-foreground hover:bg-accent transition"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => {
+                        setModal(null);
+                      }}
+                      className="h-11 rounded-full bg-primary text-[13px] font-semibold text-black hover:opacity-90 transition"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* mobile safe area */}
+          <div className="h-[calc(env(safe-area-inset-bottom)+10px)]" />
         </div>
       </div>,
       document.body,
@@ -1084,11 +1132,11 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           className={[
-            // base (theme)
-            "p-0 overflow-hidden border border-border bg-background py-2",
+            // base
+            "p-0 overflow-hidden border border-border bg-background",
 
             // desktop
-            "sm:w-[min(92vw,420px)] sm:max-w-[420px] sm:max-h-[90dvh] sm:rounded-[28px]",
+            "sm:w-[min(92vw,440px)] sm:max-w-[440px] sm:max-h-[90dvh] sm:rounded-[28px]",
             "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
 
             // mobile fullscreen
@@ -1097,32 +1145,48 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
             "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
           ].join(" ")}
         >
-          <div className="flex h-full flex-col">
+          <div className="relative flex h-full flex-col">
+            {/* subtle top glow */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent" />
+
             {/* Scrollable body */}
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 pt-[calc(env(safe-area-inset-top)+10px)] sm:px-4 sm:pb-4 sm:pt-3">
+            <div className="relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+14px)] sm:px-5 sm:pb-5 sm:pt-5">
               {!hasWalletTokens ? (
                 <DialogHeader className="pb-3">
-                  <DialogTitle className="text-sm font-semibold text-foreground">
+                  <DialogTitle className="text-[13px] font-semibold text-foreground">
                     Sell from your portfolio
                   </DialogTitle>
-                  <DialogDescription className="text-xs text-muted-foreground">
+                  <DialogDescription className="text-[12px] text-muted-foreground">
                     You don&apos;t have any tokens to sell yet.
                   </DialogDescription>
                 </DialogHeader>
               ) : (
                 <>
                   <DialogHeader className="pb-3">
-                    <DialogTitle className="text-sm font-semibold text-foreground">
-                      Sell
-                    </DialogTitle>
-                    <DialogDescription className="text-[11px] text-muted-foreground">
-                      Sell your assets for cash or swap to another asset.
-                    </DialogDescription>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <DialogTitle className="text-[14px] font-semibold text-foreground">
+                          Sell
+                        </DialogTitle>
+                        <DialogDescription className="text-[12px] text-muted-foreground">
+                          Sell your assets for cash or swap to another asset.
+                        </DialogDescription>
+                      </div>
+
+                      <DialogClose asChild>
+                        <button
+                          className="mt-0.5 rounded-full border border-border bg-background/70 p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition"
+                          aria-label="Close"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </DialogClose>
+                    </div>
                   </DialogHeader>
 
                   <div className="flex flex-col gap-3 text-xs text-foreground">
                     {/* SELL panel */}
-                    <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
+                    <div className="rounded-[22px] border border-border bg-secondary/20 px-4 py-4">
                       <div className="mb-2 flex items-center justify-between text-[11px]">
                         <span className="text-muted-foreground">Sell</span>
                         {fromWallet && (
@@ -1136,7 +1200,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                               type="button"
                               disabled={swapBusy}
                               onClick={handleMax}
-                              className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
+                              className="rounded-full border border-border bg-background/70 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
                             >
                               Max
                             </button>
@@ -1156,7 +1220,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                               setAmount(sanitizeAmount(e.target.value));
                             }}
                             placeholder="0.00"
-                            className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+                            className="w-full bg-transparent text-left text-[28px] leading-none font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
                           />
                           <p className="mt-1 text-[11px] text-muted-foreground">
                             {estFromUsd > 0
@@ -1169,12 +1233,12 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                           </p>
                         </div>
 
-                        <div className="w-[152px] text-left">
+                        <div className="w-[168px] text-left">
                           <button
                             type="button"
                             disabled={swapBusy}
                             onClick={() => openPicker("from")}
-                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/70 px-3 py-2.5 hover:bg-accent disabled:opacity-60 transition"
                           >
                             <div className="flex items-center gap-2">
                               <TokenAvatar token={fromToken} />
@@ -1203,7 +1267,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       )}
 
                       {feePreview && (
-                        <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                        <div className="mt-3 rounded-2xl border border-border bg-background/60 px-4 py-3 text-[10px] text-muted-foreground">
                           <div className="flex items-center justify-between">
                             <span>
                               Haven fee ({(feePreview.feeBps / 100).toFixed(2)}
@@ -1229,7 +1293,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                         type="button"
                         disabled={swapBusy}
                         onClick={handleSwapSides}
-                        className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/60 text-foreground hover:bg-accent disabled:opacity-60"
+                        className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/70 text-foreground hover:bg-accent disabled:opacity-60 transition"
                         title="Swap sides (only works if the Receive token is one you own)"
                       >
                         <ArrowDown className="h-4 w-4" />
@@ -1237,7 +1301,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     </div>
 
                     {/* RECEIVE panel */}
-                    <div className="rounded-2xl border border-border bg-background/40 px-3.5 py-3.5">
+                    <div className="rounded-[22px] border border-border bg-secondary/20 px-4 py-4">
                       <div className="mb-2 flex items-center justify-between text-[11px]">
                         <span className="text-muted-foreground">Receive</span>
                         {cashToken && toToken?.kind === "cash" && (
@@ -1248,12 +1312,12 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       </div>
 
                       <div className="flex items-center justify-between gap-3">
-                        <div className="w-[152px] text-left">
+                        <div className="w-[168px] text-left">
                           <button
                             type="button"
                             disabled={swapBusy}
                             onClick={() => openPicker("to")}
-                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/70 px-3 py-2.5 hover:bg-accent disabled:opacity-60 transition"
                           >
                             <div className="flex items-center gap-2">
                               <TokenAvatar token={toToken} />
@@ -1271,7 +1335,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                         </div>
 
                         <div className="flex-1 text-right">
-                          <p className="text-xl font-semibold text-foreground">
+                          <p className="text-[22px] leading-none font-semibold text-foreground">
                             {quoteLoading
                               ? "…"
                               : quote
@@ -1289,7 +1353,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       </div>
 
                       {(quote?.routeText || quote?.priceImpactPctText) && (
-                        <div className="mt-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                        <div className="mt-3 rounded-2xl border border-border bg-background/60 px-4 py-3 text-[10px] text-muted-foreground">
                           {quote?.routeText && (
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-muted-foreground">
@@ -1314,14 +1378,14 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                       )}
 
                       {quoteErr && (
-                        <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                        <div className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[11px] text-destructive">
                           {quoteErr}
                         </div>
                       )}
                     </div>
 
                     {/* rate row */}
-                    <div className="mt-1 rounded-full border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                    <div className="mt-1 rounded-full border border-border bg-background/70 px-4 py-2 text-[10px] text-muted-foreground">
                       1 {fromToken?.symbol} ≈{" "}
                       {quote && feePreview
                         ? (() => {
@@ -1351,7 +1415,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                     )}
 
                     {errorToShow && modal?.kind !== "error" && (
-                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[11px] text-destructive">
                         {errorToShow}
                       </div>
                     )}
@@ -1375,16 +1439,16 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
             </div>
 
             {/* Pinned footer */}
-            <DialogFooter className="shrink-0 border-t border-border bg-background/95 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+12px)] sm:px-4 sm:py-3 sm:pb-3">
+            <DialogFooter className="relative shrink-0 border-t border-border bg-background/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:py-4 sm:pb-4">
               {!hasWalletTokens ? (
                 <DialogClose asChild>
-                  <Button variant="outline" className="w-full">
+                  <Button variant="outline" className="w-full rounded-full">
                     Close
                   </Button>
                 </DialogClose>
               ) : (
                 <Button
-                  className="w-full rounded-full"
+                  className="w-full rounded-full h-11"
                   disabled={!canSubmit}
                   onClick={handleSubmit}
                 >
