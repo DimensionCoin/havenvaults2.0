@@ -1022,7 +1022,7 @@ const Deposit: React.FC<DepositProps> = ({
                 </h3>
                 <p className="mt-2 text-sm text-muted-foreground max-w-xs mx-auto">
                   You&apos;ll be redirected to Coinbase to complete your
-                  deposit. Enter your amount there.
+                  deposit.
                 </p>
               </div>
 

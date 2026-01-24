@@ -37,17 +37,6 @@ import {
   type TokenMeta,
 } from "@/lib/tokenConfig";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-  DialogClose,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-
 const CLUSTER = getCluster();
 const ENV_USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || "";
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || "";
@@ -160,25 +149,25 @@ const STAGE_CONFIG: Record<
   idle: { title: "", subtitle: "", progress: 0, icon: "spinner" },
   building: {
     title: "Preparing order",
-    subtitle: "Finding best route...",
+    subtitle: "Finding best route…",
     progress: 15,
     icon: "spinner",
   },
   signing: {
-    title: "Approving the transaction",
-    subtitle: "Approving the transaction with exchange",
+    title: "Approving transaction",
+    subtitle: "Approving with your wallet…",
     progress: 30,
     icon: "wallet",
   },
   sending: {
     title: "Submitting",
-    subtitle: "Broadcasting to network...",
+    subtitle: "Broadcasting to network…",
     progress: 60,
     icon: "spinner",
   },
   confirming: {
     title: "Confirming",
-    subtitle: "Waiting for network...",
+    subtitle: "Waiting for network…",
     progress: 85,
     icon: "spinner",
   },
@@ -224,31 +213,31 @@ function StageIcon({
 }) {
   if (icon === "success") {
     return (
-      <div className="w-14 h-14 rounded-2xl bg-primary/15 border border-primary/20 flex items-center justify-center">
-        <CheckCircle2 className="h-8 w-8 text-primary" />
+      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+        <CheckCircle2 className="h-10 w-10 text-primary" />
       </div>
     );
   }
 
   if (icon === "error") {
     return (
-      <div className="w-14 h-14 rounded-2xl bg-destructive/15 border border-destructive/20 flex items-center justify-center">
-        <XCircle className="h-8 w-8 text-destructive" />
+      <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
+        <XCircle className="h-10 w-10 text-destructive" />
       </div>
     );
   }
 
   if (icon === "wallet") {
     return (
-      <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/20 flex items-center justify-center animate-pulse">
-        <Wallet className="h-8 w-8 text-amber-500" />
+      <div className="w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center animate-pulse">
+        <Wallet className="h-10 w-10 text-amber-500" />
       </div>
     );
   }
 
   return (
-    <div className="w-14 h-14 rounded-2xl bg-secondary border border-border flex items-center justify-center">
-      <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
+    <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center">
+      <RefreshCw className="h-10 w-10 text-muted-foreground animate-spin" />
     </div>
   );
 }
@@ -319,7 +308,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     isBusy: swapBusy,
   } = useServerSponsoredSwap();
 
-  // ✅ coinpage-style modal state
+  // coinpage-style modal state
   const [modal, setModal] = useState<ModalState>(null);
 
   const closeModal = useCallback(() => {
@@ -327,7 +316,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     setModal(null);
   }, [modal]);
 
-  // ✅ refresh balances AFTER modal closes (success only)
+  // refresh balances AFTER modal closes (success only)
   const [refreshOnClose, setRefreshOnClose] = useState(false);
   const [lastSwapSig, setLastSwapSig] = useState<string | null>(null);
   const refreshInFlight = useRef(false);
@@ -489,7 +478,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     });
   }, [toTokenOptions]);
 
-  // Reset when modal closes
+  // Reset when closed
   useEffect(() => {
     if (!open) {
       setPickerSide(null);
@@ -677,7 +666,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
             body: JSON.stringify({
               inputMint: fromToken.mint,
               outputMint: toToken.mint,
-              amount: netUnits.toString(), // base units
+              amount: netUnits.toString(),
               slippageBps: 50,
             }),
             cache: "no-store",
@@ -694,7 +683,6 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
           }
 
           const outDec = getMintDecimalsCached(toToken.mint) ?? 6;
-
           const outUi = formatUnits(String(json?.outAmount || "0"), outDec, 6);
           const minUi = formatUnits(
             String(json?.otherAmountThreshold || "0"),
@@ -805,8 +793,8 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
       setModal({
         kind: "error",
         errorMessage: msg,
-        fromSymbol: fromToken.symbol,
-        toSymbol: toToken.symbol,
+        fromSymbol: fromToken?.symbol,
+        toSymbol: toToken?.symbol,
       });
     }
   };
@@ -841,194 +829,192 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
 
   const hasWalletTokens = walletTokens.length > 0;
 
-  // coinpage stage config uses swapStatus while modal processing
   const currentStage = modal?.kind === "processing" ? swapStatus : null;
   const stageConfig = currentStage ? STAGE_CONFIG[currentStage] : null;
 
   const errorToShow = swapErr?.message || null;
 
-  if (!mounted) return null;
+  const canClose = !swapBusy && modal?.kind !== "processing";
 
-  // ✅ RESTYLED sell modal (processing/success/error) — functionality unchanged
+  const close = () => {
+    if (!canClose) return;
+    onOpenChange(false);
+  };
+
+  if (!open || !mounted) return null;
+
+  /* ------------------------------------------------------------------ */
+  /* Deposit-style overlays (portal), matching your Deposit modal shell  */
+  /* ------------------------------------------------------------------ */
+
   const renderSwapModal = () => {
     if (!modal) return null;
 
     return createPortal(
       <div
-        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-md px-3 sm:px-4"
+        className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
         onClick={(e) => {
-          if (e.target === e.currentTarget && modal.kind !== "processing") {
+          if (e.target === e.currentTarget && modal.kind !== "processing")
             closeModal();
-          }
         }}
       >
         <div
           className={[
-            "relative w-full sm:max-w-md overflow-hidden",
-            "rounded-t-[28px] sm:rounded-[28px]",
-            "border border-border bg-background",
-            "shadow-[0_22px_80px_rgba(0,0,0,0.75)]",
+            "relative w-full sm:max-w-md haven-card overflow-hidden",
+            "max-sm:rounded-t-[28px] sm:rounded-[28px]",
+            "h-auto max-h-[90vh] flex flex-col",
           ].join(" ")}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* top glow */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent" />
-
-          {/* header */}
-          <div className="relative flex items-center justify-between px-5 pt-5">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-primary/70" />
-              <p className="text-[11px] font-medium text-muted-foreground">
-                Haven Swap
-              </p>
+          {/* Top bar (Deposit-style) */}
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
+            <div className="flex flex-col">
+              <div className="text-[15px] font-semibold text-foreground">
+                {modal.kind === "processing"
+                  ? "Processing"
+                  : modal.kind === "success"
+                    ? "Complete"
+                    : "Failed"}
+              </div>
+              <div className="text-[12px] text-muted-foreground">
+                {modal.kind === "processing"
+                  ? "Don’t close Haven while we finish."
+                  : modal.kind === "success"
+                    ? "Your trade went through."
+                    : "We couldn’t complete that trade."}
+              </div>
             </div>
 
-            {modal.kind !== "processing" && (
-              <button
-                onClick={closeModal}
-                className="rounded-full border border-border bg-background/70 p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
+            <button
+              onClick={() => {
+                if (modal.kind !== "processing") closeModal();
+              }}
+              className="haven-icon-btn !w-9 !h-9"
+              aria-label="Close"
+              disabled={modal.kind === "processing"}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+            {modal.kind === "processing" && stageConfig ? (
+              <>
+                <StageIcon icon={stageConfig.icon} />
+
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-foreground">
+                    {stageConfig.title}
+                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    {stageConfig.subtitle}
+                  </div>
+                </div>
+
+                <div className="w-full max-w-[220px]">
+                  <ProgressBar progress={stageConfig.progress} />
+                </div>
+
+                {modal.fromSymbol && modal.toSymbol && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {modal.fromSymbol} → {modal.toSymbol}
+                  </div>
+                )}
+
+                <div className="mt-3 w-full rounded-2xl border border-border bg-background/60 px-4 py-3 text-center text-[11px] text-muted-foreground">
+                  This can take a few seconds.
+                </div>
+              </>
+            ) : modal.kind === "success" ? (
+              <>
+                <StageIcon icon="success" />
+
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-foreground">
+                    Swap complete
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Funds will update shortly.
+                  </div>
+                </div>
+
+                {modal.signature && (
+                  <a
+                    href={explorerUrl(modal.signature)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-4 w-full haven-card-soft px-4 py-3 flex items-center justify-between hover:bg-accent transition group"
+                  >
+                    <span className="text-sm text-foreground">
+                      View transaction
+                    </span>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                  </a>
+                )}
+
+                <div className="mt-4 flex gap-2 w-full">
+                  <button
+                    onClick={closeModal}
+                    className="haven-btn-secondary flex-1"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      void closeAfterSuccess();
+                    }}
+                    className="haven-btn-primary flex-1"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <StageIcon icon="error" />
+
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-destructive">
+                    Order failed
+                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    Try again in a moment.
+                  </div>
+                </div>
+
+                {modal.errorMessage && (
+                  <div className="mt-4 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-2xl">
+                    <p className="text-[12px] text-destructive text-center">
+                      {modal.errorMessage}
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-4 flex gap-2 w-full">
+                  <button
+                    onClick={closeModal}
+                    className="haven-btn-secondary flex-1"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      setModal(null);
+                    }}
+                    className="haven-btn-primary flex-1"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </>
             )}
           </div>
-
-          <div className="relative px-5 pb-5 pt-4">
-            <div className="flex flex-col items-center text-center gap-3">
-              {modal.kind === "processing" && stageConfig ? (
-                <>
-                  <StageIcon icon={stageConfig.icon} />
-
-                  <div>
-                    <div className="text-[18px] leading-tight font-semibold text-foreground">
-                      {stageConfig.title}
-                    </div>
-                    <div className="mt-1 text-[12px] text-muted-foreground">
-                      {stageConfig.subtitle}
-                    </div>
-                  </div>
-
-                  <div className="w-full max-w-[240px] pt-1">
-                    <ProgressBar progress={stageConfig.progress} />
-                    <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>Processing</span>
-                      <span>{stageConfig.progress}%</span>
-                    </div>
-                  </div>
-
-                  {modal.fromSymbol && modal.toSymbol && (
-                    <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-border bg-secondary/60 px-3 py-1 text-[11px] text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        {modal.fromSymbol}
-                      </span>
-                      <span>→</span>
-                      <span className="font-medium text-foreground">
-                        {modal.toSymbol}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="mt-3 w-full rounded-2xl border border-border bg-secondary/40 px-4 py-3 text-[11px] text-muted-foreground">
-                    Please don&apos;t close this window while we submit and
-                    confirm your transaction.
-                  </div>
-                </>
-              ) : modal.kind === "success" ? (
-                <>
-                  <StageIcon icon="success" />
-
-                  <div>
-                    <div className="text-[20px] leading-tight font-semibold text-foreground">
-                      Swap complete
-                    </div>
-                    <div className="mt-1 text-[12px] text-muted-foreground">
-                      Your trade was successful.
-                    </div>
-                  </div>
-
-                  {modal.signature && (
-                    <a
-                      href={explorerUrl(modal.signature)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 w-full rounded-2xl border border-border bg-secondary/40 px-4 py-3 flex items-center justify-between hover:bg-accent transition group"
-                    >
-                      <span className="text-[13px] text-foreground">
-                        View transaction
-                      </span>
-                      <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
-                    </a>
-                  )}
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 w-full">
-                    <button
-                      onClick={closeModal}
-                      className="h-11 rounded-full border border-border bg-secondary/40 text-[13px] font-semibold text-foreground hover:bg-accent transition"
-                    >
-                      Close
-                    </button>
-                    <button
-                      onClick={() => {
-                        void closeAfterSuccess();
-                      }}
-                      className="h-11 rounded-full bg-primary text-[13px] font-semibold text-black hover:opacity-90 transition"
-                    >
-                      Done
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <StageIcon icon="error" />
-
-                  <div>
-                    <div className="text-[18px] leading-tight font-semibold text-destructive">
-                      Order failed
-                    </div>
-                    <div className="mt-1 text-[12px] text-muted-foreground">
-                      Something went wrong. You can try again.
-                    </div>
-                  </div>
-
-                  {modal.errorMessage && (
-                    <div className="mt-2 w-full rounded-2xl border border-destructive/25 bg-destructive/10 px-4 py-3">
-                      <p className="text-[12px] text-destructive text-center">
-                        {modal.errorMessage}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 w-full">
-                    <button
-                      onClick={closeModal}
-                      className="h-11 rounded-full border border-border bg-secondary/40 text-[13px] font-semibold text-foreground hover:bg-accent transition"
-                    >
-                      Close
-                    </button>
-                    <button
-                      onClick={() => {
-                        setModal(null);
-                      }}
-                      className="h-11 rounded-full bg-primary text-[13px] font-semibold text-black hover:opacity-90 transition"
-                    >
-                      Try again
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* mobile safe area */}
-          <div className="h-[calc(env(safe-area-inset-bottom)+10px)]" />
         </div>
       </div>,
       document.body,
     );
   };
 
-  // Render token picker modal via portal (matches Deposit pattern)
   const renderPickerModal = () => {
     if (!pickerSide) return null;
 
@@ -1040,10 +1026,13 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
         }}
       >
         <div
-          className="relative w-full sm:max-w-md haven-card overflow-hidden h-[70vh] sm:h-auto sm:max-h-[70vh] flex flex-col"
+          className={[
+            "relative w-full sm:max-w-md haven-card overflow-hidden",
+            "max-sm:rounded-t-[28px] sm:rounded-[28px]",
+            "h-[75vh] sm:h-auto sm:max-h-[70vh] flex flex-col",
+          ].join(" ")}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Header */}
           <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
             <div className="flex items-center justify-between">
               <h2 className="text-[15px] font-semibold text-foreground">
@@ -1054,6 +1043,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
               <button
                 onClick={closePicker}
                 className="haven-icon-btn !w-9 !h-9"
+                aria-label="Close"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1064,12 +1054,11 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                 value={pickerSearch}
                 onChange={(e) => setPickerSearch(e.target.value)}
                 placeholder="Search by name or symbol"
-                className="w-full rounded-xl border border-border bg-secondary px-4 py-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
+                className="w-full rounded-2xl border border-border bg-secondary px-4 py-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/30"
               />
             </div>
           </div>
 
-          {/* Token list */}
           <div className="flex-1 overflow-y-auto overscroll-contain p-2">
             <div className="space-y-1">
               {currentPickerTokens.map((t) => (
@@ -1078,7 +1067,7 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
                   type="button"
                   onClick={() => handlePickToken(t)}
                   className={[
-                    "flex w-full items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-accent transition",
+                    "flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left hover:bg-accent transition",
                     (pickerSide === "from" && t.mint === fromMint) ||
                     (pickerSide === "to" && t.mint === toMint)
                       ? "bg-accent"
@@ -1127,347 +1116,354 @@ const SellDrawer: React.FC<SellDrawerProps> = ({
     );
   };
 
-  return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent
-          className={[
-            // base
-            "p-0 overflow-hidden border border-border bg-background",
+  /* ------------------------------------------------------------------ */
+  /* Deposit-style main modal (no Drawer, no shadcn Dialog)              */
+  /* ------------------------------------------------------------------ */
 
-            // desktop
-            "sm:w-[min(92vw,440px)] sm:max-w-[440px] sm:max-h-[90dvh] sm:rounded-[28px]",
-            "sm:shadow-[0_18px_60px_rgba(0,0,0,0.85)]",
+  const body = (
+    <div
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+      onClick={(e) => {
+        if (canClose && e.target === e.currentTarget) close();
+      }}
+    >
+      <div
+        className="relative w-full sm:max-w-md haven-card overflow-hidden h-[92dvh] sm:h-auto sm:max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header (Deposit-style) */}
+        <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-[15px] font-semibold text-foreground tracking-tight">
+                Sell
+              </h2>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Sell your assets for cash or swap into another token.
+              </p>
+            </div>
 
-            // mobile fullscreen
-            "max-sm:!inset-0 max-sm:!w-screen max-sm:!max-w-none",
-            "max-sm:!h-[100dvh] max-sm:!max-h-[100dvh] max-sm:!rounded-none",
-            "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-          ].join(" ")}
-        >
-          <div className="relative flex h-full flex-col">
-            {/* subtle top glow */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent" />
+            <button
+              type="button"
+              onClick={close}
+              disabled={!canClose}
+              className="haven-icon-btn !w-9 !h-9"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
 
-            {/* Scrollable body */}
-            <div className="relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-3 pt-[calc(env(safe-area-inset-top)+14px)] sm:px-5 sm:pb-5 sm:pt-5">
-              {!hasWalletTokens ? (
-                <DialogHeader className="pb-3">
-                  <DialogTitle className="text-[13px] font-semibold text-foreground">
-                    Sell from your portfolio
-                  </DialogTitle>
-                  <DialogDescription className="text-[12px] text-muted-foreground">
-                    You don&apos;t have any tokens to sell yet.
-                  </DialogDescription>
-                </DialogHeader>
-              ) : (
-                <>
-                  <DialogHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <DialogTitle className="text-[14px] font-semibold text-foreground">
-                          Sell
-                        </DialogTitle>
-                        <DialogDescription className="text-[12px] text-muted-foreground">
-                          Sell your assets for cash or swap to another asset.
-                        </DialogDescription>
-                      </div>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-2 sm:px-4 pb-2 sm:pb-4 pt-2">
+          {!hasWalletTokens ? (
+            <div className="haven-card-soft p-4 mt-2">
+              <div className="text-sm font-semibold text-foreground">
+                Nothing to sell yet
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Once you hold tokens in your portfolio, you’ll be able to sell
+                them here.
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {/* SELL card */}
+              <div className="haven-card-soft px-3.5 py-3.5">
+                <div className="mb-2 flex items-center justify-between text-[11px]">
+                  <span className="text-muted-foreground">Sell</span>
 
-                      <DialogClose asChild>
-                        <button
-                          className="mt-0.5 rounded-full border border-border bg-background/70 p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition"
-                          aria-label="Close"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </DialogClose>
-                    </div>
-                  </DialogHeader>
-
-                  <div className="flex flex-col gap-3 text-xs text-foreground">
-                    {/* SELL panel */}
-                    <div className="rounded-[22px] border border-border bg-secondary/20 px-4 py-4">
-                      <div className="mb-2 flex items-center justify-between text-[11px]">
-                        <span className="text-muted-foreground">Sell</span>
-                        {fromWallet && (
-                          <div className="flex items-center gap-2">
-                            {isMax && (
-                              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                                Max
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              disabled={swapBusy}
-                              onClick={handleMax}
-                              className="rounded-full border border-border bg-background/70 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
-                            >
-                              Max
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex-1">
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            disabled={swapBusy}
-                            value={amount}
-                            onChange={(e) => {
-                              setIsMax(false);
-                              setAmount(sanitizeAmount(e.target.value));
-                            }}
-                            placeholder="0.00"
-                            className="w-full bg-transparent text-left text-[28px] leading-none font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
-                          />
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            {estFromUsd > 0
-                              ? estFromUsd.toLocaleString("en-US", {
-                                  style: "currency",
-                                  currency: "USD",
-                                  maximumFractionDigits: 2,
-                                })
-                              : "$0.00"}
-                          </p>
-                        </div>
-
-                        <div className="w-[168px] text-left">
-                          <button
-                            type="button"
-                            disabled={swapBusy}
-                            onClick={() => openPicker("from")}
-                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/70 px-3 py-2.5 hover:bg-accent disabled:opacity-60 transition"
-                          >
-                            <div className="flex items-center gap-2">
-                              <TokenAvatar token={fromToken} />
-                              <div className="flex flex-col">
-                                <span className="text-[11px] font-semibold">
-                                  {fromToken?.symbol}
-                                </span>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {fromToken?.name}
-                                </span>
-                              </div>
-                            </div>
-                            <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {fromWallet && (
-                        <p className="mt-2 text-[10px] text-muted-foreground">
-                          Available:{" "}
-                          {fromWallet.amount.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
-                          })}{" "}
-                          {fromToken?.symbol}
-                        </p>
+                  {fromWallet && (
+                    <div className="flex items-center gap-2">
+                      {isMax && (
+                        <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          Max
+                        </span>
                       )}
 
-                      {feePreview && (
-                        <div className="mt-3 rounded-2xl border border-border bg-background/60 px-4 py-3 text-[10px] text-muted-foreground">
-                          <div className="flex items-center justify-between">
-                            <span>
-                              Haven fee ({(feePreview.feeBps / 100).toFixed(2)}
-                              %)
-                            </span>
-                            <span className="text-foreground">
-                              ~{feePreview.feeUi} {fromToken?.symbol}
-                            </span>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between">
-                            <span>Amount swapped (net)</span>
-                            <span className="text-foreground">
-                              ~{feePreview.netUi} {fromToken?.symbol}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Arrow */}
-                    <div className="flex justify-center">
                       <button
                         type="button"
                         disabled={swapBusy}
-                        onClick={handleSwapSides}
-                        className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/70 text-foreground hover:bg-accent disabled:opacity-60 transition"
-                        title="Swap sides (only works if the Receive token is one you own)"
+                        onClick={handleMax}
+                        className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] font-medium text-foreground/80 hover:bg-accent disabled:opacity-60"
                       >
-                        <ArrowDown className="h-4 w-4" />
+                        Max
                       </button>
                     </div>
+                  )}
+                </div>
 
-                    {/* RECEIVE panel */}
-                    <div className="rounded-[22px] border border-border bg-secondary/20 px-4 py-4">
-                      <div className="mb-2 flex items-center justify-between text-[11px]">
-                        <span className="text-muted-foreground">Receive</span>
-                        {cashToken && toToken?.kind === "cash" && (
-                          <span className="text-[10px] text-muted-foreground">
-                            {cashDisplayName} (cash)
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      disabled={swapBusy}
+                      value={amount}
+                      onChange={(e) => {
+                        setIsMax(false);
+                        setAmount(sanitizeAmount(e.target.value));
+                      }}
+                      placeholder="0.00"
+                      className="w-full bg-transparent text-left text-2xl font-semibold text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+                    />
+
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {estFromUsd > 0
+                        ? estFromUsd.toLocaleString("en-US", {
+                            style: "currency",
+                            currency: "USD",
+                            maximumFractionDigits: 2,
+                          })
+                        : "$0.00"}
+                    </p>
+                  </div>
+
+                  <div className="w-[160px] text-left">
+                    <button
+                      type="button"
+                      disabled={swapBusy}
+                      onClick={() => openPicker("from")}
+                      className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                    >
+                      <div className="flex items-center gap-2">
+                        <TokenAvatar token={fromToken} />
+                        <div className="flex flex-col leading-tight">
+                          <span className="text-[11px] font-semibold">
+                            {fromToken?.symbol}
                           </span>
-                        )}
+                          <span className="text-[10px] text-muted-foreground">
+                            {fromToken?.name}
+                          </span>
+                        </div>
                       </div>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  </div>
+                </div>
 
+                {fromWallet && (
+                  <p className="mt-2 text-[10px] text-muted-foreground">
+                    Available:{" "}
+                    {fromWallet.amount.toLocaleString("en-US", {
+                      maximumFractionDigits: 4,
+                    })}{" "}
+                    {fromToken?.symbol}
+                  </p>
+                )}
+
+                {feePreview && (
+                  <div className="mt-2 rounded-2xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                    <div className="flex items-center justify-between">
+                      <span>
+                        Haven fee ({(feePreview.feeBps / 100).toFixed(2)}%)
+                      </span>
+                      <span className="text-foreground">
+                        ~{feePreview.feeUi} {fromToken?.symbol}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span>Amount swapped (net)</span>
+                      <span className="text-foreground">
+                        ~{feePreview.netUi} {fromToken?.symbol}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Middle control (Deposit-ish pill) */}
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  disabled={swapBusy}
+                  onClick={handleSwapSides}
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/60 text-foreground hover:bg-accent disabled:opacity-60"
+                  title="Swap sides (works only if Receive token is in your wallet)"
+                >
+                  <ArrowDown className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* RECEIVE card */}
+              <div className="haven-card-soft px-3.5 py-3.5">
+                <div className="mb-2 flex items-center justify-between text-[11px]">
+                  <span className="text-muted-foreground">Receive</span>
+                  {cashToken && toToken?.kind === "cash" && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {cashDisplayName} (cash)
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="w-[160px] text-left">
+                    <button
+                      type="button"
+                      disabled={swapBusy}
+                      onClick={() => openPicker("to")}
+                      className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/60 px-2.5 py-2 hover:bg-accent disabled:opacity-60"
+                    >
+                      <div className="flex items-center gap-2">
+                        <TokenAvatar token={toToken} />
+                        <div className="flex flex-col leading-tight">
+                          <span className="text-[11px] font-semibold">
+                            {toToken?.symbol}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {toToken?.name}
+                          </span>
+                        </div>
+                      </div>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 text-right">
+                    <p className="text-xl font-semibold text-foreground">
+                      {quoteLoading ? "…" : quote ? `~ ${quote.outUi}` : "—"}
+                    </p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {quoteLoading
+                        ? "Fetching live quote…"
+                        : quote
+                          ? `Min received: ${quote.minOutUi}`
+                          : "Enter an amount to see an estimate."}
+                    </p>
+                  </div>
+                </div>
+
+                {(quote?.routeText || quote?.priceImpactPctText) && (
+                  <div className="mt-2 rounded-2xl border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                    {quote?.routeText && (
                       <div className="flex items-center justify-between gap-3">
-                        <div className="w-[168px] text-left">
-                          <button
-                            type="button"
-                            disabled={swapBusy}
-                            onClick={() => openPicker("to")}
-                            className="flex w-full items-center justify-between rounded-2xl border border-border bg-background/70 px-3 py-2.5 hover:bg-accent disabled:opacity-60 transition"
-                          >
-                            <div className="flex items-center gap-2">
-                              <TokenAvatar token={toToken} />
-                              <div className="flex flex-col">
-                                <span className="text-[11px] font-semibold">
-                                  {toToken?.symbol}
-                                </span>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {toToken?.name}
-                                </span>
-                              </div>
-                            </div>
-                            <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                        </div>
-
-                        <div className="flex-1 text-right">
-                          <p className="text-[22px] leading-none font-semibold text-foreground">
-                            {quoteLoading
-                              ? "…"
-                              : quote
-                                ? `~ ${quote.outUi}`
-                                : "—"}
-                          </p>
-                          <p className="mt-1 text-[10px] text-muted-foreground">
-                            {quoteLoading
-                              ? "Fetching live quote…"
-                              : quote
-                                ? `Min received: ${quote.minOutUi}`
-                                : "Enter an amount to see an estimate."}
-                          </p>
-                        </div>
-                      </div>
-
-                      {(quote?.routeText || quote?.priceImpactPctText) && (
-                        <div className="mt-3 rounded-2xl border border-border bg-background/60 px-4 py-3 text-[10px] text-muted-foreground">
-                          {quote?.routeText && (
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-muted-foreground">
-                                Route
-                              </span>
-                              <span className="truncate text-foreground">
-                                {quote.routeText}
-                              </span>
-                            </div>
-                          )}
-                          {quote?.priceImpactPctText && (
-                            <div className="mt-1 flex items-center justify-between">
-                              <span className="text-muted-foreground">
-                                Price impact
-                              </span>
-                              <span className="text-foreground">
-                                {quote.priceImpactPctText}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {quoteErr && (
-                        <div className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[11px] text-destructive">
-                          {quoteErr}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* rate row */}
-                    <div className="mt-1 rounded-full border border-border bg-background/70 px-4 py-2 text-[10px] text-muted-foreground">
-                      1 {fromToken?.symbol} ≈{" "}
-                      {quote && feePreview
-                        ? (() => {
-                            const netUiNum = Number(feePreview.netUi);
-                            const outUiNum = Number(quote.outUi);
-                            if (
-                              !Number.isFinite(netUiNum) ||
-                              !Number.isFinite(outUiNum) ||
-                              netUiNum <= 0
-                            )
-                              return "—";
-                            const r = outUiNum / netUiNum;
-                            return r > 0
-                              ? r.toLocaleString("en-US", {
-                                  maximumFractionDigits: 6,
-                                })
-                              : "—";
-                          })()
-                        : "—"}{" "}
-                      {toToken?.symbol}
-                    </div>
-
-                    {cashToken && (
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        {cashDisplayName} is your Haven cash balance.
-                      </p>
-                    )}
-
-                    {errorToShow && modal?.kind !== "error" && (
-                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[11px] text-destructive">
-                        {errorToShow}
+                        <span className="text-muted-foreground">Route</span>
+                        <span className="truncate text-foreground">
+                          {quote.routeText}
+                        </span>
                       </div>
                     )}
-
-                    {hookSig && (
-                      <div className="mt-1 text-[10px] text-muted-foreground">
-                        Last tx:{" "}
-                        <a
-                          href={explorerUrl(hookSig)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary hover:opacity-90 underline underline-offset-2"
-                        >
-                          view
-                        </a>
+                    {quote?.priceImpactPctText && (
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-muted-foreground">
+                          Price impact
+                        </span>
+                        <span className="text-foreground">
+                          {quote.priceImpactPctText}
+                        </span>
                       </div>
                     )}
                   </div>
-                </>
+                )}
+
+                {quoteErr && (
+                  <div className="mt-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                    {quoteErr}
+                  </div>
+                )}
+              </div>
+
+              {/* Rate + helper */}
+              <div className="rounded-full border border-border bg-background/60 px-3 py-2 text-[10px] text-muted-foreground">
+                1 {fromToken?.symbol} ≈{" "}
+                {quote && feePreview
+                  ? (() => {
+                      const netUiNum = Number(feePreview.netUi);
+                      const outUiNum = Number(quote.outUi);
+                      if (
+                        !Number.isFinite(netUiNum) ||
+                        !Number.isFinite(outUiNum) ||
+                        netUiNum <= 0
+                      )
+                        return "—";
+                      const r = outUiNum / netUiNum;
+                      return r > 0
+                        ? r.toLocaleString("en-US", {
+                            maximumFractionDigits: 6,
+                          })
+                        : "—";
+                    })()
+                  : "—"}{" "}
+                {toToken?.symbol}
+              </div>
+
+              {cashToken && (
+                <p className="text-[10px] text-muted-foreground px-1">
+                  {cashDisplayName} is your Haven cash balance.
+                </p>
+              )}
+
+              {errorToShow && modal?.kind !== "error" && (
+                <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                  {errorToShow}
+                </div>
+              )}
+
+              {hookSig && (
+                <div className="text-[10px] text-muted-foreground px-1">
+                  Last tx:{" "}
+                  <a
+                    href={explorerUrl(hookSig)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:opacity-90 underline underline-offset-2"
+                  >
+                    view
+                  </a>
+                </div>
               )}
             </div>
+          )}
+        </div>
 
-            {/* Pinned footer */}
-            <DialogFooter className="relative shrink-0 border-t border-border bg-background/95 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+14px)] sm:px-5 sm:py-4 sm:pb-4">
-              {!hasWalletTokens ? (
-                <DialogClose asChild>
-                  <Button variant="outline" className="w-full rounded-full">
-                    Close
-                  </Button>
-                </DialogClose>
+        {/* Footer (Deposit-style pinned) */}
+        <div className="flex-shrink-0 p-5 border-t border-border bg-card/80 backdrop-blur-sm">
+          {!hasWalletTokens ? (
+            <button
+              type="button"
+              onClick={close}
+              className="haven-btn-secondary w-full"
+              disabled={!canClose}
+            >
+              Close
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={[
+                "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
+                canSubmit
+                  ? "haven-btn-primary"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
+              ].join(" ")}
+              disabled={!canSubmit}
+              onClick={handleSubmit}
+            >
+              {swapBusy ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Processing…
+                </>
               ) : (
-                <Button
-                  className="w-full rounded-full h-11"
-                  disabled={!canSubmit}
-                  onClick={handleSubmit}
-                >
-                  {swapBusy ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Processing...
-                    </span>
-                  ) : (
-                    <span className="text-black">Swap</span>
-                  )}
-                </Button>
+                <>
+                  <span className="text-black">Swap</span>
+                </>
               )}
-            </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
+            </button>
+          )}
 
-      {/* Render modals via portal - outside Dialog to avoid z-index issues */}
+          <div className="mt-2 text-center text-[11px] text-muted-foreground">
+            Live pricing via Jupiter • Includes Haven fee preview
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {createPortal(body, document.body)}
       {renderPickerModal()}
       {renderSwapModal()}
     </>
