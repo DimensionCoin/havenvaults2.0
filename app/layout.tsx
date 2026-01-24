@@ -10,7 +10,7 @@ import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 import ThemeProvider from "@/providers/ThemeProvider";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://havenfinancial.xyz"), // ✅ IMPORTANT
+  metadataBase: new URL("https://havenfinancial.xyz"),
 
   title: "Haven Vaults",
   description: "Best app for financial growth.",
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     siteName: "Haven Financial",
     images: [
       {
-        url: "https://havenfinancial.xyz/twitter.png", // ✅ absolute
+        url: "https://havenfinancial.xyz/twitter.png",
         width: 1200,
         height: 630,
         alt: "Haven Financial",
@@ -37,7 +37,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Haven Financial",
     description: "Best app for financial growth.",
-    images: ["https://havenfinancial.xyz/twitter.png"], // ✅ absolute
+    images: ["https://havenfinancial.xyz/twitter.png"],
   },
 
   appleWebApp: {
@@ -85,8 +85,7 @@ export default function RootLayout({
         className={[
           inter.variable,
           dmSans.variable,
-          "min-h-[100dvh] bg-background text-foreground antialiased",
-          "overflow-hidden",
+          "bg-background text-foreground antialiased",
         ].join(" ")}
       >
         <ThemeProvider>
@@ -95,10 +94,10 @@ export default function RootLayout({
               <PwaRegister />
               <div
                 id="app"
-                className="h-[100dvh] w-full overflow-y-auto overscroll-contain"
+                className="h-[100dvh] w-full overflow-y-auto overflow-x-hidden"
                 style={{
                   paddingTop: "env(safe-area-inset-top)",
-                  paddingBottom: "0px",
+                  paddingBottom: "env(safe-area-inset-bottom)",
                   paddingLeft: "env(safe-area-inset-left)",
                   paddingRight: "env(safe-area-inset-right)",
                 }}
