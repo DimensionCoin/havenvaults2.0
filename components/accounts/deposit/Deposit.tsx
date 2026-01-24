@@ -1013,7 +1013,7 @@ const Deposit: React.FC<DepositProps> = ({
           {/* BANK TAB - Direct flow for non-US users (no amount entry) */}
           {tab === "bank" && !isGuestCheckoutEligible && (
             <div className="p-5">
-              <div className="text-center py-6">
+              <div className="text-center">
                 <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
                   <CreditCard className="w-8 h-8 text-primary" />
                 </div>
