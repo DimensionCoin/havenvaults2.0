@@ -67,12 +67,9 @@ export const DISPLAY_CURRENCIES = [
 export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
 const DISPLAY_CURRENCY_SET: ReadonlySet<string> = new Set(DISPLAY_CURRENCIES);
 
-/** Type guard: checks if a string is one of the allowed display currencies */
 export function isDisplayCurrency(x: unknown): x is DisplayCurrency {
   return typeof x === "string" && DISPLAY_CURRENCY_SET.has(x);
 }
-
-/** Safe parser: returns a valid DisplayCurrency or undefined */
 export function parseDisplayCurrency(x: unknown): DisplayCurrency | undefined {
   return isDisplayCurrency(x) ? x : undefined;
 }
@@ -147,14 +144,6 @@ export interface IBalanceSnapshot {
   breakdown?: IBalanceBreakdown;
 }
 
-/**
- * ✅ Production-safe fee totals:
- * - amountBase is an INTEGER string in base units (atomic units)
- * - decimals tells you how to render it
- * - symbol optional (for UI only)
- *
- * Matches lib/fees.ts which aggregates base units as strings.
- */
 export interface IFeePaidTotal {
   amountBase: string; // integer string
   decimals: number; // 0..18
@@ -165,6 +154,7 @@ export interface IUser extends Document {
   privyId: string;
   email: string;
   walletAddress: string;
+
   firstName?: string;
   lastName?: string;
   country?: string;
@@ -173,7 +163,6 @@ export interface IUser extends Document {
 
   savingsAccounts: ISavingsAccount[];
 
-  // ✅ New multi-token totals, keyed by mint base58
   feesPaidTotals: Map<string, IFeePaidTotal>;
 
   wishlistTokenMints: string[];
@@ -211,11 +200,13 @@ export interface IUser extends Document {
 
 const D128 = mongoose.Types.Decimal128;
 const zero = () => D128.fromString("0");
-const ensureD128 = (v: any) => (v ? v : zero());
+
+const ensureD128 = (v: unknown) =>
+  v instanceof mongoose.Types.Decimal128 ? v : zero();
 
 const makeDefaultSavingsAccount = (
   type: SavingsAccountType,
-  walletAddress: string
+  walletAddress: string,
 ): ISavingsAccount => ({
   type,
   walletAddress,
@@ -241,7 +232,7 @@ const makeReferralCode = () => crypto.randomBytes(5).toString("base64url");
 const SavingsAccountSchema = new Schema<ISavingsAccount>(
   {
     type: { type: String, enum: ["flex", "plus"], required: true },
-    walletAddress: { type: String, required: true, index: true },
+    walletAddress: { type: String, required: true },
     marginfiAccountPk: { type: String, trim: true },
 
     principalDeposited: {
@@ -274,7 +265,7 @@ const SavingsAccountSchema = new Schema<ISavingsAccount>(
     lastOnChainBalance: { type: Schema.Types.Decimal128, default: undefined },
     lastSyncedAt: { type: Date, default: undefined },
   },
-  { _id: false, timestamps: true }
+  { _id: false, timestamps: true },
 );
 
 const ContactSchema = new Schema<IContact>(
@@ -292,7 +283,7 @@ const ContactSchema = new Schema<IContact>(
     invitedAt: { type: Date },
     joinedAt: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const InviteSchema = new Schema<IInvite>(
@@ -320,7 +311,7 @@ const InviteSchema = new Schema<IInvite>(
     claimedEmail: { type: String, lowercase: true, trim: true },
     claimedWalletAddress: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const BalanceBreakdownSchema = new Schema<IBalanceBreakdown>(
@@ -330,7 +321,7 @@ const BalanceBreakdownSchema = new Schema<IBalanceBreakdown>(
     invest: { type: Schema.Types.Decimal128, default: undefined },
     amplify: { type: Schema.Types.Decimal128, default: undefined },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const BalanceSnapshotSchema = new Schema<IBalanceSnapshot>(
@@ -339,22 +330,21 @@ const BalanceSnapshotSchema = new Schema<IBalanceSnapshot>(
     totalBalanceUSDC: { type: Schema.Types.Decimal128, required: true },
     breakdown: { type: BalanceBreakdownSchema, default: undefined },
   },
-  { _id: false }
+  { _id: false },
 );
 
-// ✅ Map value schema for feesPaidTotals (base-units string)
 const FeePaidTotalSchema = new Schema<IFeePaidTotal>(
   {
     amountBase: { type: String, required: true, default: "0" },
     decimals: { type: Number, required: true, default: 6 },
     symbol: { type: String, required: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const UserSchema = new Schema<IUser>(
   {
-    privyId: { type: String, required: true, unique: true, index: true },
+    privyId: { type: String, required: true, unique: true },
 
     email: {
       type: String,
@@ -362,10 +352,9 @@ const UserSchema = new Schema<IUser>(
       unique: true,
       lowercase: true,
       trim: true,
-      index: true,
     },
 
-    walletAddress: { type: String, required: true, unique: true, index: true },
+    walletAddress: { type: String, required: true, unique: true },
 
     firstName: { type: String },
     lastName: { type: String },
@@ -398,36 +387,31 @@ const UserSchema = new Schema<IUser>(
     contacts: { type: [ContactSchema], default: [] },
     invites: { type: [InviteSchema], default: [] },
 
-    referralCode: { type: String, required: true, unique: true, index: true },
+    referralCode: { type: String, required: true, unique: true },
 
-    referrals: [{ type: Schema.Types.ObjectId, ref: "User", index: true }],
-    referredBy: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    referrals: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    referredBy: { type: Schema.Types.ObjectId, ref: "User" },
 
     balanceSnapshots: { type: [BalanceSnapshotSchema], default: [] },
 
-    // ✅ Update #1: Map default as plain object (most reliable for Mongoose Map)
     feesPaidTotals: {
       type: Map,
       of: FeePaidTotalSchema,
-      default: () => ({}), // ✅ was new Map()
+      default: () => ({}),
       required: true,
     },
 
     isPro: { type: Boolean, default: false },
-    isOnboarded: { type: Boolean, default: false, index: true },
+    isOnboarded: { type: Boolean, default: false },
 
     lastLoginAt: { type: Date },
     lastBalanceSyncAt: { type: Date },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-/* ──────────────────────────────────────────────────────────────────────────────
-  Normalization middleware (Mongoose 7-safe)
-────────────────────────────────────────────────────────────────────────────── */
-
 UserSchema.pre("validate", async function () {
-  const user = this as IUser;
+  const user = this as unknown as IUser;
 
   if (!Array.isArray(user.savingsAccounts)) user.savingsAccounts = [];
   if (!Array.isArray(user.contacts)) user.contacts = [];
@@ -436,15 +420,13 @@ UserSchema.pre("validate", async function () {
   if (!Array.isArray(user.referrals)) user.referrals = [];
   if (!Array.isArray(user.balanceSnapshots)) user.balanceSnapshots = [];
 
-  // ✅ Update #2: feesPaidTotals backfill as object (DON'T convert to Map)
-  // When using `.lean()`, feesPaidTotals is a plain object.
-  // Keeping it as an object avoids Map serialization edge cases.
-  const fpt = (user as any).feesPaidTotals;
+  const fpt = (user as unknown as { feesPaidTotals?: unknown }).feesPaidTotals;
   if (!fpt || typeof fpt !== "object") {
-    (user as any).feesPaidTotals = {};
+    (
+      user as unknown as { feesPaidTotals: Record<string, unknown> }
+    ).feesPaidTotals = {};
   }
 
-  // Savings normalization
   if (user.walletAddress) {
     const seen = new Set<SavingsAccountType>();
 
@@ -454,37 +436,43 @@ UserSchema.pre("validate", async function () {
 
       if (seen.has(t)) {
         throw new Error(
-          `User has duplicate savingsAccounts entries for type "${t}".`
+          `User has duplicate savingsAccounts entries for type "${t}".`,
         );
       }
       seen.add(t);
 
-      if (acc.walletAddress !== user.walletAddress) {
+      if (acc.walletAddress !== user.walletAddress)
         acc.walletAddress = user.walletAddress;
-      }
 
-      acc.principalDeposited = ensureD128(acc.principalDeposited) as any;
-      acc.principalWithdrawn = ensureD128(acc.principalWithdrawn) as any;
-      acc.interestWithdrawn = ensureD128(acc.interestWithdrawn) as any;
-      acc.totalDeposited = ensureD128(acc.totalDeposited) as any;
-      acc.totalWithdrawn = ensureD128(acc.totalWithdrawn) as any;
+      acc.principalDeposited = ensureD128(
+        acc.principalDeposited,
+      ) as unknown as mongoose.Types.Decimal128;
+      acc.principalWithdrawn = ensureD128(
+        acc.principalWithdrawn,
+      ) as unknown as mongoose.Types.Decimal128;
+      acc.interestWithdrawn = ensureD128(
+        acc.interestWithdrawn,
+      ) as unknown as mongoose.Types.Decimal128;
+      acc.totalDeposited = ensureD128(
+        acc.totalDeposited,
+      ) as unknown as mongoose.Types.Decimal128;
+      acc.totalWithdrawn = ensureD128(
+        acc.totalWithdrawn,
+      ) as unknown as mongoose.Types.Decimal128;
     }
 
-    if (!seen.has("flex")) {
+    if (!seen.has("flex"))
       user.savingsAccounts.push(
-        makeDefaultSavingsAccount("flex", user.walletAddress)
+        makeDefaultSavingsAccount("flex", user.walletAddress),
       );
-    }
-    if (!seen.has("plus")) {
+    if (!seen.has("plus"))
       user.savingsAccounts.push(
-        makeDefaultSavingsAccount("plus", user.walletAddress)
+        makeDefaultSavingsAccount("plus", user.walletAddress),
       );
-    }
 
     user.savingsAccounts.sort((a, b) => (a.type > b.type ? 1 : -1));
   }
 
-  // Referral code
   if (!user.referralCode) {
     for (let i = 0; i < 10; i++) {
       const code = makeReferralCode();
@@ -497,15 +485,10 @@ UserSchema.pre("validate", async function () {
         break;
       }
     }
-    if (!user.referralCode) {
+    if (!user.referralCode)
       throw new Error("Failed to generate unique referralCode");
-    }
   }
 });
-
-/* ──────────────────────────────────────────────────────────────────────────────
-  Virtuals + Methods
-────────────────────────────────────────────────────────────────────────────── */
 
 UserSchema.virtual("fullName").get(function (this: IUser) {
   if (!this.firstName && !this.lastName) return undefined;
@@ -515,14 +498,13 @@ UserSchema.virtual("fullName").get(function (this: IUser) {
 UserSchema.virtual("savingsFlex").get(function (this: IUser) {
   return this.savingsAccounts?.find((a) => a.type === "flex");
 });
-
 UserSchema.virtual("savingsPlus").get(function (this: IUser) {
   return this.savingsAccounts?.find((a) => a.type === "plus");
 });
 
 UserSchema.methods.getSavingsAccount = function (
   this: IUser,
-  type: SavingsAccountType
+  type: SavingsAccountType,
 ) {
   return this.savingsAccounts?.find((a) => a.type === type);
 };
@@ -530,20 +512,11 @@ UserSchema.methods.getSavingsAccount = function (
 UserSchema.set("toJSON", { virtuals: true });
 UserSchema.set("toObject", { virtuals: true });
 
-/* ──────────────────────────────────────────────────────────────────────────────
-  Indexes
-────────────────────────────────────────────────────────────────────────────── */
-
-UserSchema.index({ privyId: 1 });
-UserSchema.index({ email: 1 });
-UserSchema.index({ walletAddress: 1 });
-UserSchema.index({ referralCode: 1 });
+// Indexes (non-unique / query)
 UserSchema.index({ referredBy: 1 });
 UserSchema.index({ isOnboarded: 1, createdAt: -1 });
-
 UserSchema.index({ "savingsAccounts.type": 1 });
 UserSchema.index({ "savingsAccounts.walletAddress": 1 });
-
 UserSchema.index({ "invites.inviteToken": 1 });
 UserSchema.index({ "invites.isPersonal": 1, "invites.inviteToken": 1 });
 UserSchema.index({
@@ -551,7 +524,6 @@ UserSchema.index({
   "invites.status": 1,
   "invites.sentAt": -1,
 });
-
 UserSchema.index({ "contacts.email": 1 });
 UserSchema.index({ "contacts.walletAddress": 1 });
 UserSchema.index({ "contacts.havenUser": 1 });

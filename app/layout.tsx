@@ -1,5 +1,5 @@
-import type { Metadata } from "next";
-import type { Viewport } from "next";
+// app/layout.tsx
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import PrivyProviders from "@/providers/PrivyProvider";
@@ -11,11 +11,12 @@ import ThemeProvider from "@/providers/ThemeProvider";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://havenfinancial.xyz"),
-
   title: "Haven Vaults",
   description: "Best app for financial growth.",
   manifest: "/manifest.json",
-  themeColor: "#02010a",
+
+  // ✅ IMPORTANT: remove themeColor from metadata (Next warns here)
+  // themeColor belongs in `export const viewport` below.
 
   openGraph: {
     title: "Haven Vaults",
@@ -45,6 +46,7 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
     title: "Haven",
   },
+
   other: {
     "mobile-web-app-capable": "yes",
   },
@@ -56,6 +58,9 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
+
+  // ✅ Put themeColor here to remove the warning
+  themeColor: "#02010a",
 };
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
@@ -68,16 +73,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      {/* ✅ Keep head clean: only things Next doesn’t already output */}
       <head>
-        {/* iOS PWA extras */}
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta
-          name="apple-mobile-web-app-status-bar-style"
-          content="black-translucent"
-        />
-        <meta name="apple-mobile-web-app-title" content="Haven" />
-        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
         <meta name="format-detection" content="telephone=no" />
+        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
       </head>
 
       <body
@@ -85,25 +84,30 @@ export default function RootLayout({
         className={[
           inter.variable,
           dmSans.variable,
-          "bg-background text-foreground antialiased",
+          "min-h-[100dvh] bg-background text-foreground antialiased",
+          "overflow-hidden",
         ].join(" ")}
       >
         <ThemeProvider>
           <PrivyProviders>
             <UserProvider>
-              <PwaRegister />
-              <div
-                id="app"
-                className="h-[100dvh] w-full overflow-y-auto overflow-x-hidden"
-                style={{
-                  paddingTop: "env(safe-area-inset-top)",
-                  paddingBottom: "env(safe-area-inset-bottom)",
-                  paddingLeft: "env(safe-area-inset-left)",
-                  paddingRight: "env(safe-area-inset-right)",
-                }}
-              >
-                <ConvexClientProvider>{children}</ConvexClientProvider>
-              </div>
+              <ConvexClientProvider>
+                <PwaRegister />
+
+                {/* App shell scroll container */}
+                <div
+                  id="app"
+                  className="h-[100dvh] w-full overflow-y-auto overscroll-contain overflow-x-hidden"
+                  style={{
+                    paddingTop: "env(safe-area-inset-top)",
+                    paddingBottom: "env(safe-area-inset-bottom)",
+                    paddingLeft: "env(safe-area-inset-left)",
+                    paddingRight: "env(safe-area-inset-right)",
+                  }}
+                >
+                  {children}
+                </div>
+              </ConvexClientProvider>
             </UserProvider>
           </PrivyProviders>
         </ThemeProvider>

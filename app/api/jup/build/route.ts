@@ -1,4 +1,6 @@
 // app/api/jup/build/route.ts
+import "server-only";
+
 import { NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
@@ -17,6 +19,8 @@ import {
   createTransferCheckedInstruction,
 } from "@solana/spl-token";
 import { Buffer } from "buffer";
+
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +90,12 @@ let priorityFeeCache: { microLamports: number; expires: number } | null = null;
 const PRIORITY_FEE_CACHE_TTL = 10_000;
 
 /* ───────── HELPERS ───────── */
+
+type UserWithWalletLike = {
+  walletAddress?: string | null;
+  depositWallet?: string | { address?: string | null } | null;
+  embeddedWallet?: string | { address?: string | null } | null;
+};
 
 function jsonError(
   status: number,
@@ -403,9 +413,28 @@ export async function POST(req: Request) {
   let stage = "init";
 
   try {
+    // ─────────── Auth (server cookie) ───────────
+    stage = "auth";
+    let userOwner: PublicKey;
+
+    try {
+      const user = await requireServerUser();
+      userOwner = getUserWalletPubkey(user as UserWithWalletLike);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unauthorized";
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: msg,
+        userMessage: "Please log in again.",
+        tip: "Refresh the app and try again.",
+        stage,
+        traceId,
+      });
+    }
+
     stage = "parseBody";
     const body = (await req.json().catch(() => null)) as {
-      fromOwnerBase58?: string;
+      fromOwnerBase58?: string; // optional hint for mismatch detection
       inputMint?: string;
       outputMint?: string;
       amountUnits?: number;
@@ -414,16 +443,16 @@ export async function POST(req: Request) {
       isMax?: boolean;
     } | null;
 
-    const fromOwnerBase58 = body?.fromOwnerBase58?.trim() ?? "";
+    const hinted = body?.fromOwnerBase58?.trim();
     const inputMintStr = body?.inputMint?.trim() ?? "";
     const outputMintStr = body?.outputMint?.trim() ?? "";
     const slippageBps = body?.slippageBps ?? 50;
     const isMax = Boolean(body?.isMax);
 
-    if (!fromOwnerBase58 || !inputMintStr || !outputMintStr) {
+    if (!inputMintStr || !outputMintStr) {
       return jsonError(400, {
         code: "INVALID_PAYLOAD",
-        error: "Missing required fields",
+        error: "Missing input/output mint",
         userMessage: "Something went wrong building this swap.",
         tip: "Please refresh and try again.",
         stage,
@@ -431,7 +460,19 @@ export async function POST(req: Request) {
       });
     }
 
-    const userOwner = new PublicKey(fromOwnerBase58);
+    // Optional: detect client wallet mismatch (debug + better UX)
+    if (hinted && hinted !== userOwner.toBase58()) {
+      return jsonError(400, {
+        code: "WALLET_MISMATCH",
+        error: `client=${hinted} server=${userOwner.toBase58()}`,
+        userMessage:
+          "Your wallet session is out of sync. Please refresh and try again.",
+        tip: "If it keeps happening, log out and back in.",
+        stage,
+        traceId,
+      });
+    }
+
     const inputMint = new PublicKey(inputMintStr);
     const outputMint = new PublicKey(outputMintStr);
 
@@ -729,9 +770,6 @@ export async function POST(req: Request) {
         `priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`,
     );
 
-    // IMPORTANT:
-    // - These fee fields are "expected fee" for UI only.
-    // - Your /api/jup/send route should compute the ACTUAL fee received by treasury from tx meta and record to DB.
     return NextResponse.json({
       transaction: b64,
       recentBlockhash: blockhash,
@@ -763,6 +801,9 @@ export async function POST(req: Request) {
       treasuryFeeAta: treasuryInputAta.toBase58(),
       userInputAta: userInputAta.toBase58(),
       userOutputAta: userOutputAta.toBase58(),
+
+      // Helpful for debugging client hydration issues
+      owner: userOwner.toBase58(),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

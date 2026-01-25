@@ -9,9 +9,6 @@ import {
   SendTransactionError,
   ParsedInstruction,
   ParsedTransactionWithMeta,
-  type Commitment,
-  type SignatureResult,
-  type RpcResponseAndContext,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 import mongoose from "mongoose";
@@ -21,11 +18,15 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 
-import { getSessionFromCookies } from "@/lib/auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { FeeEvent } from "@/models/FeeEvent";
 import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
+import {
+  requireServerUser,
+  getUserWalletPubkey,
+  assertUserSigned,
+} from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,8 +93,8 @@ function getPrivyClient(): PrivyClient {
 /* ───────── Types ───────── */
 
 interface SendRequestBody {
-  transaction?: string;
-  // Optional “hint” from build, but server will parse actual fee from chain
+  transaction?: string; // base64 VersionedTransaction, already signed by user
+  // Optional hint from build; server will parse actual fee from chain
   feeMint?: string;
 }
 
@@ -128,6 +129,12 @@ function hasSignedTransaction(x: unknown): x is {
   );
 }
 
+type UserWithWalletLike = {
+  walletAddress?: string | null;
+  depositWallet?: string | { address?: string | null } | null;
+  embeddedWallet?: string | { address?: string | null } | null;
+};
+
 /** Narrow ParsedInstruction.parsed without `any`. */
 type TransferCheckedParsed = {
   type: "transferChecked";
@@ -139,7 +146,6 @@ type TransferCheckedParsed = {
 };
 
 type ParsedIxWithProgramId = ParsedInstruction & { programId?: string };
-
 type MongoDuplicateKeyError = { code?: number };
 
 /* ───────── Basic Helpers ───────── */
@@ -179,7 +185,7 @@ function toSignedBytes(resp: unknown): Uint8Array {
   throw new Error("Unexpected signTransaction return type");
 }
 
-/* ───────── fees.ts helpers (INLINED, no BigInt literals) ───────── */
+/* ───────── fees helpers (INLINED, no BigInt literals) ───────── */
 
 const D128 = mongoose.Types.Decimal128;
 
@@ -299,7 +305,6 @@ async function recordUserFeesExact(params: {
   const tokens = Array.from(merged.values());
   if (tokens.length === 0) return { ok: true, recorded: false, reason: "zero" };
 
-  // 1) Insert FeeEvent (idempotent via unique signature index)
   try {
     await FeeEvent.create({
       userId,
@@ -323,7 +328,6 @@ async function recordUserFeesExact(params: {
     throw e;
   }
 
-  // 2) Update aggregates on User
   const user = await User.findById(userId).select({ feesPaidTotals: 1 }).lean();
   if (!user) return { ok: true, recorded: true };
 
@@ -406,8 +410,6 @@ async function fetchParsedTxWithRetry(
     });
 
     if (tx) return tx;
-
-    // small backoff: 150ms, 300ms, 450ms...
     await new Promise((r) => setTimeout(r, 150 * (i + 1)));
   }
   return null;
@@ -425,7 +427,7 @@ async function deriveTreasuryAtaForMint(params: {
   return getAssociatedTokenAddress(
     params.mint,
     TREASURY_OWNER,
-    true, // allowOwnerOffCurve (safe even if not needed)
+    true,
     params.tokenProgramId,
   );
 }
@@ -433,7 +435,7 @@ async function deriveTreasuryAtaForMint(params: {
 /* ───────── Fee recorder (fire-and-forget) ───────── */
 
 async function recordSwapFeeFromChainAsync(params: {
-  userId: string; // session.userId (Mongo _id in your app)
+  userId: string; // can be Mongo _id OR privyId; we resolve both
   signature: string;
   feeMintHint?: string;
 }): Promise<void> {
@@ -488,7 +490,6 @@ async function recordSwapFeeFromChainAsync(params: {
       if (!destination || !mint || !amountBase) continue;
       if (hintMint && mint !== hintMint) continue;
 
-      // Determine token program used by this instruction
       const programIdStr = String(
         (ix as ParsedIxWithProgramId).programId || "",
       );
@@ -522,7 +523,7 @@ async function recordSwapFeeFromChainAsync(params: {
 
       if (result.ok && result.recorded) {
         console.log(
-          `[JUP/SEND] Fee recorded from chain: ${amountBase} base units (${symbol || mint.slice(0, 8)}) for ${signature.slice(0, 8)}`,
+          `[JUP/SEND] Fee recorded: ${amountBase} base units (${symbol || mint.slice(0, 8)}) for ${signature.slice(0, 8)}`,
         );
       } else if (result.ok && !result.recorded) {
         console.log(
@@ -530,7 +531,7 @@ async function recordSwapFeeFromChainAsync(params: {
         );
       }
 
-      return; // stop after first match
+      return;
     }
 
     console.warn(
@@ -552,15 +553,43 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
-    // ─────────── Auth ───────────
-    const session = await getSessionFromCookies();
-    if (!session?.userId) return jsonError(401, "Unauthorized");
+    // ─────────── Auth (server cookie) ───────────
+    let userPk: PublicKey;
+    let userIdForFeeEvents: string;
+
+    try {
+      const user = await requireServerUser();
+      userPk = getUserWalletPubkey(user as UserWithWalletLike);
+
+      // Prefer Mongo _id if present for fee events; fallback to privyId.
+      // (We don't rely on this for auth — auth is cookie session via requireServerUser.)
+      const u = user as unknown as { _id?: unknown; privyId?: unknown };
+      userIdForFeeEvents =
+        typeof u?._id === "string"
+          ? u._id
+          : u?._id && typeof u._id === "object"
+            ? String(u._id)
+            : typeof u?.privyId === "string"
+              ? u.privyId
+              : "";
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unauthorized";
+      return jsonError(401, "Unauthorized", {
+        code: "UNAUTHORIZED",
+        userMessage: "Please log in again.",
+        tip: "Refresh the app and try again.",
+        details: msg,
+      });
+    }
 
     // ─────────── Parse Body ───────────
     const body = (await req.json().catch(() => null)) as SendRequestBody | null;
 
     if (!body?.transaction || typeof body.transaction !== "string") {
-      return jsonError(400, "Missing 'transaction' in body");
+      return jsonError(400, "Missing 'transaction' in body", {
+        code: "INVALID_PAYLOAD",
+        userMessage: "Something went wrong sending this swap.",
+      });
     }
 
     const feeMintHint =
@@ -568,24 +597,56 @@ export async function POST(req: NextRequest) {
 
     // ─────────── Deserialize Transaction ───────────
     const raw = Buffer.from(body.transaction, "base64");
-    if (!raw.length) return jsonError(400, "Invalid transaction encoding");
+    if (!raw.length) {
+      return jsonError(400, "Invalid transaction encoding", {
+        code: "INVALID_TX_ENCODING",
+        userMessage: "This swap request is invalid. Please try again.",
+      });
+    }
 
     let userSignedTx: VersionedTransaction;
     try {
       userSignedTx = VersionedTransaction.deserialize(raw);
     } catch {
-      return jsonError(400, "Invalid VersionedTransaction");
+      return jsonError(400, "Invalid VersionedTransaction", {
+        code: "INVALID_TX",
+        userMessage: "This swap request is invalid. Please try again.",
+      });
     }
 
-    // ─────────── Validate Transaction ───────────
+    // ─────────── Validate Transaction (server invariants) ───────────
     const feePayer = userSignedTx.message.staticAccountKeys[0];
     if (!feePayer.equals(HAVEN_PUBKEY)) {
-      return jsonError(400, "Invalid fee payer", { code: "INVALID_FEE_PAYER" });
+      return jsonError(400, "Invalid fee payer", {
+        code: "INVALID_FEE_PAYER",
+        userMessage:
+          "This swap request is invalid. Please refresh and try again.",
+      });
     }
 
     const blockhash = userSignedTx.message.recentBlockhash;
     if (!blockhash || blockhash === "11111111111111111111111111111111") {
-      return jsonError(400, "Invalid blockhash", { code: "INVALID_BLOCKHASH" });
+      return jsonError(400, "Invalid blockhash", {
+        code: "INVALID_BLOCKHASH",
+        userMessage: "This swap expired. Please try again.",
+      });
+    }
+
+    // ✅ Ensure the logged-in user's wallet is a required signer AND signature exists
+    try {
+      assertUserSigned(userSignedTx, userPk);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Missing user signature";
+      const code = msg.toLowerCase().includes("required signer")
+        ? "TX_MISSING_USER_SIGNER"
+        : "TX_MISSING_USER_SIGNATURE";
+
+      return jsonError(400, msg, {
+        code,
+        userMessage:
+          "Your wallet isn’t ready to sign yet. Please try again in a moment.",
+        tip: "If it keeps happening, refresh the app or log out and back in.",
+      });
     }
 
     const conn = getConnection();
@@ -606,15 +667,18 @@ export async function POST(req: NextRequest) {
       if (msg.toLowerCase().includes("invalid wallet id")) {
         return jsonError(500, "Invalid Haven wallet configuration", {
           code: "INVALID_HAVEN_WALLET_ID",
+          userMessage:
+            "Service temporarily unavailable. Please try again later.",
         });
       }
       return jsonError(500, "Signing failed", {
         code: "PRIVY_SIGN_FAILED",
+        userMessage: "Couldn't finalize this swap right now. Please try again.",
         details: msg,
       });
     }
 
-    // ─────────── Send Transaction ───────────
+    // ─────────── Broadcast ───────────
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
@@ -624,9 +688,6 @@ export async function POST(req: NextRequest) {
       });
     } catch (err) {
       const ste = err as SendTransactionError;
-
-      // `SendTransactionError.getLogs` is not always on the typed surface,
-      // so we safely narrow via unknown -> record with getLogs? function.
       const steWithLogs = ste as unknown as {
         getLogs?: (c: Connection) => Promise<string[]>;
       };
@@ -642,45 +703,49 @@ export async function POST(req: NextRequest) {
       const lowerMsg = msg.toLowerCase();
 
       if (lowerMsg.includes("slippage") || msg.includes("0x1771")) {
-        return jsonError(
-          400,
-          "Price moved too much. Try again with higher slippage.",
-          {
-            code: "SLIPPAGE_EXCEEDED",
-            logs: logs.slice(0, 10),
-          },
-        );
+        return jsonError(400, "Slippage exceeded", {
+          code: "SLIPPAGE_EXCEEDED",
+          userMessage: "Price moved too much. Try again with higher slippage.",
+          logs: logs.slice(0, 10),
+        });
       }
 
       if (lowerMsg.includes("insufficient") || /\b0x1\b/.test(msg)) {
-        return jsonError(400, "Insufficient balance for this swap", {
+        return jsonError(400, "Insufficient balance", {
           code: "INSUFFICIENT_BALANCE",
+          userMessage: "You don't have enough balance for this swap.",
           logs: logs.slice(0, 10),
         });
       }
 
       if (lowerMsg.includes("blockhash")) {
-        return jsonError(400, "Transaction expired. Please try again.", {
+        return jsonError(400, "Transaction expired", {
           code: "BLOCKHASH_EXPIRED",
+          userMessage: "This swap expired. Please try again.",
           logs: logs.slice(0, 10),
         });
       }
 
       return jsonError(400, "Broadcast failed", {
         code: "BROADCAST_FAILED",
-        logs: logs.slice(0, 10),
+        userMessage: "Couldn't send this swap. Please try again.",
         details: msg,
+        logs: logs.slice(0, 10),
       });
     }
 
-    // ─────────── Record Fee by parsing chain tx (fire-and-forget) ───────────
-    recordSwapFeeFromChainAsync({
-      userId: session.userId,
-      signature,
-      feeMintHint,
-    }).catch(() => {});
+    // ─────────── Fee recording (fire-and-forget) ───────────
+    if (userIdForFeeEvents) {
+      recordSwapFeeFromChainAsync({
+        userId: userIdForFeeEvents,
+        signature,
+        feeMintHint,
+      }).catch(() => {});
+    } else {
+      console.warn("[JUP/SEND] Fee recording skipped: missing user id");
+    }
 
-    // ─────────── Success Response ───────────
+    // ─────────── Success ───────────
     const sendTime = Date.now() - startTime;
     console.log(`[JUP/SEND] ${signature.slice(0, 8)}... ${sendTime}ms`);
 
@@ -690,6 +755,7 @@ export async function POST(req: NextRequest) {
     console.error("[JUP/SEND] Unhandled:", msg);
     return jsonError(500, "Internal server error", {
       code: "UNHANDLED",
+      userMessage: "Something went wrong. Please try again.",
       details: msg,
     });
   }
