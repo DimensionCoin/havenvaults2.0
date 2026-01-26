@@ -20,14 +20,17 @@ export default function BottomBar() {
 
   return (
     <nav
-      aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-50 md:hidden flex items-end justify-center"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-    >
-      <div className="mx-auto w-full max-w-md px-3">
-        {/* Clean, friendly pill */}
-        <div className="rounded-3xl border border-white/10 bg-background/85 backdrop-blur-xl shadow-lg shadow-black/20">
-          <div className="relative grid grid-cols-5 items-end px-2 py-2">
+  aria-label="Primary"
+  className="fixed inset-x-0 bottom-0 z-50 md:hidden bg-background"
+>
+  <div 
+    className="flex items-end justify-center"
+    style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+  >
+    <div className="mx-auto w-full max-w-md px-3 pb-2">
+      {/* Clean, friendly pill */}
+      <div className="rounded-3xl border border-white/10 bg-background/85 backdrop-blur-xl shadow-lg shadow-black/20">
+        <div className="relative grid grid-cols-5 items-end px-2 py-2">
             {navItems.map(({ href, label, Icon, center }) => {
               const isActive =
                 href === "/dashboard"
@@ -105,6 +108,7 @@ export default function BottomBar() {
               );
             })}
           </div>
+        </div>
         </div>
       </div>
     </nav>

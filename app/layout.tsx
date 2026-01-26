@@ -100,7 +100,7 @@ export default function RootLayout({
                   className="h-[100dvh] w-full overflow-y-auto overscroll-contain overflow-x-hidden"
                   style={{
                     paddingTop: "env(safe-area-inset-top)",
-                    paddingBottom: "env(safe-area-inset-bottom)",
+                    paddingBottom: "0px",
                     paddingLeft: "env(safe-area-inset-left)",
                     paddingRight: "env(safe-area-inset-right)",
                   }}
