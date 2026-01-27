@@ -57,7 +57,7 @@ type ResolvedRecipient = {
    Constants & Helpers
 ───────────────────────────────────────────────────────────── */
 
-const AVATAR_SIZE = 52;
+const AVATAR_SIZE = 60;
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 const isSolDomain = (s: string) => /^[a-zA-Z0-9_-]+\.sol$/i.test(s.trim());
