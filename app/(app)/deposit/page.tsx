@@ -14,7 +14,6 @@ import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 
 import Deposit from "@/components/accounts/deposit/Deposit";
-import Transfer from "@/components/accounts/deposit/Transfer";
 import Withdraw from "@/components/accounts/deposit/Withdraw";
 
 import {
@@ -494,14 +493,6 @@ export default function DepositAccountPage() {
 
             <button
               type="button"
-              onClick={() => setTransferOpen(true)}
-              className="haven-btn-primary flex-1 text-[#0b3204]"
-            >
-              Transfer
-            </button>
-
-            <button
-              type="button"
               onClick={() => setModalMode("withdraw")}
               className="haven-btn-primary flex-1 text-[#0b3204]"
             >
@@ -775,13 +766,7 @@ export default function DepositAccountPage() {
         onSuccess={() => setModalMode(null)}
       />
 
-      <Transfer
-        open={transferOpen}
-        onOpenChange={setTransferOpen}
-        walletAddress={walletAddress}
-        balanceUsd={usdcUsd}
-        onSuccess={() => setTransferOpen(false)}
-      />
+      
     </div>
   );
 }

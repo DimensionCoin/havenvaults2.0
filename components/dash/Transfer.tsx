@@ -562,6 +562,14 @@ export default function TransferDash({
 
   const canCloseModal = !sending;
 
+  // helper to open add modal (used by both Add button + empty hint)
+  const openAddModal = useCallback(() => {
+    setDeleteMode(false);
+    setAddError(null);
+    setAddEmail("");
+    setAddOpen(true);
+  }, []);
+
   return (
     <div className="w-full">
       {/* Header with tabs - carousel style */}
@@ -607,16 +615,18 @@ export default function TransferDash({
       {/* Contacts Tab */}
       {tab === "contacts" && (
         <div className="mt-3">
-          <div className="flex items-start gap-4 overflow-x-auto no-scrollbar py-2">
+          <div
+            className={[
+              "flex items-start gap-4 py-2",
+              contactsLoading || contacts.length > 0
+                ? "overflow-x-auto no-scrollbar"
+                : "overflow-x-hidden",
+            ].join(" ")}
+          >
             {/* Add Button */}
             <button
               type="button"
-              onClick={() => {
-                setDeleteMode(false);
-                setAddError(null);
-                setAddEmail("");
-                setAddOpen(true);
-              }}
+              onClick={openAddModal}
               className="flex flex-col items-center gap-2 min-w-[80px] active:scale-95 transition-transform"
             >
               <div
@@ -629,6 +639,34 @@ export default function TransferDash({
                 Add
               </span>
             </button>
+
+            {/* Empty-state hint (beside Add) */}
+            {!contactsLoading && contacts.length === 0 && (
+              <button
+                type="button"
+                onClick={openAddModal}
+                className={[
+                  "h-[64px] mt-[2px] rounded-2xl px-4",
+                  "flex items-center gap-3",
+                  "border border-border bg-secondary/40",
+                  "text-left transition hover:bg-accent active:scale-[0.99]",
+                  "min-w-[240px] sm:min-w-[300px]",
+                ].join(" ")}
+              >
+                <div className="w-10 h-10 rounded-2xl bg-card border border-border flex items-center justify-center flex-shrink-0">
+                  <Mail className="w-4 h-4 text-foreground/80" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-foreground leading-tight">
+                    Add a Haven user by email
+                  </p>
+                  <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">
+                    Save contacts for quick access when transferring.
+                  </p>
+                </div>
+              </button>
+            )}
 
             {/* Loading State */}
             {contactsLoading && (
@@ -665,12 +703,7 @@ export default function TransferDash({
               ))}
           </div>
 
-          {!contactsLoading && contacts.length === 0 && (
-            <p className="text-sm text-muted-foreground mt-2">
-              Tap <span className="font-medium">Add</span> to save your first
-              contact
-            </p>
-          )}
+          {/* Removed the old "Tap Add..." text under the row */}
         </div>
       )}
 

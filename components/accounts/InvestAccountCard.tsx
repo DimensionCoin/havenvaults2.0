@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { useBalance } from "@/providers/BalanceProvider";
 
-const USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || ""; // build-time constant
+const USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || "";
 
 const formatUsd = (n?: number | null) =>
   n === undefined || n === null || Number.isNaN(n)
@@ -18,6 +18,11 @@ const formatUsd = (n?: number | null) =>
         maximumFractionDigits: 2,
       });
 
+const looksLikeSavings = (t: {
+  symbol?: string | null;
+  name?: string | null;
+}) => `${t.symbol ?? ""} ${t.name ?? ""}`.toLowerCase().includes("savings");
+
 const InvestAccountCard: React.FC = () => {
   const {
     tokens,
@@ -27,20 +32,24 @@ const InvestAccountCard: React.FC = () => {
     boosterPositionsCount,
   } = useBalance();
 
-  // Filter out USDC (mint + symbol)
-  const nonUsdcTokens = useMemo(() => {
+  // Filter out USDC and savings tokens
+  const investTokens = useMemo(() => {
     return (tokens || []).filter((t) => {
+      if (!t?.mint) return false;
       const mintLower = (t.mint ?? "").toLowerCase();
       const isUsdcMint =
         USDC_MINT !== "" && mintLower === USDC_MINT.toLowerCase();
       const isUsdcSymbol = (t.symbol ?? "").toUpperCase() === "USDC";
-      return !(isUsdcMint || isUsdcSymbol);
+      if (isUsdcMint || isUsdcSymbol) return false;
+      if (looksLikeSavings(t)) return false;
+      if ((t.usdValue ?? 0) <= 0 && (t.amount ?? 0) <= 0) return false;
+      return true;
     });
   }, [tokens]);
 
   const investSpotUsd = useMemo(
-    () => nonUsdcTokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0),
-    [nonUsdcTokens]
+    () => investTokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0),
+    [investTokens],
   );
 
   const investTotalUsd = useMemo(() => {
@@ -50,144 +59,130 @@ const InvestAccountCard: React.FC = () => {
 
   const hasAssets =
     investTotalUsd > 0.01 &&
-    (nonUsdcTokens.length > 0 || boosterPositionsCount > 0);
+    (investTokens.length > 0 || boosterPositionsCount > 0);
 
-  const visibleTokens = nonUsdcTokens.slice(0, 3);
-  const extraCount =
-    nonUsdcTokens.length > visibleTokens.length
-      ? nonUsdcTokens.length - visibleTokens.length
-      : 0;
+  // Sort tokens by USD value descending
+  const sortedTokens = useMemo(() => {
+    return [...investTokens].sort(
+      (a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0),
+    );
+  }, [investTokens]);
+
+  const visibleAssets = sortedTokens.slice(0, 5);
+  const totalAssetCount = investTokens.length + boosterPositionsCount;
+  const hasMoreAssets = totalAssetCount > 5;
 
   const positionsLabel = useMemo(() => {
-    const spotCount = nonUsdcTokens.length;
-    const boosterCount = boosterPositionsCount;
-
-    if (!hasAssets) return "Tap to start investing with Haven";
-
-    if (spotCount > 0 && boosterCount > 0) {
-      return `${spotCount} Asset${spotCount === 1 ? "" : "s"} + ${
-        boosterCount
-      } Multiplied position${boosterCount === 1 ? "" : "s"}`;
-    }
-
-    if (boosterCount > 0) {
-      return `${boosterCount} Multiplied position${
-        boosterCount === 1 ? "" : "s"
-      }`;
-    }
-
-    return `${spotCount} Asset${spotCount === 1 ? "" : "s"} in your portfolio`;
-  }, [hasAssets, nonUsdcTokens.length, boosterPositionsCount]);
-
-  // Small, always-present “this opens” affordance
-  const ctaLabel = hasAssets ? "View portfolio" : "Explore investments";
+    if (!hasAssets) return "No investments yet";
+    return `${totalAssetCount} position${totalAssetCount === 1 ? "" : "s"}`;
+  }, [hasAssets, totalAssetCount]);
 
   return (
-    <Link
-      href="/invest"
-      className="block h-full w-full"
-      aria-label="Open Invest page"
-    >
-      <div
-        className={[
-          "haven-card group flex h-full w-full flex-col justify-between p-4 sm:p-6",
-          "transition-all duration-200",
-          "hover:shadow-fintech-lg hover:border-primary/15",
-          "active:scale-[0.99]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        ].join(" ")}
+    <div className="haven-card flex h-full w-full flex-col p-4 sm:p-6">
+      {/* Header: Balance + View Portfolio */}
+      <Link
+        href="/invest"
+        className="flex items-center justify-between group"
+        aria-label="View portfolio"
       >
-        {/* Header + value */}
         <div>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Invest Account</p>
-
-              {/* subtle CTA under the kicker */}
-              <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-                <span className="group-hover:text-foreground transition-colors">
-                  {ctaLabel}
-                </span>
-                <ChevronRight className="h-3.5 w-3.5 opacity-70 group-hover:opacity-100 transition" />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-              {loading ? "…" : formatUsd(investTotalUsd)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {positionsLabel}
-            </p>
-          </div>
+          <p className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            {loading ? "…" : formatUsd(investTotalUsd)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {positionsLabel}
+          </p>
         </div>
 
-        {/* Footer: logos + meta */}
-        <div className="mt-5 flex items-center justify-between gap-3">
-          <div className="flex flex-col">
-            <span className="text-[11px] text-muted-foreground">
-              {hasAssets
-                ? "Top holdings"
-                : usdcUsd > 0
-                  ? "You’re holding USDC — move some into investments."
-                  : "No invest assets yet."}
-            </span>
+        <div className="flex items-center gap-1 text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+          <span>View portfolio</span>
+          <ChevronRight className="h-4 w-4 opacity-70 group-hover:opacity-100 transition" />
+        </div>
+      </Link>
 
-            {/* keep the helper line, but make it feel like a next step */}
-            <span className="text-[10px] text-muted-foreground">
-              {hasAssets
-                ? "Tap to see full breakdown and performance."
-                : "Tap to browse assets and build your portfolio."}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            {nonUsdcTokens.length > 0 ? (
-              <>
-                <div className="flex -space-x-1.5">
-                  {visibleTokens.map((t, idx) => (
-                    <div
-                      key={t.mint ?? `${t.symbol}-${idx}`}
-                      className="h-7 w-7 overflow-hidden rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center"
-                    >
-                      {t.logoURI ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={t.logoURI}
-                          alt={t.symbol || t.name || "Token"}
-                          width={28}
-                          height={28}
-                          className="h-full w-full object-contain"
-                        />
-                      ) : (
-                        <span className="text-[9px] text-muted-foreground">
-                          {t.symbol || "?"}
-                        </span>
-                      )}
-                    </div>
-                  ))}
+      {/* Asset List */}
+      <div className="mt-5 flex-1">
+        {hasAssets ? (
+          <div className="space-y-2">
+            {visibleAssets.map((t, idx) => (
+              <div
+                key={t.mint ?? `${t.symbol}-${idx}`}
+                className="flex items-center justify-between py-1.5"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 overflow-hidden rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center">
+                    {t.logoURI ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={t.logoURI}
+                        alt={t.symbol || "Token"}
+                        width={32}
+                        height={32}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-medium text-muted-foreground">
+                        {(t.symbol || "?").slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm font-medium text-foreground">
+                    {(t.symbol || t.name || "Unknown").toUpperCase()}
+                  </p>
                 </div>
-
-                {extraCount > 0 && (
-                  <span className="ml-1 text-[10px] text-muted-foreground">
-                    +{extraCount}
-                  </span>
-                )}
-              </>
-            ) : boosterPositionsCount > 0 ? (
-              <div className="h-7 w-7 rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
-                B
+                <p className="text-sm font-medium text-foreground">
+                  {formatUsd(t.usdValue)}
+                </p>
               </div>
-            ) : (
-              <div className="h-7 w-7 rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center text-[9px] text-muted-foreground">
-                —
+            ))}
+
+            {/* Show multiplier summary if any */}
+            {boosterPositionsCount > 0 && visibleAssets.length < 5 && (
+              <div className="flex items-center justify-between py-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 overflow-hidden rounded-full border border-border bg-card shadow-fintech-sm flex items-center justify-center">
+                    <span className="text-[10px] font-medium text-muted-foreground">
+                      M
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium text-foreground">
+                    Multipliers ({boosterPositionsCount})
+                  </p>
+                </div>
+                <p className="text-sm font-medium text-foreground">
+                  {formatUsd(boosterTakeHomeUsd)}
+                </p>
               </div>
             )}
+
+            {hasMoreAssets && (
+              <Link
+                href="/invest"
+                className="flex items-center justify-center gap-1 py-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+              >
+                <span>View all</span>
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            )}
           </div>
-        </div>
+        ) : (
+          <Link
+            href="/bundles"
+            className="flex flex-col items-center justify-center py-6 text-center group"
+          >
+            <p className="text-sm text-muted-foreground">
+              {usdcUsd > 0
+                ? "You're holding USDC — move some into investments."
+                : "Start building your portfolio"}
+            </p>
+            <div className="mt-2 flex items-center gap-1 text-sm font-medium text-primary group-hover:text-primary/80 transition-colors">
+              <span>Explore investments</span>
+              <ChevronRight className="h-4 w-4" />
+            </div>
+          </Link>
+        )}
       </div>
-    </Link>
+    </div>
   );
 };
 
