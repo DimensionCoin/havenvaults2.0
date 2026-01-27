@@ -59,8 +59,8 @@ export default function DepositAccountCard({
     if (!(target instanceof Element)) return false;
     return Boolean(
       target.closest(
-        'button,a,input,select,textarea,[role="button"],[data-no-card-nav="true"]'
-      )
+        'button,a,input,select,textarea,[role="button"],[data-no-card-nav="true"]',
+      ),
     );
   };
 
@@ -95,7 +95,7 @@ export default function DepositAccountCard({
 
       router.push("/deposit");
     },
-    [router]
+    [router],
   );
 
   // (Optional) still allow desktop click
@@ -104,7 +104,7 @@ export default function DepositAccountCard({
       if (isInteractiveTarget(e.target)) return;
       router.push("/deposit");
     },
-    [router]
+    [router],
   );
 
   return (
@@ -116,37 +116,35 @@ export default function DepositAccountCard({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6"
+        className="haven-card flex h-full w-full cursor-pointer flex-col p-4"
       >
         {/* Header */}
-        <div>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="haven-kicker">Deposit Account</p>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                Account #{shortAddress(walletAddress)}
-              </p>
-            </div>
-
-            <span className="haven-pill">
-              <span className="h-2 w-2 rounded-full bg-primary" />
-              Active
-            </span>
-          </div>
-
-          {/* Balance */}
-          <div className="mt-4">
-            <p className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-              {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Available to transfer, invest, or withdraw
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="haven-kicker">Deposit Account</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">
+              Account #{shortAddress(walletAddress)}
             </p>
           </div>
+
+          <span className="haven-pill">
+            <span className="h-2 w-2 rounded-full bg-primary" />
+            Active
+          </span>
+        </div>
+
+        {/* Balance */}
+        <div className="mt-3">
+          <p className="text-3xl font-semibold tracking-tight text-foreground">
+            {effectiveLoading ? "…" : formatDisplay(effectiveBalance)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Available to transfer, invest, or withdraw
+          </p>
         </div>
 
         {/* Actions */}
-        <div className="mt-5 flex gap-2">
+        <div className="mt-3 flex gap-2">
           <button
             type="button"
             onClick={(e) => {
@@ -157,18 +155,6 @@ export default function DepositAccountCard({
             className="haven-btn-primary flex-1 text-[#0b3204]"
           >
             Deposit
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setTransferOpen(true);
-            }}
-            className="haven-btn-primary flex-1 text-[#0b3204]"
-          >
-            Transfer
           </button>
 
           <button
@@ -205,20 +191,6 @@ export default function DepositAccountCard({
         onSuccess={() => {
           onWithdraw?.();
           setModalMode(null);
-        }}
-      />
-
-      <Transfer
-        open={transferOpen}
-        onOpenChange={(open) => {
-          setTransferOpen(open);
-          if (!open) onTransfer?.();
-        }}
-        walletAddress={walletAddress}
-        balanceUsd={effectiveBalance}
-        onSuccess={() => {
-          onTransfer?.();
-          setTransferOpen(false);
         }}
       />
     </>

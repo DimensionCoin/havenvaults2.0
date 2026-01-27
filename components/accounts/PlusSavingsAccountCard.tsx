@@ -194,7 +194,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
 
         sessionStorage.setItem(
           cacheKey,
-          JSON.stringify({ at: Date.now(), apyPct: pct })
+          JSON.stringify({ at: Date.now(), apyPct: pct }),
         );
       } catch {
         if (!cancelled) setApyPctLive(null);
@@ -236,31 +236,31 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     return (
       <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
         <Link href="/plus" className="block h-full">
-          <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="haven-kicker">Plus Savings</p>
-                  <p className="mt-0.5 text-[12px] text-muted-foreground">
-                    Higher rate, built for long-term saving
-                  </p>
-                </div>
-
-                <span className="haven-pill">
-                  <span className="h-2 w-2 rounded-full bg-primary" />
-                  New
-                </span>
+          <div className="haven-card flex h-full w-full cursor-pointer flex-col p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="haven-kicker">Plus Savings</p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">
+                  Higher rate, built for long-term saving
+                </p>
               </div>
 
-              <p className="mt-4 text-lg font-semibold text-foreground">
+              <span className="haven-pill">
+                <span className="h-2 w-2 rounded-full bg-primary" />
+                New
+              </span>
+            </div>
+
+            <div className="mt-3">
+              <p className="text-lg font-semibold text-foreground">
                 Open Plus Savings Account
               </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
                 Make a deposit to start earning automatically.
               </p>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-3">
               <DrawerTrigger asChild>
                 <button
                   type="button"
@@ -298,40 +298,36 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   return (
     <Drawer open={drawerOpen} onOpenChange={handleDrawerChange}>
       <Link href="/plus" className="block h-full">
-        <div className="haven-card flex h-full min-h-[240px] w-full cursor-pointer flex-col justify-between p-4 sm:p-6">
-          <div>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="haven-kicker">Plus Savings</p>
-                <p className="mt-0.5 text-[12px] text-muted-foreground">
-                  Account #{shortAddress(accountPkToShow)}
-                </p>
-              </div>
-
-              <span className="haven-pill">
-                {apyLoading ? (
-                  "APY …"
-                ) : apyFinal === null ? (
-                  "APY —"
-                ) : (
-                  <>APY {apyFinal.toFixed(2)}%</>
-                )}
-              </span>
-            </div>
-
-            <div className="mt-4">
-              <p className="text-3xl text-foreground font-semibold tracking-tight sm:text-4xl">
-                {effectiveLoading
-                  ? "…"
-                  : formatDisplay(effectiveBalanceDisplay)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Interest accrues daily, access anytime
+        <div className="haven-card flex h-full w-full cursor-pointer flex-col p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="haven-kicker">Plus Savings</p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
+                Account #{shortAddress(accountPkToShow)}
               </p>
             </div>
+
+            <span className="haven-pill">
+              {apyLoading ? (
+                "APY …"
+              ) : apyFinal === null ? (
+                "APY —"
+              ) : (
+                <>APY {apyFinal.toFixed(2)}%</>
+              )}
+            </span>
           </div>
 
-          <div className="mt-5 flex gap-2">
+          <div className="mt-3">
+            <p className="text-3xl text-foreground font-semibold tracking-tight">
+              {effectiveLoading ? "…" : formatDisplay(effectiveBalanceDisplay)}
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Interest accrues daily, access anytime
+            </p>
+          </div>
+
+          <div className="mt-3 flex gap-2">
             <DrawerTrigger asChild>
               <button
                 type="button"
