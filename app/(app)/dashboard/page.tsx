@@ -13,20 +13,20 @@ import { useBalance } from "@/providers/BalanceProvider";
 
 export default function DashboardPage() {
   const { user } = useUser();
+  const balance = useBalance();
 
-  // ✅ Your canonical sender wallet address (per your schema/provider)
+  // ✅ Canonical sender wallet address
   const walletAddress = user?.walletAddress ?? "";
 
-  // ✅ You said BalanceProvider already returns display currency values
-  // Replace this field name if your BalanceProvider uses a different key.
-  const balance = useBalance() as unknown as {
-    depositAccountBalanceUsd?: number;
-  };
-
-  const balanceDisplay = useMemo(() => {
-    const n = Number(balance.depositAccountBalanceUsd ?? 0);
+  /**
+   * ✅ Deposit wallet balance for TransferDash
+   * BalanceProvider already converts to the user's display currency.
+   * `usdcUsd` is the USDC value in display currency (USD/CAD/etc).
+   */
+  const depositBalanceDisplay = useMemo(() => {
+    const n = Number(balance.usdcUsd ?? 0);
     return Number.isFinite(n) ? n : 0;
-  }, [balance.depositAccountBalanceUsd]);
+  }, [balance.usdcUsd]);
 
   return (
     <main className="min-h-screen w-full px-3 pt-1 pb-24">
@@ -41,6 +41,7 @@ export default function DashboardPage() {
           <USDCAccountsCarousel />
         </div>
 
+        {/* Transfer */}
         <div className="px-1">
           <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Transfer
@@ -48,14 +49,16 @@ export default function DashboardPage() {
 
           <TransferDash
             walletAddress={walletAddress}
-            balanceUsd={balanceDisplay}
+            balanceUsd={depositBalanceDisplay}
             onSuccess={async () => {
-              // optional: you can refresh balances here if you want
+              // Optional: refresh to make UI feel instant after sending
+              // (TransferDash already refreshes internally, so this is just extra)
+              await balance.refresh().catch(() => null);
             }}
           />
         </div>
 
-        {/* Assets */}
+        {/* Portfolio */}
         <div className="px-1">
           <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Portfolio
