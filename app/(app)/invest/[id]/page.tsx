@@ -799,7 +799,7 @@ const CoinPage: React.FC = () => {
   /* ───────── Render ───────── */
 
   return (
-    <main className="haven-app">
+    <main className="">
       <TradeModal
         modal={modal}
         stageConfig={stageConfig}
