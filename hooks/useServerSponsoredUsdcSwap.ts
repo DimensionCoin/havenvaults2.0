@@ -24,7 +24,19 @@ if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
 
 const USDC_MINT =
   process.env.NEXT_PUBLIC_USDC_SWAP_MINT || process.env.NEXT_PUBLIC_USDC_MINT;
+
 const USDC_DECIMALS = 6;
+
+/**
+ * Safety caps so Haven doesn't overpay when the network is hot.
+ * - Priority fee is paid by Haven fee payer, so cap it.
+ * - Defaults are conservative; tune in prod if needed.
+ */
+const PRIORITY_FEE_LAMPORTS_CAP = Number(
+  process.env.NEXT_PUBLIC_PRIORITY_FEE_LAMPORTS_CAP ?? "100000", // 0.0001 SOL
+);
+const MAX_BUILD_ATTEMPTS = 2;
+const MAX_SEND_ATTEMPTS = 2;
 
 /* ───────── EXPORTED TYPES ───────── */
 
@@ -41,8 +53,8 @@ export type UsdcSwapBuyInput = {
   kind: "buy";
   fromOwnerBase58: string;
   outputMint: string;
-  amountDisplay: number;
-  fxRate: number;
+  amountDisplay: number; // user's display currency amount
+  fxRate: number; // display -> USD rate (display / fxRate = USD)
   slippageBps?: number;
 };
 
@@ -63,9 +75,10 @@ export type UsdcSwapResult = {
   kind: "buy" | "sell";
   inputMint: string;
   outputMint: string;
-  amountUnits: number;
+  amountUnits: number; // input units (gross for sell, USDC units for buy)
   totalTimeMs: number;
   priorityFeeLamports?: number;
+  confirmed?: boolean;
 };
 
 export type UsdcSwapError = {
@@ -82,104 +95,55 @@ type BuildResponse = {
   recentBlockhash: string;
   lastValidBlockHeight: number;
   traceId: string;
+
   inputMint: string;
   outputMint: string;
+
   grossInUnits: number;
   netInUnits: number;
-  feeUnits: number;
+
+  // server returns expectedFeeUnits/expectedFeeBps/expectedFeeRate in build route
+  expectedFeeUnits?: number;
+  expectedFeeBps?: number;
+  expectedFeeRate?: number;
+
   feeMint: string;
   feeDecimals: number;
+
   buildTimeMs?: number;
+
   priorityFeeLamports?: number;
   priorityFeeMicroLamports?: number;
   computeUnits?: number;
+
+  owner?: string; // debug
 };
 
 type SendResponse = {
   signature: string;
   sendTimeMs?: number;
+  confirmed?: boolean;
+  confirmTimeout?: boolean;
 };
 
 /* ───────── HELPERS ───────── */
 
-/**
- * Optimized fetch with shorter timeout for speed
- */
-async function postJSON<T>(
-  url: string,
-  body: unknown,
-  options?: { timeout?: number },
-): Promise<T> {
-  const controller = new AbortController();
-  const timeout = options?.timeout ?? 15_000;
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-      credentials: "include",
-      signal: controller.signal,
-      // Hint to keep connection alive for faster subsequent requests
-      keepalive: true,
-    });
-
-    clearTimeout(timeoutId);
-
-    const text = await res.text().catch(() => "");
-    let data: unknown = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = null;
-    }
-
-    if (!res.ok) {
-      const d = data as Record<string, unknown> | null;
-      const msg =
-        d?.userMessage ||
-        d?.error ||
-        d?.message ||
-        `Request failed: ${res.status}`;
-      const e = new Error(String(msg)) as Error & {
-        code?: string;
-        stage?: string;
-        retryable?: boolean;
-      };
-      e.code = d?.code as string | undefined;
-      e.stage = d?.stage as string | undefined;
-      e.retryable =
-        d?.code === "BLOCKHASH_EXPIRED" || d?.code === "SESSION_EXPIRED";
-      throw e;
-    }
-
-    return data as T;
-  } catch (e) {
-    clearTimeout(timeoutId);
-    if ((e as Error).name === "AbortError") {
-      const err = new Error("Request timed out") as Error & {
-        code?: string;
-        retryable?: boolean;
-      };
-      err.code = "TIMEOUT";
-      err.retryable = true;
-      throw err;
-    }
-    throw e;
-  }
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
 }
 
-function pickWallet(
-  wallets: ConnectedStandardSolanaWallet[],
-  address: string,
-): ConnectedStandardSolanaWallet | null {
-  // Prefer non-embedded (Phantom, etc) over Privy embedded
-  const nonEmbedded = wallets.find(
-    (w) => w.address === address && w.standardWallet?.name !== "Privy",
-  );
-  return nonEmbedded ?? wallets.find((w) => w.address === address) ?? null;
+function clampInt(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function safeUnitsFromUi(ui: number, decimals: number): number {
+  const d = clampInt(decimals, 0, 18);
+  const factor = 10 ** d;
+  const units = Math.floor(ui * factor);
+  if (!Number.isFinite(units) || units <= 0) return 0;
+  // Keep within JS safe int (server will also validate)
+  if (units > Number.MAX_SAFE_INTEGER) throw new Error("Amount too large");
+  return units;
 }
 
 function isUserRejection(e: unknown): boolean {
@@ -209,10 +173,97 @@ function isRetryableError(e: unknown): boolean {
   );
 }
 
+function pickWallet(
+  wallets: ConnectedStandardSolanaWallet[],
+  address: string,
+): ConnectedStandardSolanaWallet | null {
+  // Prefer non-embedded (Phantom, etc) over Privy embedded
+  const nonEmbedded = wallets.find(
+    (w) => w.address === address && w.standardWallet?.name !== "Privy",
+  );
+  return nonEmbedded ?? wallets.find((w) => w.address === address) ?? null;
+}
+
+/**
+ * Optimized POST with JSON + abort + useful error parsing
+ */
+async function postJSON<T>(
+  url: string,
+  body: unknown,
+  options?: { timeout?: number; signal?: AbortSignal },
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = options?.timeout ?? 15_000;
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  // If caller passes a signal, abort our request too
+  const outer = options?.signal;
+  const onAbort = () => controller.abort();
+  if (outer) outer.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+      keepalive: true,
+    });
+
+    const text = await res.text().catch(() => "");
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!res.ok) {
+      const d = data as Record<string, unknown> | null;
+      const msg =
+        (d?.userMessage as string) ||
+        (d?.error as string) ||
+        (d?.message as string) ||
+        `Request failed: ${res.status}`;
+
+      const err = new Error(String(msg)) as Error & {
+        code?: string;
+        stage?: string;
+        retryable?: boolean;
+      };
+      err.code = (d?.code as string) || undefined;
+      err.stage = (d?.stage as string) || undefined;
+      err.retryable =
+        err.code === "BLOCKHASH_EXPIRED" ||
+        err.code === "SESSION_EXPIRED" ||
+        err.code === "TIMEOUT";
+      throw err;
+    }
+
+    return data as T;
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      const err = new Error("Request timed out") as Error & {
+        code?: string;
+        retryable?: boolean;
+      };
+      err.code = "TIMEOUT";
+      err.retryable = true;
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
+    if (outer) outer.removeEventListener("abort", onAbort);
+  }
+}
+
 /* ───────── HOOK ───────── */
 
 export function useServerSponsoredUsdcSwap() {
-  const { login, getAccessToken } = usePrivy();
+  const { login, authenticated, ready } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
 
@@ -230,7 +281,15 @@ export function useServerSponsoredUsdcSwap() {
     expires: number;
   } | null>(null);
 
-  // ───────── Sign with wallet ─────────
+  const ensureAuthed = useCallback(async () => {
+    // Cookie-session is server-side; but we still want to ensure Privy is ready
+    // and the user can sign.
+    if (!ready)
+      throw new Error("Auth is still loading. Try again in a moment.");
+    if (!authenticated) {
+      await login();
+    }
+  }, [ready, authenticated, login]);
 
   const signWithWallet = useCallback(
     async (address: string, txBytes: Uint8Array) => {
@@ -249,8 +308,6 @@ export function useServerSponsoredUsdcSwap() {
     [wallets, signTransaction],
   );
 
-  // ───────── Build transaction (extracted for prefetch) ─────────
-
   const buildTransaction = useCallback(
     async (params: {
       fromOwnerBase58: string;
@@ -260,114 +317,142 @@ export function useServerSponsoredUsdcSwap() {
       slippageBps: number;
       isMax: boolean;
     }): Promise<BuildResponse> => {
-      // Check prefetch cache first
       const cacheKey = JSON.stringify(params);
       const cached = prefetchCacheRef.current;
+
+      // Keep cache VERY short so we don't waste money on stale blockhash/priority fee spikes.
       if (cached && cached.key === cacheKey && cached.expires > Date.now()) {
-        console.log("[UsdcSwap] Using prefetched build");
-        prefetchCacheRef.current = null; // Consume the cache
+        prefetchCacheRef.current = null;
         return cached.response;
       }
 
       return postJSON<BuildResponse>("/api/jup/build", params, {
-        timeout: 10_000, // 10s timeout for build
+        timeout: 10_000,
+        signal: abortRef.current?.signal,
       });
     },
     [],
   );
 
-  // ───────── Prefetch build (call before user confirms) ─────────
+  /**
+   * Prefetch a build right before user hits confirm.
+   * (We keep TTL short so we don’t sign stale blockhash.)
+   */
+  const prefetch = useCallback(
+    async (input: UsdcSwapInput): Promise<void> => {
+      if (!input.fromOwnerBase58 || !USDC_MINT) return;
+      try {
+        await ensureAuthed();
+      } catch {
+        // Non-fatal: prefetch is just a speed optimization
+        return;
+      }
 
-  const prefetch = useCallback(async (input: UsdcSwapInput): Promise<void> => {
-    if (!input.fromOwnerBase58 || !USDC_MINT) return;
+      let inputMint: string;
+      let outputMint: string;
+      let amountUnits: number;
+      let isMax = false;
 
-    let inputMint: string;
-    let outputMint: string;
-    let amountUnits: number;
-    let isMax = false;
+      if (input.kind === "buy") {
+        const fx = input.fxRate || 1;
+        const notionalUsd =
+          Number.isFinite(input.amountDisplay) && input.amountDisplay > 0
+            ? input.amountDisplay / fx
+            : 0;
+        if (notionalUsd <= 0) return;
 
-    if (input.kind === "buy") {
-      const notionalUsd =
-        Number.isFinite(input.amountDisplay) && input.amountDisplay > 0
-          ? input.amountDisplay / (input.fxRate || 1)
-          : 0;
-      if (notionalUsd <= 0) return;
-      amountUnits = Math.floor(notionalUsd * 10 ** USDC_DECIMALS);
-      inputMint = USDC_MINT;
-      outputMint = input.outputMint;
-    } else {
-      amountUnits = Math.floor(input.amountUi * 10 ** input.inputDecimals);
-      if (!Number.isFinite(amountUnits) || amountUnits <= 0) return;
-      inputMint = input.inputMint;
-      outputMint = USDC_MINT;
-      isMax = input.isMax ?? false;
-    }
+        amountUnits = safeUnitsFromUi(notionalUsd, USDC_DECIMALS);
+        if (!amountUnits) return;
 
-    const params = {
-      fromOwnerBase58: input.fromOwnerBase58,
-      inputMint,
-      outputMint,
-      amountUnits,
-      slippageBps: input.slippageBps ?? 50,
-      isMax,
-    };
+        inputMint = USDC_MINT;
+        outputMint = input.outputMint;
+      } else {
+        isMax = Boolean(input.isMax);
+        if (isMax) {
+          // server will use full balance; we just pass a dummy >0
+          amountUnits = 1;
+        } else {
+          amountUnits = safeUnitsFromUi(input.amountUi, input.inputDecimals);
+          if (!amountUnits) return;
+        }
+        inputMint = input.inputMint;
+        outputMint = USDC_MINT;
+      }
 
-    try {
-      const response = await postJSON<BuildResponse>("/api/jup/build", params, {
-        timeout: 8_000,
-      });
-
-      // Cache with 20s TTL (blockhash valid for ~60s, but we want fresh)
-      prefetchCacheRef.current = {
-        key: JSON.stringify(params),
-        response,
-        expires: Date.now() + 20_000,
+      const params = {
+        fromOwnerBase58: input.fromOwnerBase58,
+        inputMint,
+        outputMint,
+        amountUnits,
+        slippageBps: input.slippageBps ?? 50,
+        isMax,
       };
 
-      console.log("[UsdcSwap] Prefetch complete");
-    } catch (e) {
-      // Prefetch failure is non-fatal
-      console.warn("[UsdcSwap] Prefetch failed:", e);
-    }
-  }, []);
+      try {
+        const response = await postJSON<BuildResponse>(
+          "/api/jup/build",
+          params,
+          {
+            timeout: 8_000,
+            signal: abortRef.current?.signal,
+          },
+        );
 
-  // ───────── Main swap function ─────────
+        // Only cache if it’s not going to make Haven overpay.
+        const pLamports = response.priorityFeeLamports ?? 0;
+        if (
+          Number.isFinite(pLamports) &&
+          pLamports > 0 &&
+          pLamports > PRIORITY_FEE_LAMPORTS_CAP
+        ) {
+          // Network is hot — don’t cache this, user may wait and try later.
+          return;
+        }
+
+        prefetchCacheRef.current = {
+          key: JSON.stringify(params),
+          response,
+          expires: Date.now() + 12_000, // super short TTL
+        };
+      } catch {
+        // prefetch failure is non-fatal
+      }
+    },
+    [ensureAuthed],
+  );
 
   const swap = useCallback(
     async (input: UsdcSwapInput): Promise<UsdcSwapResult> => {
       const startTime = Date.now();
 
-      if (inFlightRef.current) {
-        throw new Error("A swap is already in progress");
-      }
-
-      if (!input.fromOwnerBase58) {
-        throw new Error("Invalid swap parameters");
-      }
-
-      if (!USDC_MINT) {
-        throw new Error("USDC mint not configured");
-      }
+      if (inFlightRef.current) throw new Error("A swap is already in progress");
+      if (!USDC_MINT) throw new Error("USDC mint not configured");
+      if (!input.fromOwnerBase58) throw new Error("Invalid swap parameters");
 
       inFlightRef.current = true;
       abortRef.current = new AbortController();
 
-      // Reset state
       setStatus("idle");
       setError(null);
       setSignature(null);
+
+      // Ensure auth ready + user can sign
+      await ensureAuthed();
 
       // Derive swap params
       let inputMint: string;
       let outputMint: string;
       let amountUnits: number;
-      let isMax: boolean | undefined;
       const kind = input.kind;
+      const slippageBps = clampInt(input.slippageBps ?? 50, 1, 3_000);
+      let isMax = false;
 
       if (input.kind === "buy") {
+        // Display -> USD -> USDC units
+        const fx = input.fxRate || 1;
         const notionalUsd =
           Number.isFinite(input.amountDisplay) && input.amountDisplay > 0
-            ? input.amountDisplay / (input.fxRate || 1)
+            ? input.amountDisplay / fx
             : 0;
 
         if (notionalUsd <= 0) {
@@ -377,38 +462,42 @@ export function useServerSponsoredUsdcSwap() {
           };
           setError(err);
           setStatus("error");
-          inFlightRef.current = false;
           throw new Error(err.message);
         }
 
-        amountUnits = Math.floor(notionalUsd * 10 ** USDC_DECIMALS);
-
-        console.log("[UsdcSwap] Buy conversion:", {
-          amountDisplay: input.amountDisplay,
-          fxRate: input.fxRate,
-          notionalUsd,
-          amountUnits,
-        });
-
-        inputMint = USDC_MINT;
-        outputMint = input.outputMint;
-      } else {
-        amountUnits = Math.floor(input.amountUi * 10 ** input.inputDecimals);
-
-        if (!Number.isFinite(amountUnits) || amountUnits <= 0) {
+        amountUnits = safeUnitsFromUi(notionalUsd, USDC_DECIMALS);
+        if (!amountUnits) {
           const err: UsdcSwapError = {
             message: "Amount is too small",
             code: "INVALID_AMOUNT",
           };
           setError(err);
           setStatus("error");
-          inFlightRef.current = false;
+          throw new Error(err.message);
+        }
+
+        inputMint = USDC_MINT;
+        outputMint = input.outputMint;
+      } else {
+        isMax = Boolean(input.isMax);
+
+        // If isMax, server ignores amountUnits and uses balance; still require a positive number to pass validation paths.
+        amountUnits = isMax
+          ? 1
+          : safeUnitsFromUi(input.amountUi, input.inputDecimals);
+
+        if (!amountUnits) {
+          const err: UsdcSwapError = {
+            message: "Amount is too small",
+            code: "INVALID_AMOUNT",
+          };
+          setError(err);
+          setStatus("error");
           throw new Error(err.message);
         }
 
         inputMint = input.inputMint;
         outputMint = USDC_MINT;
-        isMax = input.isMax;
       }
 
       let priorityFeeLamports: number | undefined;
@@ -417,29 +506,48 @@ export function useServerSponsoredUsdcSwap() {
         /* ══════════ PHASE 1: BUILD ══════════ */
         setStatus("building");
 
-        let buildResp: BuildResponse | undefined;
         const buildParams = {
           fromOwnerBase58: input.fromOwnerBase58,
           inputMint,
           outputMint,
           amountUnits,
-          slippageBps: input.slippageBps ?? 50,
-          isMax: isMax === true,
+          slippageBps,
+          isMax,
         };
 
-        // Fast retry loop - reduced delay for speed
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        let buildResp: BuildResponse | undefined;
+
+        for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
           try {
             buildResp = await buildTransaction(buildParams);
             break;
           } catch (e) {
-            if (attempt === 2 || !isRetryableError(e)) throw e;
-            // Minimal delay - just enough to get a fresh blockhash
-            await new Promise((r) => setTimeout(r, 100));
+            if (attempt === MAX_BUILD_ATTEMPTS || !isRetryableError(e)) throw e;
+            // Small wait for fresh blockhash/fees
+            await sleep(120);
           }
         }
 
         priorityFeeLamports = buildResp!.priorityFeeLamports;
+
+        // ── GAS SAFETY: cap priority fee (Haven pays this) ──
+        // If above cap, we fail fast with a retryable error.
+        if (
+          typeof priorityFeeLamports === "number" &&
+          Number.isFinite(priorityFeeLamports) &&
+          priorityFeeLamports > PRIORITY_FEE_LAMPORTS_CAP
+        ) {
+          const err: UsdcSwapError = {
+            message:
+              "Network is busy right now. Try again in a moment for cheaper fees.",
+            code: "PRIORITY_FEE_TOO_HIGH",
+            stage: "build",
+            retryable: true,
+          };
+          setError(err);
+          setStatus("error");
+          throw Object.assign(new Error(err.message), err);
+        }
 
         /* ══════════ PHASE 2: SIGN ══════════ */
         setStatus("signing");
@@ -447,7 +555,7 @@ export function useServerSponsoredUsdcSwap() {
         const txBytes = Buffer.from(buildResp!.transaction, "base64");
         const unsignedTx = VersionedTransaction.deserialize(txBytes);
 
-        // Validate user is a signer
+        // Validate user is a required signer (protects against stale/wrong wallet)
         const msg = unsignedTx.message as unknown as {
           header?: { numRequiredSignatures?: number };
           staticAccountKeys?: PublicKey[];
@@ -458,7 +566,16 @@ export function useServerSponsoredUsdcSwap() {
           .map((k) => (k instanceof PublicKey ? k : new PublicKey(k)));
 
         if (!signerKeys.some((k) => k.toBase58() === input.fromOwnerBase58)) {
-          throw new Error("Transaction doesn't include user as signer");
+          const err: UsdcSwapError = {
+            message:
+              "Wallet session is out of sync. Please refresh and try again.",
+            code: "WALLET_MISMATCH",
+            stage: "sign",
+            retryable: true,
+          };
+          setError(err);
+          setStatus("error");
+          throw Object.assign(new Error(err.message), err);
         }
 
         let signedB64: string;
@@ -466,7 +583,15 @@ export function useServerSponsoredUsdcSwap() {
           signedB64 = await signWithWallet(input.fromOwnerBase58, txBytes);
         } catch (e) {
           if (isUserRejection(e)) {
-            throw new Error("Transaction cancelled");
+            const err: UsdcSwapError = {
+              message: "Transaction cancelled",
+              code: "USER_CANCELLED",
+              stage: "sign",
+              retryable: false,
+            };
+            setError(err);
+            setStatus("error");
+            throw Object.assign(new Error(err.message), err);
           }
           throw e;
         }
@@ -474,41 +599,46 @@ export function useServerSponsoredUsdcSwap() {
         /* ══════════ PHASE 3: SEND ══════════ */
         setStatus("sending");
 
-        // Pass fee info from build response to send endpoint for tracking
-        const sendResp = await postJSON<SendResponse>(
-          "/api/jup/send",
-          {
-            transaction: signedB64,
-            // Fee tracking info (symbol resolved server-side from token config)
-            feeUnits: buildResp!.feeUnits,
-            feeMint: buildResp!.feeMint,
-            feeDecimals: buildResp!.feeDecimals,
-          },
-          { timeout: 30_000 }, // Longer timeout for send (network latency)
-        );
+        let sendResp: SendResponse | undefined;
 
-        setSignature(sendResp.signature);
+        for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+          try {
+            sendResp = await postJSON<SendResponse>(
+              "/api/jup/send",
+              {
+                transaction: signedB64,
+                feeMint: buildResp!.feeMint, // hint for server-side fee parsing
+                // pass confirm context (faster + fewer RPC calls)
+                recentBlockhash: buildResp!.recentBlockhash,
+                lastValidBlockHeight: buildResp!.lastValidBlockHeight,
+              },
+              { timeout: 30_000, signal: abortRef.current?.signal },
+            );
+            break;
+          } catch (e) {
+            // If blockhash expired after sign, we must rebuild+resign.
+            if (isBlockhashError(e)) throw e;
+            if (attempt === MAX_SEND_ATTEMPTS || !isRetryableError(e)) throw e;
+            await sleep(150);
+          }
+        }
+
+        setSignature(sendResp!.signature);
 
         /* ══════════ PHASE 4: DONE ══════════ */
-        // Skip confirming state - we trust the RPC accepted it
         setStatus("done");
 
         const totalTime = Date.now() - startTime;
-        console.log(
-          `[UsdcSwap] ${kind} ${sendResp.signature.slice(0, 8)}... ${totalTime}ms` +
-            (priorityFeeLamports
-              ? ` (priority: ${priorityFeeLamports} lamports)`
-              : ""),
-        );
 
         return {
-          signature: sendResp.signature,
+          signature: sendResp!.signature,
           kind,
           inputMint,
           outputMint,
           amountUnits,
           totalTimeMs: totalTime,
           priorityFeeLamports,
+          confirmed: Boolean(sendResp!.confirmed),
         };
       } catch (e) {
         const err = e as Error & {
@@ -516,27 +646,24 @@ export function useServerSponsoredUsdcSwap() {
           stage?: string;
           retryable?: boolean;
         };
+
         const swapError: UsdcSwapError = {
           message: err.message || "Swap failed",
           code: err.code,
           stage: err.stage,
-          retryable: err.retryable || isRetryableError(e),
+          retryable: Boolean(err.retryable) || isRetryableError(e),
         };
 
         setError(swapError);
         setStatus("error");
-
-        console.error("[UsdcSwap] Failed:", swapError);
         throw e;
       } finally {
         inFlightRef.current = false;
         abortRef.current = null;
       }
     },
-    [signWithWallet, buildTransaction],
+    [ensureAuthed, signWithWallet, buildTransaction],
   );
-
-  // ───────── Reset ─────────
 
   const reset = useCallback(() => {
     if (abortRef.current) {
@@ -550,13 +677,9 @@ export function useServerSponsoredUsdcSwap() {
     setSignature(null);
   }, []);
 
-  // ───────── Clear prefetch cache ─────────
-
   const clearPrefetch = useCallback(() => {
     prefetchCacheRef.current = null;
   }, []);
-
-  // ───────── Return ─────────
 
   return useMemo(
     () => ({

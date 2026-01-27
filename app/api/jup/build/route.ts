@@ -63,6 +63,32 @@ const PRIORITY_FEE_CONFIG = {
   PRIORITY_LEVEL: "Medium" as const,
 };
 
+/* ───────── Slippage Config ─────────
+   Goals:
+   - Default stays tight (fast + fair)
+   - But we automatically widen for problematic pairs
+   - And we enable Jupiter dynamic slippage to reduce 0x1771 failures
+*/
+
+const SLIPPAGE_CONFIG = {
+  // If client sends nothing, start here
+  DEFAULT_BPS: 50,
+  // Hard clamp user input (avoid insane values)
+  MIN_BPS: 10,
+  MAX_BPS: 800,
+
+  // Dynamic slippage caps (Jupiter will pick within these)
+  DYNAMIC_MIN_BPS: 50,
+  DYNAMIC_MAX_BPS_DEFAULT: 300, // 3%
+  DYNAMIC_MAX_BPS_PROBLEM: 800, // 8% for problematic mints/pairs
+};
+
+// If ONE coin is a pain, put its mint(s) here.
+// You can add both input & output mints. Keep it small and explicit.
+const PROBLEM_MINTS = new Set<string>([
+  // "YourProblemMintHere11111111111111111111111111111",
+]);
+
 /* ───────── Singletons ───────── */
 
 let _conn: Connection | null = null;
@@ -177,8 +203,10 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
           {
             ...(accountKeys?.length ? { accountKeys } : {}),
             options: {
+              // ✅ valid combination: ask for levels, then pick ours
               includeAllPriorityFeeLevels: true,
-              recommended: true,
+              // ❌ recommended cannot be combined with includeAllPriorityFeeLevels
+              // recommended: true,
               evaluateEmptySlotAsZero: true,
             },
           },
@@ -405,6 +433,31 @@ function parseUiAmountToUnits(amountUi: string, decimals: number): number {
   return units;
 }
 
+function computeSlippage(params: {
+  requestedBps: unknown;
+  inputMint: PublicKey;
+  outputMint: PublicKey;
+}) {
+  const req =
+    typeof params.requestedBps === "number" &&
+    Number.isFinite(params.requestedBps)
+      ? Math.floor(params.requestedBps)
+      : SLIPPAGE_CONFIG.DEFAULT_BPS;
+
+  const clamped = clamp(req, SLIPPAGE_CONFIG.MIN_BPS, SLIPPAGE_CONFIG.MAX_BPS);
+
+  const inKey = params.inputMint.toBase58();
+  const outKey = params.outputMint.toBase58();
+  const isProblem = PROBLEM_MINTS.has(inKey) || PROBLEM_MINTS.has(outKey);
+
+  const dynamicMinBps = Math.min(SLIPPAGE_CONFIG.DYNAMIC_MIN_BPS, clamped);
+  const dynamicMaxBps = isProblem
+    ? SLIPPAGE_CONFIG.DYNAMIC_MAX_BPS_PROBLEM
+    : SLIPPAGE_CONFIG.DYNAMIC_MAX_BPS_DEFAULT;
+
+  return { slippageBps: clamped, dynamicMinBps, dynamicMaxBps, isProblem };
+}
+
 /* ───────── ROUTE ───────── */
 
 export async function POST(req: Request) {
@@ -446,7 +499,6 @@ export async function POST(req: Request) {
     const hinted = body?.fromOwnerBase58?.trim();
     const inputMintStr = body?.inputMint?.trim() ?? "";
     const outputMintStr = body?.outputMint?.trim() ?? "";
-    const slippageBps = body?.slippageBps ?? 50;
     const isMax = Boolean(body?.isMax);
 
     if (!inputMintStr || !outputMintStr) {
@@ -486,6 +538,13 @@ export async function POST(req: Request) {
         traceId,
       });
     }
+
+    // ✅ slippage: clamp + dynamic slippage settings
+    const slip = computeSlippage({
+      requestedBps: body?.slippageBps,
+      inputMint,
+      outputMint,
+    });
 
     const conn = getConnection();
 
@@ -590,7 +649,7 @@ export async function POST(req: Request) {
         inputMint: inputMint.toBase58(),
         outputMint: outputMint.toBase58(),
         amount: String(netUnits), // ✅ swap uses net (after fee)
-        slippageBps: String(slippageBps),
+        slippageBps: String(slip.slippageBps),
       });
 
     const [quoteRes, blockhashData, priorityFeeMicroLamports] =
@@ -627,6 +686,12 @@ export async function POST(req: Request) {
         wrapAndUnwrapSol: false,
         dynamicComputeUnitLimit: true,
         prioritizationFeeLamports: 0, // ✅ we add our own compute budget ixs
+
+        // ✅ reduce 0x1771 failures on volatile / thin-liquidity routes
+        dynamicSlippage: {
+          minBps: slip.dynamicMinBps,
+          maxBps: slip.dynamicMaxBps,
+        },
       }),
     });
 
@@ -767,7 +832,8 @@ export async function POST(req: Request) {
     console.log(
       `[JUP/BUILD] ${traceId} ${buildTime}ms ${inputMintStr.slice(0, 8)}→${outputMintStr.slice(0, 8)} ` +
         `gross=${amountUnits} fee=${feeUnits} net=${netUnits} ` +
-        `priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`,
+        `slip=${slip.slippageBps} dyn=[${slip.dynamicMinBps}-${slip.dynamicMaxBps}]` +
+        ` priorityFee=${cappedPriorityFeeLamports}lamports (${priorityFeeMicroLamports}µL/CU × ${computeUnits}CU)`,
     );
 
     return NextResponse.json({
@@ -776,10 +842,16 @@ export async function POST(req: Request) {
       lastValidBlockHeight,
       traceId,
 
-      // Expected fee (UI only)
+      // ✅ keep existing UI fields
       expectedFeeUnits: feeUnits,
       expectedFeeBps: feeBps,
       expectedFeeRate: feeRate,
+
+      // ✅ AND include the names your hook expects (your hook currently reads feeUnits)
+      feeUnits,
+      feeBps,
+      feeRate,
+
       feeMint: inputMint.toBase58(),
       feeDecimals: inputDecimals,
 
@@ -787,6 +859,12 @@ export async function POST(req: Request) {
       priorityFeeMicroLamports,
       priorityFeeLamports: cappedPriorityFeeLamports,
       computeUnits,
+
+      // Slippage info (handy for client + debugging)
+      slippageBpsUsed: slip.slippageBps,
+      dynamicSlippageMinBps: slip.dynamicMinBps,
+      dynamicSlippageMaxBps: slip.dynamicMaxBps,
+      isProblemPair: slip.isProblem,
 
       // Swap sizing
       grossInUnits: amountUnits,

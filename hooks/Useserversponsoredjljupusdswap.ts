@@ -20,11 +20,22 @@ declare global {
 }
 if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
 
-/* ───────── ENV / CONSTANTS ───────── */
+/* ───────── CONSTANTS ───────── */
 
 // JLJupUSD - Jupiter Lend vault share token for JupUSD
 const JLJUPUSD_MINT = "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk";
 const JLJUPUSD_DECIMALS = 6;
+
+/**
+ * Haven pays priority fees (fee payer = Haven), so cap them hard.
+ * Tune if you want more aggressive landing during congestion.
+ */
+const PRIORITY_FEE_LAMPORTS_CAP = Number(
+  process.env.NEXT_PUBLIC_PRIORITY_FEE_LAMPORTS_CAP ?? "100000", // 0.0001 SOL
+);
+
+const MAX_BUILD_ATTEMPTS = 2;
+const MAX_SEND_ATTEMPTS = 2;
 
 /* ───────── EXPORTED TYPES ───────── */
 
@@ -60,7 +71,9 @@ export type JLJupUSDSwapResult = {
   amountUnits: number;
   totalTimeMs: number;
   priorityFeeLamports?: number;
-  // Fee info
+  confirmed?: boolean;
+
+  // Fee info (UI only)
   feeUnits?: number;
   feeMint?: string;
   feeDecimals?: number;
@@ -84,12 +97,15 @@ type BuildResponse = {
   outputMint: string;
   grossInUnits: number;
   netInUnits: number;
-  // Fee info (fee is taken from input token = JLJupUSD)
+
+  // Fee info (your build route currently charges from INPUT mint)
   expectedFeeUnits?: number;
   expectedFeeBps?: number;
   expectedFeeRate?: number;
-  feeMint?: string;
-  feeDecimals?: number;
+
+  feeMint: string;
+  feeDecimals: number;
+
   buildTimeMs?: number;
   priorityFeeLamports?: number;
   priorityFeeMicroLamports?: number;
@@ -99,21 +115,41 @@ type BuildResponse = {
 type SendResponse = {
   signature: string;
   sendTimeMs?: number;
+  confirmed?: boolean;
+  confirmTimeout?: boolean;
 };
 
 /* ───────── HELPERS ───────── */
 
-/**
- * Optimized fetch with shorter timeout for speed
- */
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+function clampInt(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function safeUnitsFromUi(ui: number, decimals: number): number {
+  const d = clampInt(decimals, 0, 18);
+  const factor = 10 ** d;
+  const units = Math.floor(ui * factor);
+  if (!Number.isFinite(units) || units <= 0) return 0;
+  if (units > Number.MAX_SAFE_INTEGER) throw new Error("Amount too large");
+  return units;
+}
+
 async function postJSON<T>(
   url: string,
   body: unknown,
-  options?: { timeout?: number },
+  options?: { timeout?: number; signal?: AbortSignal },
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = options?.timeout ?? 15_000;
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  const outer = options?.signal;
+  const onAbort = () => controller.abort();
+  if (outer) outer.addEventListener("abort", onAbort, { once: true });
 
   try {
     const res = await fetch(url, {
@@ -126,8 +162,6 @@ async function postJSON<T>(
       keepalive: true,
     });
 
-    clearTimeout(timeoutId);
-
     const text = await res.text().catch(() => "");
     let data: unknown = null;
     try {
@@ -139,25 +173,27 @@ async function postJSON<T>(
     if (!res.ok) {
       const d = data as Record<string, unknown> | null;
       const msg =
-        d?.userMessage ||
-        d?.error ||
-        d?.message ||
+        (d?.userMessage as string) ||
+        (d?.error as string) ||
+        (d?.message as string) ||
         `Request failed: ${res.status}`;
-      const e = new Error(String(msg)) as Error & {
+
+      const err = new Error(String(msg)) as Error & {
         code?: string;
         stage?: string;
         retryable?: boolean;
       };
-      e.code = d?.code as string | undefined;
-      e.stage = d?.stage as string | undefined;
-      e.retryable =
-        d?.code === "BLOCKHASH_EXPIRED" || d?.code === "SESSION_EXPIRED";
-      throw e;
+      err.code = (d?.code as string) || undefined;
+      err.stage = (d?.stage as string) || undefined;
+      err.retryable =
+        err.code === "BLOCKHASH_EXPIRED" ||
+        err.code === "SESSION_EXPIRED" ||
+        err.code === "TIMEOUT";
+      throw err;
     }
 
     return data as T;
   } catch (e) {
-    clearTimeout(timeoutId);
     if ((e as Error).name === "AbortError") {
       const err = new Error("Request timed out") as Error & {
         code?: string;
@@ -168,6 +204,9 @@ async function postJSON<T>(
       throw err;
     }
     throw e;
+  } finally {
+    clearTimeout(timeoutId);
+    if (outer) outer.removeEventListener("abort", onAbort);
   }
 }
 
@@ -212,7 +251,7 @@ function isRetryableError(e: unknown): boolean {
 /* ───────── HOOK ───────── */
 
 export function useServerSponsoredJLJupUSDSwap() {
-  const { login, getAccessToken } = usePrivy();
+  const { login, authenticated, ready } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
 
@@ -223,21 +262,22 @@ export function useServerSponsoredJLJupUSDSwap() {
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Cache for prefetched builds
   const prefetchCacheRef = useRef<{
     key: string;
     response: BuildResponse;
     expires: number;
   } | null>(null);
 
-  // ───────── Sign with wallet ─────────
+  const ensureAuthed = useCallback(async () => {
+    if (!ready)
+      throw new Error("Auth is still loading. Try again in a moment.");
+    if (!authenticated) await login();
+  }, [ready, authenticated, login]);
 
   const signWithWallet = useCallback(
     async (address: string, txBytes: Uint8Array) => {
       const wallet = pickWallet(wallets, address);
-      if (!wallet) {
-        throw new Error("Wallet not connected. Please reconnect.");
-      }
+      if (!wallet) throw new Error("Wallet not connected. Please reconnect.");
 
       const { signedTransaction } = await signTransaction({
         transaction: txBytes,
@@ -249,8 +289,6 @@ export function useServerSponsoredJLJupUSDSwap() {
     [wallets, signTransaction],
   );
 
-  // ───────── Build transaction (extracted for prefetch) ─────────
-
   const buildTransaction = useCallback(
     async (params: {
       fromOwnerBase58: string;
@@ -260,84 +298,90 @@ export function useServerSponsoredJLJupUSDSwap() {
       slippageBps: number;
       isMax: boolean;
     }): Promise<BuildResponse> => {
-      // Check prefetch cache first
       const cacheKey = JSON.stringify(params);
       const cached = prefetchCacheRef.current;
       if (cached && cached.key === cacheKey && cached.expires > Date.now()) {
-        console.log("[JLJupUSDSwap] Using prefetched build");
-        prefetchCacheRef.current = null; // Consume the cache
+        prefetchCacheRef.current = null; // consume
         return cached.response;
       }
 
-      // Uses the same /api/jup/build endpoint as regular swaps
-      // The endpoint handles any SPL token as input
       return postJSON<BuildResponse>("/api/jup/build", params, {
-        timeout: 10_000, // 10s timeout for build
+        timeout: 10_000,
+        signal: abortRef.current?.signal,
       });
     },
     [],
   );
 
-  // ───────── Prefetch build (call before user confirms) ─────────
-
+  /**
+   * Prefetch build right before confirm (short TTL).
+   * If build returns a priority fee above cap, don't cache it.
+   */
   const prefetch = useCallback(
     async (input: JLJupUSDSwapInput): Promise<void> => {
       if (!input.fromOwnerBase58 || !input.outputMint) return;
+      if (input.outputMint === JLJUPUSD_MINT) return;
 
-      const amountUnits = Math.floor(input.amountUi * 10 ** JLJUPUSD_DECIMALS);
-      if (!Number.isFinite(amountUnits) || amountUnits <= 0) return;
+      try {
+        await ensureAuthed();
+      } catch {
+        return;
+      }
+
+      const isMax = Boolean(input.isMax);
+      const amountUnits = isMax
+        ? 1
+        : safeUnitsFromUi(input.amountUi, JLJUPUSD_DECIMALS);
+
+      if (!amountUnits) return;
 
       const params = {
         fromOwnerBase58: input.fromOwnerBase58,
         inputMint: JLJUPUSD_MINT,
         outputMint: input.outputMint,
         amountUnits,
-        slippageBps: input.slippageBps ?? 50,
-        isMax: input.isMax ?? false,
+        slippageBps: clampInt(input.slippageBps ?? 50, 1, 3_000),
+        isMax,
       };
 
       try {
         const response = await postJSON<BuildResponse>(
           "/api/jup/build",
           params,
-          { timeout: 8_000 },
+          {
+            timeout: 8_000,
+            signal: abortRef.current?.signal,
+          },
         );
 
-        // Cache with 20s TTL (blockhash valid for ~60s, but we want fresh)
+        const pLamports = response.priorityFeeLamports ?? 0;
+        if (
+          Number.isFinite(pLamports) &&
+          pLamports > 0 &&
+          pLamports > PRIORITY_FEE_LAMPORTS_CAP
+        ) {
+          return;
+        }
+
         prefetchCacheRef.current = {
           key: JSON.stringify(params),
           response,
-          expires: Date.now() + 20_000,
+          expires: Date.now() + 12_000,
         };
-
-        console.log("[JLJupUSDSwap] Prefetch complete");
-      } catch (e) {
-        // Prefetch failure is non-fatal
-        console.warn("[JLJupUSDSwap] Prefetch failed:", e);
+      } catch {
+        // non-fatal
       }
     },
-    [],
+    [ensureAuthed],
   );
-
-  // ───────── Main swap function ─────────
 
   const swap = useCallback(
     async (input: JLJupUSDSwapInput): Promise<JLJupUSDSwapResult> => {
       const startTime = Date.now();
 
-      if (inFlightRef.current) {
-        throw new Error("A swap is already in progress");
-      }
-
-      if (!input.fromOwnerBase58) {
-        throw new Error("Invalid swap parameters");
-      }
-
-      if (!input.outputMint) {
-        throw new Error("Output token not specified");
-      }
-
-      // Prevent swapping JLJupUSD to itself
+      if (inFlightRef.current) throw new Error("A swap is already in progress");
+      if (!input.fromOwnerBase58) throw new Error("Invalid swap parameters");
+      if (!input.outputMint) throw new Error("Output token not specified");
       if (input.outputMint === JLJUPUSD_MINT) {
         throw new Error("Cannot swap JLJupUSD to itself");
       }
@@ -345,23 +389,27 @@ export function useServerSponsoredJLJupUSDSwap() {
       inFlightRef.current = true;
       abortRef.current = new AbortController();
 
-      // Reset state
       setStatus("idle");
       setError(null);
       setSignature(null);
 
-      // Calculate amount in base units
-      const amountUnits = Math.floor(input.amountUi * 10 ** JLJUPUSD_DECIMALS);
+      await ensureAuthed();
 
-      if (!Number.isFinite(amountUnits) || amountUnits <= 0) {
+      const isMax = Boolean(input.isMax);
+      const slippageBps = clampInt(input.slippageBps ?? 50, 1, 3_000);
+
+      const amountUnits = isMax
+        ? 1
+        : safeUnitsFromUi(input.amountUi, JLJUPUSD_DECIMALS);
+
+      if (!amountUnits) {
         const err: JLJupUSDSwapError = {
           message: "Amount is too small",
           code: "INVALID_AMOUNT",
         };
         setError(err);
         setStatus("error");
-        inFlightRef.current = false;
-        throw new Error(err.message);
+        throw Object.assign(new Error(err.message), err);
       }
 
       let priorityFeeLamports: number | undefined;
@@ -370,34 +418,46 @@ export function useServerSponsoredJLJupUSDSwap() {
         /* ══════════ PHASE 1: BUILD ══════════ */
         setStatus("building");
 
-        let buildResp: BuildResponse | undefined;
         const buildParams = {
           fromOwnerBase58: input.fromOwnerBase58,
           inputMint: JLJUPUSD_MINT,
           outputMint: input.outputMint,
           amountUnits,
-          slippageBps: input.slippageBps ?? 50,
-          isMax: input.isMax === true,
+          slippageBps,
+          isMax,
         };
 
-        console.log("[JLJupUSDSwap] Build params:", {
-          ...buildParams,
-          amountUi: input.amountUi,
-        });
+        let buildResp: BuildResponse | undefined;
 
-        // Fast retry loop - reduced delay for speed
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
           try {
             buildResp = await buildTransaction(buildParams);
             break;
           } catch (e) {
-            if (attempt === 2 || !isRetryableError(e)) throw e;
-            // Minimal delay - just enough to get a fresh blockhash
-            await new Promise((r) => setTimeout(r, 100));
+            if (attempt === MAX_BUILD_ATTEMPTS || !isRetryableError(e)) throw e;
+            await sleep(120);
           }
         }
 
         priorityFeeLamports = buildResp!.priorityFeeLamports;
+
+        // ── HAVEN COST GUARD: hard cap priority fees ──
+        if (
+          typeof priorityFeeLamports === "number" &&
+          Number.isFinite(priorityFeeLamports) &&
+          priorityFeeLamports > PRIORITY_FEE_LAMPORTS_CAP
+        ) {
+          const err: JLJupUSDSwapError = {
+            message:
+              "Network is busy right now. Try again in a moment for cheaper fees.",
+            code: "PRIORITY_FEE_TOO_HIGH",
+            stage: "build",
+            retryable: true,
+          };
+          setError(err);
+          setStatus("error");
+          throw Object.assign(new Error(err.message), err);
+        }
 
         /* ══════════ PHASE 2: SIGN ══════════ */
         setStatus("signing");
@@ -405,7 +465,7 @@ export function useServerSponsoredJLJupUSDSwap() {
         const txBytes = Buffer.from(buildResp!.transaction, "base64");
         const unsignedTx = VersionedTransaction.deserialize(txBytes);
 
-        // Validate user is a signer
+        // Validate user is a required signer (prevents wrong-wallet sign)
         const msg = unsignedTx.message as unknown as {
           header?: { numRequiredSignatures?: number };
           staticAccountKeys?: PublicKey[];
@@ -416,7 +476,16 @@ export function useServerSponsoredJLJupUSDSwap() {
           .map((k) => (k instanceof PublicKey ? k : new PublicKey(k)));
 
         if (!signerKeys.some((k) => k.toBase58() === input.fromOwnerBase58)) {
-          throw new Error("Transaction doesn't include user as signer");
+          const err: JLJupUSDSwapError = {
+            message:
+              "Wallet session is out of sync. Please refresh and try again.",
+            code: "WALLET_MISMATCH",
+            stage: "sign",
+            retryable: true,
+          };
+          setError(err);
+          setStatus("error");
+          throw Object.assign(new Error(err.message), err);
         }
 
         let signedB64: string;
@@ -424,7 +493,15 @@ export function useServerSponsoredJLJupUSDSwap() {
           signedB64 = await signWithWallet(input.fromOwnerBase58, txBytes);
         } catch (e) {
           if (isUserRejection(e)) {
-            throw new Error("Transaction cancelled");
+            const err: JLJupUSDSwapError = {
+              message: "Transaction cancelled",
+              code: "USER_CANCELLED",
+              stage: "sign",
+              retryable: false,
+            };
+            setError(err);
+            setStatus("error");
+            throw Object.assign(new Error(err.message), err);
           }
           throw e;
         }
@@ -432,44 +509,50 @@ export function useServerSponsoredJLJupUSDSwap() {
         /* ══════════ PHASE 3: SEND ══════════ */
         setStatus("sending");
 
-        // Pass fee info from build response to send endpoint for tracking
-        // Fee is taken from input token (JLJupUSD) and sent to treasury
-        const sendResp = await postJSON<SendResponse>(
-          "/api/jup/send",
-          {
-            transaction: signedB64,
-            // Fee tracking info - fee mint is JLJupUSD
-            feeMint: buildResp!.feeMint ?? JLJUPUSD_MINT,
-          },
-          { timeout: 30_000 }, // Longer timeout for send (network latency)
-        );
+        let sendResp: SendResponse | undefined;
 
-        setSignature(sendResp.signature);
+        for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+          try {
+            sendResp = await postJSON<SendResponse>(
+              "/api/jup/send",
+              {
+                transaction: signedB64,
+                // fee transfer in build is from INPUT mint (JLJupUSD here)
+                feeMint: buildResp!.feeMint,
+                // optional fast-confirm inputs if your send route supports them
+                recentBlockhash: buildResp!.recentBlockhash,
+                lastValidBlockHeight: buildResp!.lastValidBlockHeight,
+              },
+              { timeout: 30_000, signal: abortRef.current?.signal },
+            );
+            break;
+          } catch (e) {
+            if (isBlockhashError(e)) throw e; // must rebuild/resign
+            if (attempt === MAX_SEND_ATTEMPTS || !isRetryableError(e)) throw e;
+            await sleep(150);
+          }
+        }
 
-        /* ══════════ PHASE 4: DONE ══════════ */
-        // Skip confirming state - we trust the RPC accepted it
+        setSignature(sendResp!.signature);
         setStatus("done");
 
         const totalTime = Date.now() - startTime;
-        console.log(
-          `[JLJupUSDSwap] ${sendResp.signature.slice(0, 8)}... ${totalTime}ms` +
-            ` | ${input.amountUi} JLJupUSD -> ${input.outputMint.slice(0, 8)}` +
-            (priorityFeeLamports
-              ? ` (priority: ${priorityFeeLamports} lamports)`
-              : ""),
-        );
 
         return {
-          signature: sendResp.signature,
+          signature: sendResp!.signature,
           inputMint: JLJUPUSD_MINT,
           outputMint: input.outputMint,
           amountUnits,
           totalTimeMs: totalTime,
           priorityFeeLamports,
-          // Fee info
+          confirmed: Boolean(
+            (sendResp as SendResponse & { confirmed?: boolean })?.confirmed,
+          ),
+
+          // UI-only fee info from build response
           feeUnits: buildResp!.expectedFeeUnits,
-          feeMint: buildResp!.feeMint ?? JLJUPUSD_MINT,
-          feeDecimals: buildResp!.feeDecimals ?? JLJUPUSD_DECIMALS,
+          feeMint: buildResp!.feeMint,
+          feeDecimals: buildResp!.feeDecimals,
         };
       } catch (e) {
         const err = e as Error & {
@@ -477,27 +560,24 @@ export function useServerSponsoredJLJupUSDSwap() {
           stage?: string;
           retryable?: boolean;
         };
+
         const swapError: JLJupUSDSwapError = {
           message: err.message || "Swap failed",
           code: err.code,
           stage: err.stage,
-          retryable: err.retryable || isRetryableError(e),
+          retryable: Boolean(err.retryable) || isRetryableError(e),
         };
 
         setError(swapError);
         setStatus("error");
-
-        console.error("[JLJupUSDSwap] Failed:", swapError);
         throw e;
       } finally {
         inFlightRef.current = false;
         abortRef.current = null;
       }
     },
-    [signWithWallet, buildTransaction],
+    [ensureAuthed, signWithWallet, buildTransaction],
   );
-
-  // ───────── Reset ─────────
 
   const reset = useCallback(() => {
     if (abortRef.current) {
@@ -511,13 +591,9 @@ export function useServerSponsoredJLJupUSDSwap() {
     setSignature(null);
   }, []);
 
-  // ───────── Clear prefetch cache ─────────
-
   const clearPrefetch = useCallback(() => {
     prefetchCacheRef.current = null;
   }, []);
-
-  // ───────── Return ─────────
 
   return useMemo(
     () => ({
@@ -528,7 +604,6 @@ export function useServerSponsoredJLJupUSDSwap() {
       status,
       error,
       signature,
-      // Expose the mint for convenience
       inputMint: JLJUPUSD_MINT,
       inputDecimals: JLJUPUSD_DECIMALS,
       isBusy:

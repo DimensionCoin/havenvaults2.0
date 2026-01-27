@@ -54,6 +54,33 @@ const TREASURY_OWNER = new PublicKey(
   required("NEXT_PUBLIC_APP_TREASURY_OWNER"),
 );
 
+/* ───────── Broadcast/Confirm Tuning ─────────
+   Goals:
+   - fast response to client
+   - high landing rate
+   - minimize RPC + compute costs
+*/
+
+const SEND_CONFIG = {
+  // If you have a very reliable RPC, you can set this true to shave latency.
+  // I keep it false because you want "it lands" > micro speed.
+  SKIP_PREFLIGHT: false,
+
+  // Keep retries modest to avoid long waits + duplicate tx spam
+  MAX_RETRIES: 2,
+
+  // Confirm quickly but don't block too long
+  CONFIRM_COMMITMENT: "confirmed" as const,
+  CONFIRM_TIMEOUT_MS: 6_500,
+
+  // If confirm fails (timeout), we still return the signature but we’ll
+  // do a background landing check for telemetry if you add it later.
+  RETURN_SIG_ON_TIMEOUT: true,
+
+  // If preflight fails with blockhash/expired, client should rebuild.
+  // We'll map these codes to retryable.
+};
+
 /* ───────── Token Lookup ───────── */
 
 const CLUSTER = getCluster();
@@ -74,7 +101,9 @@ function getConnection(): Connection {
   if (!_conn) {
     _conn = new Connection(SOLANA_RPC, {
       commitment: "confirmed",
-      confirmTransactionInitialTimeout: 30_000,
+      // Keep this a bit lower to avoid long stuck confirmations
+      confirmTransactionInitialTimeout: 20_000,
+      disableRetryOnRateLimit: false,
     });
   }
   return _conn;
@@ -183,6 +212,21 @@ function toSignedBytes(resp: unknown): Uint8Array {
   }
 
   throw new Error("Unexpected signTransaction return type");
+}
+
+function isBlockhashError(msg: string) {
+  const m = msg.toLowerCase();
+  return m.includes("blockhash") || m.includes("expired");
+}
+
+function isSlippageError(msg: string) {
+  const m = msg.toLowerCase();
+  return m.includes("slippage") || msg.includes("0x1771");
+}
+
+function isInsufficientError(msg: string) {
+  const m = msg.toLowerCase();
+  return m.includes("insufficient") || /\b0x1\b/.test(msg);
 }
 
 /* ───────── fees helpers (INLINED, no BigInt literals) ───────── */
@@ -547,6 +591,45 @@ async function recordSwapFeeFromChainAsync(params: {
   }
 }
 
+/* ───────── Confirm helper (fast) ───────── */
+
+async function confirmFast(params: {
+  conn: Connection;
+  signature: string;
+  lastValidBlockHeight?: number;
+  blockhash?: string;
+  timeoutMs: number;
+}) {
+  const { conn, signature, lastValidBlockHeight, blockhash, timeoutMs } =
+    params;
+
+  // Prefer confirmTransaction with blockhash context if provided (best)
+  const p = (async () => {
+    if (blockhash && typeof lastValidBlockHeight === "number") {
+      return conn.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        SEND_CONFIG.CONFIRM_COMMITMENT,
+      );
+    }
+    // Fallback: signature-only confirm
+    return conn.confirmTransaction(signature, SEND_CONFIG.CONFIRM_COMMITMENT);
+  })();
+
+  const t = new Promise<"timeout">((r) =>
+    setTimeout(() => r("timeout"), timeoutMs),
+  );
+
+  const res = await Promise.race([p, t]);
+  if (res === "timeout") return { ok: false as const, timeout: true as const };
+
+  // res is RpcResponseAndContext<SignatureResult>
+  // @solana/web3.js types are a little loose here; handle defensively.
+  const value = (res as unknown as { value?: { err?: unknown } }).value;
+  const err = value?.err;
+  if (err) return { ok: false as const, timeout: false as const, err };
+  return { ok: true as const, timeout: false as const };
+}
+
 /* ───────── Route Handler ───────── */
 
 export async function POST(req: NextRequest) {
@@ -562,7 +645,6 @@ export async function POST(req: NextRequest) {
       userPk = getUserWalletPubkey(user as UserWithWalletLike);
 
       // Prefer Mongo _id if present for fee events; fallback to privyId.
-      // (We don't rely on this for auth — auth is cookie session via requireServerUser.)
       const u = user as unknown as { _id?: unknown; privyId?: unknown };
       userIdForFeeEvents =
         typeof u?._id === "string"
@@ -583,7 +665,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ─────────── Parse Body ───────────
-    const body = (await req.json().catch(() => null)) as SendRequestBody | null;
+    const body = (await req.json().catch(() => null)) as
+      | (SendRequestBody & {
+          // optional context from build (lets us confirm cheaply/accurately)
+          recentBlockhash?: string;
+          lastValidBlockHeight?: number;
+        })
+      | null;
 
     if (!body?.transaction || typeof body.transaction !== "string") {
       return jsonError(400, "Missing 'transaction' in body", {
@@ -594,6 +682,15 @@ export async function POST(req: NextRequest) {
 
     const feeMintHint =
       typeof body.feeMint === "string" ? body.feeMint.trim() : undefined;
+
+    const buildBlockhash =
+      typeof body.recentBlockhash === "string"
+        ? body.recentBlockhash
+        : undefined;
+    const buildLastValid =
+      typeof body.lastValidBlockHeight === "number"
+        ? body.lastValidBlockHeight
+        : undefined;
 
     // ─────────── Deserialize Transaction ───────────
     const raw = Buffer.from(body.transaction, "base64");
@@ -680,10 +777,11 @@ export async function POST(req: NextRequest) {
 
     // ─────────── Broadcast ───────────
     let signature: string;
+
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
-        skipPreflight: false,
-        maxRetries: 2,
+        skipPreflight: SEND_CONFIG.SKIP_PREFLIGHT,
+        maxRetries: SEND_CONFIG.MAX_RETRIES,
         preflightCommitment: "confirmed",
       });
     } catch (err) {
@@ -700,29 +798,31 @@ export async function POST(req: NextRequest) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[JUP/SEND] Broadcast failed:", msg, logs.slice(0, 5));
 
-      const lowerMsg = msg.toLowerCase();
-
-      if (lowerMsg.includes("slippage") || msg.includes("0x1771")) {
+      if (isSlippageError(msg)) {
         return jsonError(400, "Slippage exceeded", {
           code: "SLIPPAGE_EXCEEDED",
-          userMessage: "Price moved too much. Try again with higher slippage.",
+          userMessage: "Price moved too much. Try again.",
+          tip: "If it keeps failing, increase slippage a bit.",
           logs: logs.slice(0, 10),
+          retryable: true,
         });
       }
 
-      if (lowerMsg.includes("insufficient") || /\b0x1\b/.test(msg)) {
+      if (isInsufficientError(msg)) {
         return jsonError(400, "Insufficient balance", {
           code: "INSUFFICIENT_BALANCE",
           userMessage: "You don't have enough balance for this swap.",
           logs: logs.slice(0, 10),
+          retryable: false,
         });
       }
 
-      if (lowerMsg.includes("blockhash")) {
+      if (isBlockhashError(msg)) {
         return jsonError(400, "Transaction expired", {
           code: "BLOCKHASH_EXPIRED",
           userMessage: "This swap expired. Please try again.",
           logs: logs.slice(0, 10),
+          retryable: true,
         });
       }
 
@@ -731,8 +831,21 @@ export async function POST(req: NextRequest) {
         userMessage: "Couldn't send this swap. Please try again.",
         details: msg,
         logs: logs.slice(0, 10),
+        retryable: true,
       });
     }
+
+    // ─────────── Confirm quickly (optional but boosts UX) ───────────
+    // This does NOT increase on-chain fees. It’s just an RPC call.
+    // We keep it short so we don’t block the UI. If it times out,
+    // we still return the signature.
+    const confirmRes = await confirmFast({
+      conn,
+      signature,
+      blockhash: buildBlockhash ?? blockhash,
+      lastValidBlockHeight: buildLastValid,
+      timeoutMs: SEND_CONFIG.CONFIRM_TIMEOUT_MS,
+    });
 
     // ─────────── Fee recording (fire-and-forget) ───────────
     if (userIdForFeeEvents) {
@@ -747,9 +860,48 @@ export async function POST(req: NextRequest) {
 
     // ─────────── Success ───────────
     const sendTime = Date.now() - startTime;
-    console.log(`[JUP/SEND] ${signature.slice(0, 8)}... ${sendTime}ms`);
 
-    return NextResponse.json({ signature, sendTimeMs: sendTime });
+    // If confirm timed out, we still return success + signature
+    // so the UI can show "Submitted" and poll if you want.
+    if (
+      !confirmRes.ok &&
+      confirmRes.timeout &&
+      SEND_CONFIG.RETURN_SIG_ON_TIMEOUT
+    ) {
+      console.log(
+        `[JUP/SEND] ${signature.slice(0, 8)}... ${sendTime}ms (confirm timeout)`,
+      );
+      return NextResponse.json({
+        signature,
+        sendTimeMs: sendTime,
+        confirmed: false,
+        confirmTimeout: true,
+      });
+    }
+
+    if (!confirmRes.ok && !confirmRes.timeout) {
+      // On-chain error after send (rare but possible). Give the user a useful message.
+      console.warn(
+        "[JUP/SEND] confirm returned err:",
+        signature.slice(0, 8),
+        confirmRes.err,
+      );
+      return jsonError(400, "Transaction failed", {
+        code: "TX_FAILED",
+        userMessage: "This swap failed on-chain. Please try again.",
+        signature,
+        confirmed: false,
+        retryable: true,
+      });
+    }
+
+    console.log(`[JUP/SEND] ${signature.slice(0, 8)}... ${sendTime}ms`);
+    return NextResponse.json({
+      signature,
+      sendTimeMs: sendTime,
+      confirmed: true,
+      confirmTimeout: false,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[JUP/SEND] Unhandled:", msg);

@@ -384,12 +384,7 @@ export default function InvestPage() {
               </div>
             </div>
 
-            <div className="hidden sm:block text-right">
-              <div className="haven-kicker">24h</div>
-              <span className={changeChipClass}>
-                {loading ? "—" : formatPct(totalChange24hPct ?? 0)}
-              </span>
-            </div>
+            
           </div>
 
           <div className="mt-4">
