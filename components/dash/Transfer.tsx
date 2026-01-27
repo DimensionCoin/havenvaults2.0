@@ -16,6 +16,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
+import { PublicKey } from "@solana/web3.js";
 
 import { useSponsoredExternalTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -47,8 +48,8 @@ type ResolvedRecipient = {
   email?: string;
   name?: string;
   profileImageUrl?: string;
-  inputValue: string;
-  resolvedAddress: string;
+  inputValue: string; // IMPORTANT: for wallet tab this will be the .sol input OR raw address input
+  resolvedAddress: string; // the resolved base58 address
   isDomain?: boolean;
 };
 
@@ -56,13 +57,25 @@ type ResolvedRecipient = {
    Constants & Helpers
 ───────────────────────────────────────────────────────────── */
 
-const AVATAR_SIZE = 64;
+const AVATAR_SIZE = 52;
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 const isSolDomain = (s: string) => /^[a-zA-Z0-9_-]+\.sol$/i.test(s.trim());
-const isValidAddress = (s: string) => {
-  const t = s.trim();
-  return t.length >= 32 && t.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(t);
+
+const isSolAddress = (s: string) => {
+  try {
+    const t = s.trim();
+    if (!t) return false;
+    // PublicKey throws if invalid
+    // Also rejects many non-base58 strings.
+    // NOTE: This will accept any valid Solana pubkey (32 bytes).
+    // That’s what we want for "regular wallets".
+    // eslint-disable-next-line no-new
+    new PublicKey(t);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const truncateAddress = (addr: string, chars = 4) => {
@@ -190,14 +203,12 @@ function ContactCircle({
           ].join(" ")}
         />
 
-        {/* Delete badge */}
         {isDeleteMode && (
           <div className="absolute -top-1 -right-1 w-6 h-6 bg-destructive rounded-full flex items-center justify-center shadow-lg">
             <X className="w-3.5 h-3.5 text-white" strokeWidth={3} />
           </div>
         )}
 
-        {/* No wallet indicator */}
         {!contact.walletAddress && !isDeleteMode && (
           <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 bg-amber-100 dark:bg-amber-900/50 rounded-full flex items-center justify-center border-2 border-white dark:border-card">
             <span className="text-[10px]">⏳</span>
@@ -207,7 +218,7 @@ function ContactCircle({
 
       <span
         className={[
-          "text-[13px] font-medium truncate max-w-[80px] transition-colors",
+          "text-[9px] font-medium truncate max-w-[80px] transition-colors",
           isDeleteMode ? "text-destructive" : "text-foreground",
         ].join(" ")}
       >
@@ -301,18 +312,15 @@ export default function TransferDash({
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [txSuccess, setTxSuccess] = useState(false);
 
-  // Tab definitions for consistent styling
   const tabs: { key: "contacts" | "wallet"; label: string }[] = [
     { key: "contacts", label: "Contacts" },
     { key: "wallet", label: "Wallet" },
   ];
 
-  // Exit delete mode when switching tabs
   useEffect(() => {
     if (tab === "wallet") setDeleteMode(false);
   }, [tab]);
 
-  // Lock scroll when ANY modal is open (matches Deposit Transfer feel)
   useEffect(() => {
     if (!mounted) return;
     const open = addOpen || modalOpen;
@@ -350,7 +358,12 @@ export default function TransferDash({
     };
   }, []);
 
-  // Wallet resolution
+  /* ─────────────────────────────────────────────
+     Wallet resolution (Sol address OR .sol)
+     - IMPORTANT: allow backspacing / edits (do not "lock" input)
+     - Clear resolved/error immediately on typing (done in input onChange)
+     - Debounce resolution for .sol
+  ────────────────────────────────────────────── */
   useEffect(() => {
     if (tab !== "wallet") return;
 
@@ -360,29 +373,39 @@ export default function TransferDash({
       return;
     }
 
-    const input = walletInput.trim();
+    const inputRaw = walletInput.trim();
+    const inputLower = inputRaw.toLowerCase();
 
-    if (isValidAddress(input)) {
-      setWalletResolved({ address: input, isDomain: false });
+    // If it's a valid Solana address, resolve instantly (no SNS call)
+    if (isSolAddress(inputRaw)) {
+      setWalletResolved({
+        address: inputRaw,
+        isDomain: false,
+      });
       setWalletError(null);
       return;
     }
 
-    if (!isSolDomain(input)) {
+    // If it's not a .sol domain, show a gentle error (after a couple chars)
+    if (!isSolDomain(inputLower)) {
       setWalletResolved(null);
-      setWalletError(input.length > 5 ? "Invalid address or domain" : null);
+      setWalletError(
+        inputRaw.length > 2 ? "Enter a Solana address or .sol domain" : null,
+      );
       return;
     }
 
+    // .sol domain -> resolve with debounce
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const result = await validateAndResolve(input);
+        const result = await validateAndResolve(inputLower);
         if (cancelled) return;
-        if (result) {
+
+        if (result && result.isDomain) {
           setWalletResolved({
             address: result.address,
-            isDomain: result.isDomain,
+            isDomain: true,
             domain: result.domain,
           });
           setWalletError(null);
@@ -428,6 +451,7 @@ export default function TransferDash({
         profileImageUrl: c.profileImageUrl,
         inputValue: c.email || normalizeContactName(c),
         resolvedAddress: c.walletAddress,
+        isDomain: false,
       });
     },
     [openSendModal],
@@ -494,9 +518,16 @@ export default function TransferDash({
 
   const handleWalletSend = useCallback(() => {
     if (!walletResolved?.address) return;
+
+    const raw = walletInput.trim();
+    const lower = raw.toLowerCase();
+
+    // IMPORTANT:
+    // - if domain: inputValue stays the domain string
+    // - if address: inputValue is the address string
     openSendModal({
       type: "wallet",
-      inputValue: walletInput.trim(),
+      inputValue: walletResolved.isDomain ? lower : raw,
       resolvedAddress: walletResolved.address,
       isDomain: walletResolved.isDomain,
     });
@@ -532,9 +563,16 @@ export default function TransferDash({
     clearError();
 
     try {
+      // IMPORTANT:
+      // If recipient is a .sol domain, pass the DOMAIN STRING into the hook.
+      // Otherwise pass the resolved base58 address.
+      const destination = resolvedRecipient.isDomain
+        ? resolvedRecipient.inputValue
+        : resolvedRecipient.resolvedAddress;
+
       const result = await send({
         fromOwnerBase58: walletAddress,
-        toAddressOrDomain: resolvedRecipient.resolvedAddress,
+        toAddressOrDomain: destination,
         amountUi: amountUsdc,
       });
 
@@ -562,7 +600,6 @@ export default function TransferDash({
 
   const canCloseModal = !sending;
 
-  // helper to open add modal (used by both Add button + empty hint)
   const openAddModal = useCallback(() => {
     setDeleteMode(false);
     setAddError(null);
@@ -635,7 +672,7 @@ export default function TransferDash({
               >
                 <Plus className="w-6 h-6 text-muted-foreground" />
               </div>
-              <span className="text-[13px] font-medium text-muted-foreground">
+              <span className="text-[9px] font-medium text-muted-foreground">
                 Add
               </span>
             </button>
@@ -702,12 +739,10 @@ export default function TransferDash({
                 />
               ))}
           </div>
-
-          {/* Removed the old "Tap Add..." text under the row */}
         </div>
       )}
 
-      {/* Wallet Tab */}
+      {/* Wallet Tab (Sol address OR .sol) */}
       {tab === "wallet" && (
         <div className="mt-3">
           <div className="flex items-center gap-2">
@@ -715,8 +750,14 @@ export default function TransferDash({
               <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 value={walletInput}
-                onChange={(e) => setWalletInput(e.target.value)}
-                placeholder="name.sol or wallet address"
+                onChange={(e) => {
+                  // Allow free edits (backspace etc) without stale resolved state fighting you
+                  const v = e.target.value;
+                  setWalletInput(v);
+                  setWalletResolved(null);
+                  setWalletError(null);
+                }}
+                placeholder="wallet address or name.sol"
                 className="haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground"
               />
               {walletResolving && (
@@ -731,7 +772,8 @@ export default function TransferDash({
               onClick={handleWalletSend}
               disabled={!walletResolved?.address}
               className={[
-                "px-4 h-[44px] rounded-2xl font-semibold text-[13px] transition-all",
+                // Keep button size stable even if haven-btn-primary sets width styles
+                "px-4 h-[44px] rounded-2xl font-semibold text-[13px] transition-all shrink-0 whitespace-nowrap !w-auto",
                 walletResolved?.address
                   ? "haven-btn-primary"
                   : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
@@ -747,7 +789,7 @@ export default function TransferDash({
 
           {walletResolved?.address && (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              Resolved:{" "}
+              {walletResolved.isDomain ? "Resolved:" : "Address:"}{" "}
               <span className="font-mono">
                 {truncateAddress(walletResolved.address, 8)}
               </span>
@@ -757,7 +799,7 @@ export default function TransferDash({
       )}
 
       {/* ─────────────────────────────
-          ADD CONTACT MODAL (match Deposit Transfer shell)
+          ADD CONTACT MODAL
          ───────────────────────────── */}
       {mounted &&
         addOpen &&
@@ -865,7 +907,7 @@ export default function TransferDash({
         )}
 
       {/* ─────────────────────────────
-          SEND MODAL (match Deposit Transfer shell)
+          SEND MODAL
          ───────────────────────────── */}
       {mounted &&
         modalOpen &&
@@ -946,7 +988,7 @@ export default function TransferDash({
                           ? resolvedRecipient.name || resolvedRecipient.email
                           : resolvedRecipient.isDomain
                             ? resolvedRecipient.inputValue
-                            : "External Wallet"}
+                            : truncateAddress(resolvedRecipient.inputValue, 4)}
                       </p>
                       <p className="text-[11px] text-muted-foreground font-mono truncate">
                         {truncateAddress(resolvedRecipient.resolvedAddress, 8)}
