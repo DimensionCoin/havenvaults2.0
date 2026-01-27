@@ -1,3 +1,4 @@
+// providers/BalanceProvider.tsx
 "use client";
 
 import React, {
@@ -9,9 +10,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
 import { useUser } from "./UserProvider";
+import { useBoosterPositions } from "@/hooks/useBoosterPositions";
 
 export type WalletToken = {
   mint: string;
@@ -70,9 +70,13 @@ type BalanceContextValue = {
   displayCurrency: string;
   fxRate: number;
 
-  boosterTakeHomeUsd: number;
+  // ✅ Booster (source of truth = hook)
+  boosterTakeHomeUsd: number; // display currency
   boosterPositionsCount: number;
   boosterPositions: BoosterStaticPosition[];
+  boosterReady: boolean;
+  boosterError?: string | null;
+  refetchBooster: () => void;
 
   refresh: () => Promise<void>;
   refreshNow: () => Promise<void>;
@@ -119,20 +123,6 @@ type FlexBalanceResponse = {
   error?: string;
 };
 
-type BoosterApiResponse = {
-  positions?: Array<{
-    publicKey: string;
-    symbol: "SOL" | "ETH" | "BTC";
-    side: "long" | "short";
-    account: {
-      openTime?: string;
-      price: string;
-      sizeUsd: string;
-      collateralUsd: string;
-    };
-  }>;
-};
-
 type PlusBalanceResponse = {
   owner?: string;
   hasPosition?: boolean;
@@ -157,12 +147,6 @@ function safeStr(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function safeSymbol(v: unknown): "SOL" | "ETH" | "BTC" | null {
-  const s = safeStr(v).toUpperCase();
-  if (s === "SOL" || s === "ETH" || s === "BTC") return s;
-  return null;
-}
-
 function usdFrom6Str(x?: string | null): number {
   const n = typeof x === "string" ? Number(x) : NaN;
   return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
@@ -182,25 +166,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const ownerAddress = user?.walletAddress || "";
   const ownerReady = Boolean(ownerAddress?.trim());
 
-  /* ───────── Convex price subscription ───────── */
-  const convexPrices = useQuery(api.prices.getLatest);
-
-  const priceMap = useMemo(() => {
-    const map: Record<"SOL" | "ETH" | "BTC", number> = {
-      SOL: 0,
-      ETH: 0,
-      BTC: 0,
-    };
-    if (!convexPrices) return map;
-
-    for (const row of convexPrices) {
-      const sym = row.symbol as "SOL" | "ETH" | "BTC";
-      if (sym === "SOL" || sym === "ETH" || sym === "BTC") {
-        map[sym] = row.lastPrice;
-      }
-    }
-    return map;
-  }, [convexPrices]);
+  // ✅ Booster hook is now the ONLY thing that fetches booster positions
+  // (BalanceProvider no longer calls /api/booster/positions)
+  const booster = useBoosterPositions({
+    ownerBase58: ownerReady ? ownerAddress : undefined,
+    enabled: ownerReady,
+    refreshKey: undefined, // optional: pass lastUpdated if you want
+  });
 
   /* ───────── State ───────── */
 
@@ -227,19 +199,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [baseTotalUsdDisplay, setBaseTotalUsdDisplay] = useState(0);
   const [totalChange24hUsd, setTotalChange24hUsd] = useState(0);
   const [totalChange24hPct, setTotalChange24hPct] = useState(0);
-
-  const [boosterPositionsRaw, setBoosterPositionsRaw] = useState<
-    Array<{
-      id: string;
-      publicKey: string;
-      symbol: "SOL" | "ETH" | "BTC";
-      isLong: boolean;
-      createdAt: string;
-      entryUsd: number;
-      sizeUsd: number;
-      collateralUsd: number;
-    }>
-  >([]);
 
   // Dedupe refreshes
   const refreshInflight = useRef<Promise<void> | null>(null);
@@ -291,49 +250,55 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  /* ───────── Booster computed ───────── */
+  /* ───────── Booster derived from hook (computed already) ───────── */
 
   const boosterPositions = useMemo<BoosterStaticPosition[]>(() => {
-    return boosterPositionsRaw.map((p) => {
-      const markUsd = priceMap[p.symbol] > 0 ? priceMap[p.symbol] : p.entryUsd;
+    // hook rows are in USD-base numbers
+    return booster.rows.map((r) => ({
+      id: r.id,
+      publicKey: r.publicKey,
+      symbol: r.symbol,
+      isLong: r.isLong,
+      createdAt: r.createdAt,
 
-      const pnlUsd =
-        p.entryUsd > 0 && p.sizeUsd > 0
-          ? p.isLong
-            ? p.sizeUsd * ((markUsd - p.entryUsd) / p.entryUsd)
-            : p.sizeUsd * ((p.entryUsd - markUsd) / p.entryUsd)
-          : 0;
+      entryUsd: r.entryUsd,
+      sizeUsd: r.sizeUsd,
+      collateralUsd: r.collateralUsd,
 
-      const takeHomeUsd = p.collateralUsd + pnlUsd;
-      const spotValueUsd = p.sizeUsd + pnlUsd;
-      const sizeTokens = p.entryUsd > 0 ? p.sizeUsd / p.entryUsd : 0;
-
-      return {
-        ...p,
-        sizeTokens,
-        pnlUsd,
-        spotValueUsd,
-        takeHomeUsd,
-      };
-    });
-  }, [boosterPositionsRaw, priceMap]);
+      sizeTokens: r.sizeTokens,
+      pnlUsd: r.pnlUsd,
+      spotValueUsd: r.spotValueUsd,
+      takeHomeUsd: r.netUsd, // ✅ use netUsd as take-home
+    }));
+  }, [booster.rows]);
 
   const boosterPositionsCount = boosterPositions.length;
 
+  // display currency
   const boosterTakeHomeUsd = useMemo(() => {
-    const baseSum = boosterPositions.reduce(
-      (sum, p) => sum + (Number.isFinite(p.takeHomeUsd) ? p.takeHomeUsd : 0),
+    const baseSum = booster.rows.reduce(
+      (sum, r) => sum + (Number.isFinite(r.netUsd) ? r.netUsd : 0),
       0,
     );
     return baseSum * fxRateState;
-  }, [boosterPositions, fxRateState]);
+  }, [booster.rows, fxRateState]);
+
+  const boosterReady = useMemo(() => {
+    // when owner isn't ready, treat as resolved (no infinite spinners)
+    if (!ownerReady) return true;
+    return !booster.loading && booster.pricesLoading === false;
+  }, [ownerReady, booster.loading, booster.pricesLoading]);
+
+  const boosterError = booster.error ?? null;
+
+  /* ───────── Total (wallet+flex+plus) + booster (multiplied) ───────── */
 
   const totalUsd = useMemo(
     () => baseTotalUsdDisplay + boosterTakeHomeUsd,
     [baseTotalUsdDisplay, boosterTakeHomeUsd],
   );
 
-  /* ───────── Refresh ───────── */
+  /* ───────── Refresh (wallet/fx/flex/plus only) ───────── */
 
   const runRefresh = useCallback(
     async (opts?: { bypassUserLoading?: boolean }) => {
@@ -352,6 +317,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         const flexSubdoc = user?.savingsAccounts?.find(
           (a: { type?: string }) => a?.type === "flex",
         );
+
         const flexMarginfiPk =
           typeof (flexSubdoc as { marginfiAccountPk?: string })
             ?.marginfiAccountPk === "string" &&
@@ -381,7 +347,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setBaseTotalUsdDisplay(0);
           setTotalChange24hUsd(0);
           setTotalChange24hPct(0);
-          setBoosterPositionsRaw([]);
           setLastUpdated(Date.now());
           setDisplayCurrency("USD");
           setFxRateState(1);
@@ -395,14 +360,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         setPlusError(null);
 
         try {
-          // Start all requests immediately (parallel),
-          // but we will APPLY wallet+fx first, and extras later.
+          // Start requests (parallel)
           const walletP = fetch(
             `/api/user/wallet/balance?owner=${encodeURIComponent(owner)}`,
             { method: "GET", cache: "no-store", signal: ac.signal },
           );
 
-          // FX: use short cache (e.g. 5 minutes) to reduce load
+          // FX cache (5 min)
           const now = Date.now();
           const fxCached = fxCacheRef.current;
           const fxIsFresh = fxCached && now - fxCached.ts < 5 * 60 * 1000;
@@ -432,15 +396,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             signal: ac.signal,
           });
 
-          const boosterP = fetch("/api/booster/positions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ownerBase58: owner }),
-            cache: "no-store",
-            signal: ac.signal,
-          });
-
-          // 1) Apply WALLET first (fastest and most important)
+          // 1) WALLET first
           const walletRes = await walletP;
           if (ac.signal.aborted) return;
 
@@ -488,7 +444,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             0,
           );
 
-          // 2) Apply FX next (or use cached)
+          // 2) FX next (or cached)
           let fxRate = fxIsFresh ? fxCached!.rate : 1;
           let fxTarget = fxIsFresh ? fxCached!.target : "USD";
 
@@ -538,13 +494,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             }),
           );
 
-          // Apply wallet-derived state immediately (fast UI)
           setTokens(nonUsdcTokensDisplay);
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
 
-          // Keep totals "wallet-only" for the moment;
-          // extras (flex/plus) will adjust baseTotalUsdDisplay once they arrive.
           setBaseTotalUsdDisplay(walletTotalUsdBase * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
 
@@ -557,17 +510,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setFxRateState(fxRate);
           setLastUpdated(Date.now());
 
-          // 3) Load EXTRAS (flex/plus/booster) without blocking the main UI
+          // 3) EXTRAS (flex/plus) without blocking
           void (async () => {
             try {
-              const [flexRes, plusRes, boosterRes] = await Promise.all([
-                flexP,
-                plusP,
-                boosterP,
-              ]);
+              const [flexRes, plusRes] = await Promise.all([flexP, plusP]);
               if (ac.signal.aborted) return;
 
-              // ---------- Flex ----------
+              // Flex
               let flexAmount = 0;
               let flexUsdBase = 0;
 
@@ -588,7 +537,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                 }
               }
 
-              // ---------- Plus ----------
+              // Plus
               let plusBaseUi = 0;
 
               if (plusRes.ok) {
@@ -621,54 +570,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                 setPlusReady(true);
               }
 
-              // ---------- Booster raw ----------
-              const boosterRaw: typeof boosterPositionsRaw = [];
-
-              if (boosterRes.ok) {
-                const bj = (await boosterRes
-                  .json()
-                  .catch(() => null)) as BoosterApiResponse | null;
-                const raw = Array.isArray(bj?.positions) ? bj!.positions! : [];
-
-                for (const p of raw) {
-                  const symbol = safeSymbol(p?.symbol);
-                  if (!symbol) continue;
-
-                  const pk = safeStr(p?.publicKey);
-                  if (!pk) continue;
-
-                  const entryUsd = usdFrom6Str(p?.account?.price);
-                  const sizeUsd = usdFrom6Str(p?.account?.sizeUsd);
-                  const collateralUsd = usdFrom6Str(p?.account?.collateralUsd);
-
-                  if (!(sizeUsd > 0) || !(entryUsd > 0)) continue;
-
-                  const isLong = p?.side === "long";
-                  const openSecs = Number(safeStr(p?.account?.openTime || "0"));
-                  const createdAt =
-                    Number.isFinite(openSecs) &&
-                    openSecs > 0 &&
-                    openSecs < 10_000_000_000
-                      ? new Date(openSecs * 1000).toISOString()
-                      : new Date().toISOString();
-
-                  boosterRaw.push({
-                    id: pk,
-                    publicKey: pk,
-                    symbol,
-                    isLong,
-                    createdAt,
-                    entryUsd,
-                    sizeUsd,
-                    collateralUsd,
-                  });
-                }
-              }
-
-              setBoosterPositionsRaw(boosterRaw);
-
-              // ---------- Totals recompute (wallet + extras) ----------
-              // NOTE: totalChange24h is still sourced from wallet endpoint, same as before.
+              // Totals recompute (wallet + flex + plus) — booster stays separate via hook
               const combinedBaseUsd =
                 walletTotalUsdBase +
                 (hasLinkedFlexAccount ? flexUsdBase : 0) +
@@ -693,11 +595,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
               setLastUpdated(Date.now());
 
-              // ✅ Only call snapshot AFTER full totals are known
+              // snapshot AFTER full totals (wallet+flex+plus) are known
               callBalanceSnapshot(owner, combinedBaseUsd);
             } catch {
               if (ac.signal.aborted) return;
-              // Do not nuke wallet state; only mark plus as resolved with an error like before
               setLastUpdated(Date.now());
               setSavingsPlusAmount(0);
               setSavingsPlusUsd(0);
@@ -713,7 +614,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setPlusError("Plus refresh error");
           setPlusReady(true);
         } finally {
-          // loading represents "wallet/primary" load; extras continue in background
           if (!ac.signal.aborted) setLoading(false);
         }
       })();
@@ -769,9 +669,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       displayCurrency,
       fxRate: fxRateState,
 
+      // ✅ Booster from hook
       boosterTakeHomeUsd,
       boosterPositionsCount,
       boosterPositions,
+      boosterReady,
+      boosterError,
+      refetchBooster: () => void booster.refetch(),
 
       refresh,
       refreshNow,
@@ -797,6 +701,9 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       boosterTakeHomeUsd,
       boosterPositionsCount,
       boosterPositions,
+      boosterReady,
+      boosterError,
+      booster.refetch,
       refresh,
       refreshNow,
     ],

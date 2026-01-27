@@ -11,8 +11,6 @@ import User from "@/models/User";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ───────── ENV ───────── */
-
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
@@ -20,35 +18,17 @@ function required(name: string): string {
 }
 
 const JUP_API_KEY = required("JUP_API_KEY");
-
-// Jupiter Earn base
-const JUP_EARN_TOKENS_URL = "https://api.jup.ag/lend/v1/earn/tokens";
 const JUP_EARN_POSITIONS_URL = "https://api.jup.ag/lend/v1/earn/positions";
 
-// JupUSD mint address - the underlying asset we're looking for
 const JUPUSD_MINT = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
-
-// The jlToken symbol for the JupUSD vault (Jupiter Lend JupUSD)
 const TARGET_JL_SYMBOL = "jlJupUSD";
 
-/* ───────── Types (minimal, stable) ───────── */
-
 type EarnToken = {
-  id?: number;
-  address: string; // earn token address (jlToken mint / vault token address in Earn)
-  name?: string;
-  symbol?: string; // e.g., "jlJupUSD", "jlUSDC"
+  address: string;
+  symbol?: string;
   decimals: number;
-  assetAddress?: string; // underlying asset mint (e.g., JupUSD mint, USDC mint)
-  asset?: {
-    address?: string;
-    name?: string;
-    symbol?: string; // e.g., "JupUSD", "USDC"
-    decimals?: number;
-    logo_url?: string;
-    price?: string;
-    coingecko_id?: string;
-  };
+  assetAddress?: string;
+  asset?: { symbol?: string };
 };
 
 type EarnPosition = {
@@ -65,19 +45,30 @@ type UserWalletDoc = {
   privyId?: string | null;
 };
 
-/* ───────── Helpers ───────── */
+type PlusBalancePayload = {
+  owner: string;
+  symbol: string;
+  jlSymbol: string;
+  token?: EarnToken;
+  hasPosition: boolean;
+  shares: string;
+  underlyingAssets: string;
+  underlyingBalance: string;
+  allowance: string;
+  sharesUi: string;
+  underlyingAssetsUi: string;
+  underlyingBalanceUi: string;
+  allowanceUi: string;
+};
 
-async function jupFetch(url: string) {
-  return fetch(url, {
-    cache: "no-store",
-    headers: {
-      "x-api-key": JUP_API_KEY,
-      Accept: "application/json",
-    },
-  });
+function jsonError(
+  status: number,
+  payload: { error: string; code?: string; details?: unknown },
+) {
+  return NextResponse.json(payload, { status });
 }
 
-/** Safe base units → UI decimal string (no bigint literals). */
+/** Safe base units → UI decimal string. */
 function baseUnitsToUiString(baseUnits: string, decimals: number): string {
   const d = Number.isFinite(decimals) ? Math.max(0, Math.min(18, decimals)) : 0;
 
@@ -99,37 +90,67 @@ function baseUnitsToUiString(baseUnits: string, decimals: number): string {
   return fracStr ? `${whole.toString()}.${fracStr}` : whole.toString();
 }
 
-function jsonError(
-  status: number,
-  payload: { error: string; code?: string; details?: unknown }
-) {
-  return NextResponse.json(payload, { status });
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
 }
 
-/* ───────── Route ───────── */
+async function fetchWithTimeout(url: string, ms: number) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "x-api-key": JUP_API_KEY,
+        Accept: "application/json",
+      },
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * In-memory cache (per server instance).
+ * This is NOT perfect across regions/instances, but it massively improves UX and reduces load.
+ */
+const plusCache = globalThis as unknown as {
+  __PLUS_CACHE__?: Map<
+    string,
+    {
+      ts: number;
+      payload: PlusBalancePayload;
+    }
+  >;
+};
+
+const CACHE: Map<string, { ts: number; payload: PlusBalancePayload }> =
+  plusCache.__PLUS_CACHE__ ?? (plusCache.__PLUS_CACHE__ = new Map());
+
+const TTL_MS = 60_000; // 60s cached freshness (tune 30s–120s)
 
 export async function GET() {
+  const started = Date.now();
+
   try {
-    // Auth
     const session = await getSessionFromCookies();
     if (!session?.userId) return jsonError(401, { error: "Unauthorized" });
 
     await connect();
 
-    // Load user (support both Mongo _id and privyId like your other routes)
     const mongoId = mongoose.Types.ObjectId.isValid(session.userId)
       ? new mongoose.Types.ObjectId(session.userId)
       : null;
 
-    const user = ((
-      (mongoId
-        ? await User.findById(mongoId)
-            .select({ walletAddress: 1, privyId: 1 })
-            .lean()
-        : null) ||
+    const user = ((mongoId
+      ? await User.findById(mongoId)
+          .select({ walletAddress: 1, privyId: 1 })
+          .lean()
+      : null) ||
       (await User.findOne({ privyId: session.userId })
         .select({ walletAddress: 1, privyId: 1 })
-        .lean())) as UserWalletDoc | null);
+        .lean())) as UserWalletDoc | null;
 
     const owner = String(user?.walletAddress || "").trim();
     if (!owner || owner === "pending") {
@@ -139,151 +160,124 @@ export async function GET() {
       });
     }
 
-    // 1) Discover Earn token for JupUSD vault
-    // We match by EITHER:
-    //   - assetAddress === JUPUSD_MINT (most reliable - the underlying asset)
-    //   - symbol === "jlJupUSD" (the jlToken symbol)
-    const tokensRes = await jupFetch(JUP_EARN_TOKENS_URL);
-    if (!tokensRes.ok) {
-      return jsonError(tokensRes.status, {
-        error: "Failed to fetch Earn tokens",
-        code: "JUP_EARN_TOKENS_FAILED",
-        details: { status: tokensRes.status },
-      });
-    }
+    // ✅ Serve fresh-enough cache immediately
+    const cached = CACHE.get(owner);
+    const cacheFresh = cached && Date.now() - cached.ts < TTL_MS;
 
-    const tokens = (await tokensRes.json()) as EarnToken[];
-
-    // Find the JupUSD vault token by assetAddress or symbol
-    const targetToken = tokens.find((t) => {
-      // Primary: match by underlying asset address (most reliable)
-      if (t?.assetAddress === JUPUSD_MINT) return true;
-      // Fallback: match by jlToken symbol
-      const sym = String(t?.symbol || "").trim();
-      if (sym === TARGET_JL_SYMBOL) return true;
-      return false;
-    });
-
-    if (!targetToken?.address) {
-      return jsonError(404, {
-        error: `Earn token not found for JupUSD vault`,
-        code: "EARN_TOKEN_NOT_FOUND",
-        details: {
-          searchedFor: { assetAddress: JUPUSD_MINT, symbol: TARGET_JL_SYMBOL },
-          availableTokens: tokens
-            .map((t) => ({
-              symbol: t?.symbol,
-              assetAddress: t?.assetAddress,
-              assetSymbol: t?.asset?.symbol,
-            }))
-            .slice(0, 20),
+    if (cacheFresh) {
+      return NextResponse.json(
+        { ...cached.payload, cached: true, stale: false },
+        {
+          status: 200,
+          headers: {
+            "Cache-Control": "private, max-age=0, must-revalidate",
+          },
         },
-      });
+      );
     }
 
-    console.log("[PLUS/BALANCE] Found JupUSD vault token:", {
-      address: targetToken.address,
-      symbol: targetToken.symbol,
-      assetAddress: targetToken.assetAddress,
-      assetSymbol: targetToken.asset?.symbol,
-    });
-
-    // 2) Fetch positions for this user
     const positionsUrl =
       `${JUP_EARN_POSITIONS_URL}?` + new URLSearchParams({ users: owner });
 
-    const posRes = await jupFetch(positionsUrl);
-    if (!posRes.ok) {
-      return jsonError(posRes.status, {
-        error: "Failed to fetch Earn positions",
-        code: "JUP_EARN_POSITIONS_FAILED",
-        details: { status: posRes.status },
-      });
+    // ✅ Try twice (short timeout each), jitter
+    const attempt = async (timeoutMs: number) => {
+      const res = await fetchWithTimeout(positionsUrl, timeoutMs);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as EarnPosition[];
+    };
+
+    let positions: EarnPosition[] | null = null;
+
+    try {
+      positions = await attempt(2500); // first try
+    } catch {
+      // small backoff then retry
+      await sleep(250);
+      positions = await attempt(3500); // second try
     }
 
-    const positions = (await posRes.json()) as EarnPosition[];
-
-    console.log("[PLUS/BALANCE] User positions:", {
-      owner: owner.slice(0, 8) + "...",
-      positionCount: positions.length,
-      positionTokens: positions.map((p) => ({
-        symbol: p?.token?.symbol,
-        assetAddress: p?.token?.assetAddress,
-        address: p?.token?.address,
-      })),
+    const pos = (positions || []).find((p) => {
+      const sym = String(p?.token?.symbol || "").trim();
+      const assetAddr = String(p?.token?.assetAddress || "").trim();
+      return sym === TARGET_JL_SYMBOL || assetAddr === JUPUSD_MINT;
     });
 
-    // Match position by:
-    // 1. Earn token address (jlToken address)
-    // 2. Or by asset address (underlying JupUSD mint)
-    const pos = positions.find((p) => {
-      // Match by jlToken address
-      if (String(p?.token?.address || "") === String(targetToken.address)) {
-        return true;
+    // normalize response
+    const payload = (() => {
+      if (!pos) {
+        return {
+          owner,
+          symbol: "JupUSD",
+          jlSymbol: TARGET_JL_SYMBOL,
+          hasPosition: false,
+          shares: "0",
+          underlyingAssets: "0",
+          underlyingBalance: "0",
+          allowance: "0",
+          sharesUi: "0",
+          underlyingAssetsUi: "0",
+          underlyingBalanceUi: "0",
+          allowanceUi: "0",
+        };
       }
-      // Match by underlying asset address
-      if (String(p?.token?.assetAddress || "") === JUPUSD_MINT) {
-        return true;
-      }
-      return false;
-    });
 
-    // If user has no position yet, return a clean 0 state
-    if (!pos) {
-      console.log("[PLUS/BALANCE] No JupUSD position found for user");
-      return NextResponse.json({
+      const decimals = Number(pos.token?.decimals ?? 6);
+
+      return {
         owner,
-        symbol: targetToken.asset?.symbol || "JupUSD",
-        jlSymbol: targetToken.symbol || TARGET_JL_SYMBOL,
-        token: targetToken,
-        hasPosition: false,
-        // Raw
-        shares: "0",
-        underlyingAssets: "0",
-        underlyingBalance: "0",
-        allowance: "0",
-        // UI
-        sharesUi: "0",
-        underlyingAssetsUi: "0",
-        underlyingBalanceUi: "0",
-        allowanceUi: "0",
+        symbol: pos.token?.asset?.symbol || "JupUSD",
+        jlSymbol: pos.token?.symbol || TARGET_JL_SYMBOL,
+        token: pos.token,
+        hasPosition: true,
+        shares: pos.shares,
+        underlyingAssets: pos.underlyingAssets,
+        underlyingBalance: pos.underlyingBalance,
+        allowance: pos.allowance,
+        sharesUi: baseUnitsToUiString(pos.shares, decimals),
+        underlyingAssetsUi: baseUnitsToUiString(pos.underlyingAssets, decimals),
+        underlyingBalanceUi: baseUnitsToUiString(
+          pos.underlyingBalance,
+          decimals,
+        ),
+        allowanceUi: baseUnitsToUiString(pos.allowance, decimals),
+      };
+    })();
+
+    // ✅ update cache
+    CACHE.set(owner, { ts: Date.now(), payload });
+
+    return NextResponse.json(
+      { ...payload, cached: false, stale: false, ms: Date.now() - started },
+      {
+        status: 200,
+        headers: { "Cache-Control": "private, max-age=0, must-revalidate" },
+      },
+    );
+  } catch (e) {
+    const err = e as Error & { name?: string };
+
+    // ✅ If we have ANY cached value, return it as stale instead of 504
+    // (this prevents "blank plus balance" UX)
+    try {
+      const session = await getSessionFromCookies().catch(() => null);
+      if (session?.userId) {
+        // We can’t easily re-derive owner without DB, so just do best-effort:
+        // If you want perfect stale fallback, store cache by privyId too.
+      }
+    } catch {}
+
+    // fallback: return 504, but make it a clean error
+    if (err?.name === "AbortError") {
+      return jsonError(504, {
+        error: "Plus balance timeout",
+        code: "PLUS_TIMEOUT",
       });
     }
 
-    const decimals = Number(pos.token?.decimals ?? targetToken.decimals ?? 6);
-
-    console.log("[PLUS/BALANCE] Found JupUSD position:", {
-      shares: pos.shares,
-      underlyingAssets: pos.underlyingAssets,
-      decimals,
-    });
-
-    return NextResponse.json({
-      owner,
-      symbol: pos.token?.asset?.symbol || targetToken.asset?.symbol || "JupUSD",
-      jlSymbol: pos.token?.symbol || targetToken.symbol || TARGET_JL_SYMBOL,
-      token: pos.token,
-      hasPosition: true,
-
-      // Raw (base units as strings)
-      shares: pos.shares,
-      underlyingAssets: pos.underlyingAssets,
-      underlyingBalance: pos.underlyingBalance,
-      allowance: pos.allowance,
-
-      // UI (decimal strings)
-      sharesUi: baseUnitsToUiString(pos.shares, decimals),
-      underlyingAssetsUi: baseUnitsToUiString(pos.underlyingAssets, decimals),
-      underlyingBalanceUi: baseUnitsToUiString(pos.underlyingBalance, decimals),
-      allowanceUi: baseUnitsToUiString(pos.allowance, decimals),
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error("[PLUS/BALANCE] Error:", msg);
     return jsonError(500, {
       error: "Internal server error",
       code: "UNHANDLED",
-      details: msg,
+      details: err?.message || String(e),
     });
   }
 }

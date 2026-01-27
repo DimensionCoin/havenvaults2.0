@@ -942,7 +942,7 @@ export default function TransferDash({
 
                     <div>
                       <h2 className="text-[15px] font-semibold text-foreground tracking-tight">
-                        {txSuccess ? "Transfer Sent" : "Send USDC"}
+                        {txSuccess ? "Transfer Sent" : "Send Money"}
                       </h2>
                       {!txSuccess && (
                         <p className="text-[11px] text-muted-foreground mt-0.5">

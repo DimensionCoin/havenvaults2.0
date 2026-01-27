@@ -78,7 +78,7 @@ function estimateLiqPrice(
   entry: number,
   collateral: number,
   sizeUsd: number,
-  isLong: boolean
+  isLong: boolean,
 ): number | null {
   if (
     !Number.isFinite(entry) ||
@@ -110,19 +110,23 @@ export function useBoosterPositions(args: {
   const aliveRef = useRef(true);
   const reqIdRef = useRef(0);
 
+  // ✅ this is the missing piece: store the controller so cleanup can abort it
+  const controllerRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
+      // ✅ abort any in-flight request on unmount
+      controllerRef.current?.abort();
+      controllerRef.current = null;
     };
   }, []);
 
   /* ───────── Convex price subscriptions (real-time updates!) ───────── */
 
-  // Subscribe to all prices at once - Convex handles the real-time updates
   const convexPrices = useQuery(api.prices.getLatest);
 
-  // Convert Convex prices to a lookup map
   const priceMap = useMemo(() => {
     const map: Record<"SOL" | "ETH" | "BTC", number> = {
       SOL: 0,
@@ -145,7 +149,12 @@ export function useBoosterPositions(args: {
   /* ───────── Fetch positions from backend ───────── */
 
   const fetchPositions = useCallback(async () => {
+    // If disabled, reset
     if (!enabled) {
+      // ✅ abort any in-flight request when disabling
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+
       if (aliveRef.current) {
         setLoading(false);
         setError(null);
@@ -156,6 +165,10 @@ export function useBoosterPositions(args: {
 
     const owner = safeStr(ownerBase58).trim();
     if (!owner) {
+      // ✅ abort any in-flight request when owner disappears
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+
       if (aliveRef.current) {
         setPositions([]);
         setError(null);
@@ -164,8 +177,12 @@ export function useBoosterPositions(args: {
       return;
     }
 
+    // ✅ abort previous request before starting a new one
+    controllerRef.current?.abort();
+
     const myReqId = ++reqIdRef.current;
     const controller = new AbortController();
+    controllerRef.current = controller;
 
     if (aliveRef.current) {
       setLoading(true);
@@ -181,6 +198,9 @@ export function useBoosterPositions(args: {
         signal: controller.signal,
       });
 
+      // If aborted or stale, ignore
+      if (!aliveRef.current || myReqId !== reqIdRef.current) return;
+
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
         throw new Error(txt || `HTTP ${res.status}`);
@@ -194,7 +214,6 @@ export function useBoosterPositions(args: {
         ? data!.positions!
         : [];
 
-      // Sanitize positions
       const sanitized: RawApiPosition[] = positionsRaw
         .map((p) => {
           const symbol = safeSymbol(p?.symbol);
@@ -223,16 +242,26 @@ export function useBoosterPositions(args: {
       setPositions(sanitized);
     } catch (e: unknown) {
       const err = e as Error & { name?: string };
-      const msg = err?.name === "AbortError" ? "" : safeStr(err?.message);
+      const isAbort = err?.name === "AbortError";
+
+      // Ignore aborts + stale requests
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
+      if (isAbort) return;
+
+      const msg = safeStr(err?.message);
       setError(msg || "Failed to fetch positions.");
       setPositions([]);
     } finally {
+      // Only clear loading if this is still the latest request
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
-      setLoading(false);
-    }
 
-    return () => controller.abort();
+      setLoading(false);
+
+      // ✅ clear controller ref if we're still pointing at this request
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+    }
   }, [enabled, ownerBase58]);
 
   /* ───────── Compute rows with live prices ───────── */
@@ -253,7 +282,6 @@ export function useBoosterPositions(args: {
             ? false
             : safeBool(accountSide.long);
 
-      // Use Convex price, fallback to entry price
       const convexPrice = priceMap[p.symbol];
       const markUsd =
         Number.isFinite(convexPrice) && convexPrice > 0
@@ -271,7 +299,6 @@ export function useBoosterPositions(args: {
           : 0;
 
       const netUsd = collateralUsd + pnlUsd;
-
       const liqUsd = estimateLiqPrice(entryUsd, collateralUsd, sizeUsd, isLong);
 
       const openSecs = Number(safeStr(p.account.openTime || "0"));
@@ -304,17 +331,20 @@ export function useBoosterPositions(args: {
   useEffect(() => {
     if (!enabled || !ownerBase58?.trim()) return;
     void fetchPositions();
+
+    // ✅ also abort if owner/enabled changes while request is running
+    return () => {
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+    };
   }, [enabled, ownerBase58, refreshKey, fetchPositions]);
 
-  /* ───────── Poll positions (not prices!) every 30 seconds ───────── */
-  // Prices update in real-time via Convex subscription
-  // Positions only change when user opens/closes, so 30s is fine
+  /* ───────── Poll positions every 30 seconds ───────── */
 
   useEffect(() => {
     if (!enabled || !ownerBase58?.trim()) return;
 
-    // Pause polling when tab is hidden
-    let iv: NodeJS.Timeout | null = null;
+    let iv: ReturnType<typeof setInterval> | null = null;
 
     const start = () => {
       if (iv) return;
@@ -327,10 +357,9 @@ export function useBoosterPositions(args: {
     };
 
     const onVisibility = () => {
-      if (document.hidden) {
-        stop();
-      } else {
-        void fetchPositions(); // Refresh when tab becomes visible
+      if (document.hidden) stop();
+      else {
+        void fetchPositions();
         start();
       }
     };
@@ -350,9 +379,8 @@ export function useBoosterPositions(args: {
       rows,
       error,
       refetch: fetchPositions,
-      // Expose price loading state
       pricesLoading: convexPrices === undefined,
     }),
-    [loading, rows, error, fetchPositions, convexPrices]
+    [loading, rows, error, fetchPositions, convexPrices],
   );
 }
