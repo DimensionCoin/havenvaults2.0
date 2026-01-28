@@ -1,6 +1,7 @@
 "use client";
 
 // components/accounts/deposit/Deposit.tsx
+// Improved version with better UX for international users (Canada, UK, EU, etc.)
 import React, {
   useState,
   useCallback,
@@ -26,6 +27,10 @@ import {
   Wallet,
   X,
   Globe,
+  Sparkles,
+  User,
+  Building2,
+  Zap,
 } from "lucide-react";
 
 import { useUser } from "@/providers/UserProvider";
@@ -103,6 +108,16 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
 
 // Countries that support Guest Checkout (US only)
 const GUEST_CHECKOUT_COUNTRIES = new Set(["US"]);
+
+// Quick amount presets based on currency
+const AMOUNT_PRESETS: Record<string, number[]> = {
+  USD: [25, 50, 100, 250],
+  CAD: [25, 50, 100, 250],
+  EUR: [25, 50, 100, 250],
+  GBP: [20, 50, 100, 200],
+  AUD: [50, 100, 200, 500],
+  DEFAULT: [25, 50, 100, 250],
+};
 
 const shortAddress = (addr?: string | null) => {
   if (!addr) return "";
@@ -225,7 +240,7 @@ const Deposit: React.FC<DepositProps> = ({
   // Tab state
   const [tab, setTab] = useState<DepositTab>("bank");
 
-  // Bank deposit flow state
+  // Bank deposit flow state - unified for all users now
   const [bankStep, setBankStep] = useState<BankStep>("amount");
   const [amountInput, setAmountInput] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
@@ -280,7 +295,12 @@ const Deposit: React.FC<DepositProps> = ({
     return GUEST_CHECKOUT_COUNTRIES.has(userCountry);
   }, [userCountry]);
 
-  // Amount parsing - only relevant for US users
+  // Get amount presets for current currency
+  const amountPresets = useMemo(() => {
+    return AMOUNT_PRESETS[currency] || AMOUNT_PRESETS.DEFAULT;
+  }, [currency]);
+
+  // Amount parsing
   const amountDisplay = useMemo(() => {
     const n = Number(amountInput);
     return Number.isFinite(n) && n > 0 ? n : 0;
@@ -298,10 +318,9 @@ const Deposit: React.FC<DepositProps> = ({
   const canProceedToConfirm =
     amountWithinBounds && !amountTooLow && !amountTooHigh;
 
-  // For non-US users, they just need to acknowledge (no amount required)
-  const canLaunchCoinbase = isGuestCheckoutEligible
-    ? canProceedToConfirm && acknowledged
-    : acknowledged;
+  // For all users, they can proceed with or without an amount
+  // Amount is optional - Coinbase will ask if not provided
+  const canLaunchCoinbase = acknowledged;
 
   // Cleanup polling on unmount
   const cleanupPolling = useCallback(() => {
@@ -472,8 +491,8 @@ const Deposit: React.FC<DepositProps> = ({
         sandbox: false,
       };
 
-      // Only include paymentAmount for US users who entered one
-      if (isGuestCheckoutEligible && amountDisplay > 0) {
+      // Include paymentAmount for ALL users if they entered one
+      if (amountDisplay > 0) {
         requestBody.paymentAmount = amountDisplay.toFixed(2);
       }
 
@@ -542,7 +561,6 @@ const Deposit: React.FC<DepositProps> = ({
     walletAddress,
     currency,
     amountDisplay,
-    isGuestCheckoutEligible,
     user?.country,
     usdcUsd,
     handleOnrampComplete,
@@ -563,6 +581,10 @@ const Deposit: React.FC<DepositProps> = ({
       if (!prev && k === "0") return "0";
       return next.length > 12 ? prev : next;
     });
+  }, []);
+
+  const selectPresetAmount = useCallback((amount: number) => {
+    setAmountInput(amount.toString());
   }, []);
 
   const goToStep = useCallback((newStep: BankStep) => setBankStep(newStep), []);
@@ -737,25 +759,22 @@ const Deposit: React.FC<DepositProps> = ({
             <div className="text-center">
               <div className="text-base font-semibold text-foreground">
                 {flowType === "coinbase_login"
-                  ? "Sign in to Coinbase"
+                  ? "Complete your purchase"
                   : "Complete your checkout"}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {flowType === "coinbase_login" ? (
                   <>
-                    Sign in with your Coinbase account to complete the purchase.
-                    <br />
-                    <span className="text-[11px] text-muted-foreground/70">
-                      First time? Create a free account in the popup.
-                    </span>
+                    Sign in to Coinbase or create a free account to complete
+                    your purchase.
                   </>
                 ) : (
                   "Finish in the secure Coinbase window. We'll check for your deposit when you're done."
                 )}
               </div>
-              {quoteMethod === "quote" && (
+              {amountDisplay > 0 && (
                 <div className="mt-2 text-[12px] text-primary">
-                  ✓ Your amount has been pre-filled
+                  ✓ {formatCurrency(amountDisplay, currency)} pre-filled
                 </div>
               )}
               <div className="mt-3 haven-card-soft px-4 py-3">
@@ -808,35 +827,26 @@ const Deposit: React.FC<DepositProps> = ({
         <div className="flex-shrink-0 px-5 pt-5 pb-4 border-b border-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {/* Back button only for US users in confirm step */}
-              {tab === "bank" &&
-                bankStep === "confirm" &&
-                isGuestCheckoutEligible && (
-                  <button
-                    type="button"
-                    onClick={() => goToStep("amount")}
-                    disabled={coinbaseLaunching}
-                    className="haven-icon-btn !w-9 !h-9"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
-                )}
+              {/* Back button for confirm step */}
+              {tab === "bank" && bankStep === "confirm" && (
+                <button
+                  type="button"
+                  onClick={() => goToStep("amount")}
+                  disabled={coinbaseLaunching}
+                  className="haven-icon-btn !w-9 !h-9"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              )}
               <div>
                 <h2 className="text-[15px] font-semibold text-foreground tracking-tight">
                   Deposit Funds
                 </h2>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {tab === "bank" && bankStep === "amount" && "Choose amount"}
                   {tab === "bank" &&
-                    isGuestCheckoutEligible &&
-                    bankStep === "amount" &&
-                    "Enter deposit amount"}
-                  {tab === "bank" &&
-                    isGuestCheckoutEligible &&
                     bankStep === "confirm" &&
                     "Review and confirm"}
-                  {tab === "bank" &&
-                    !isGuestCheckoutEligible &&
-                    "Deposit via Coinbase"}
                   {tab === "crypto" && "Deposit USDC from another wallet"}
                 </p>
               </div>
@@ -859,10 +869,8 @@ const Deposit: React.FC<DepositProps> = ({
             </div>
           </div>
 
-          {/* Tab Switcher - show for crypto tab or for US users on amount step */}
-          {(tab === "crypto" ||
-            (tab === "bank" &&
-              (isGuestCheckoutEligible ? bankStep === "amount" : true))) && (
+          {/* Tab Switcher - show on amount step or crypto tab */}
+          {(tab === "crypto" || (tab === "bank" && bankStep === "amount")) && (
             <div className="flex p-1 bg-secondary rounded-2xl mt-4">
               <button
                 type="button"
@@ -878,7 +886,7 @@ const Deposit: React.FC<DepositProps> = ({
                 ].join(" ")}
               >
                 <CreditCard className="w-4 h-4" />
-                Bank
+                Card / Bank
               </button>
               <button
                 type="button"
@@ -896,8 +904,8 @@ const Deposit: React.FC<DepositProps> = ({
             </div>
           )}
 
-          {/* Progress indicator for bank flow - only for US users */}
-          {tab === "bank" && isGuestCheckoutEligible && (
+          {/* Progress indicator for bank flow */}
+          {tab === "bank" && (
             <div className="flex gap-1.5 mt-4">
               {["amount", "confirm"].map((s) => (
                 <div
@@ -918,112 +926,173 @@ const Deposit: React.FC<DepositProps> = ({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto overscroll-contain">
-          {/* BANK TAB - Amount Step (US users only) */}
-          {tab === "bank" &&
-            bankStep === "amount" &&
-            isGuestCheckoutEligible && (
-              <div className="p-5">
-                <div className="text-center py-4">
-                  <div className="inline-flex items-baseline gap-2">
-                    <span className="text-[40px] sm:text-[48px] font-bold text-foreground tracking-tight tabular-nums">
-                      {amountInput || "0"}
-                    </span>
-                    <span className="text-[18px] font-medium text-muted-foreground">
-                      {currency}
-                    </span>
-                  </div>
-                  <div className="mt-3 flex flex-col items-center gap-1 text-[11px]">
-                    <div className="text-muted-foreground">
-                      Min {symbol}
-                      {MIN_AMOUNT} • Max {symbol}
-                      {MAX_AMOUNT.toLocaleString()}
+          {/* BANK TAB - Amount Step (now for ALL users) */}
+          {tab === "bank" && bankStep === "amount" && (
+            <div className="p-5">
+              {/* Coinbase account info for non-US users */}
+              {!isGuestCheckoutEligible && (
+                <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                  <div className="flex items-start gap-2">
+                    <User className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                    <div className="text-[12px] text-blue-200 leading-relaxed">
+                      <strong className="text-blue-100">
+                        Coinbase account required
+                      </strong>
+                      <br />
+                      You&apos;ll sign in or create a free Coinbase account to
+                      complete your deposit.
                     </div>
-                    {amountTooLow && (
-                      <div className="text-destructive">
-                        Minimum deposit is {symbol}
-                        {MIN_AMOUNT}
-                      </div>
-                    )}
-                    {amountTooHigh && (
-                      <div className="text-destructive">
-                        Maximum deposit is {symbol}
-                        {MAX_AMOUNT.toLocaleString()}
-                      </div>
-                    )}
                   </div>
                 </div>
+              )}
 
-                {/* Numpad */}
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  {[
-                    "1",
-                    "2",
-                    "3",
-                    "4",
-                    "5",
-                    "6",
-                    "7",
-                    "8",
-                    "9",
-                    ".",
-                    "0",
-                    "DEL",
-                  ].map((k) => (
+              {/* Amount Display */}
+              <div className="text-center py-4">
+                <div className="inline-flex items-baseline gap-2">
+                  <span className="text-[40px] sm:text-[48px] font-bold text-foreground tracking-tight tabular-nums">
+                    {amountInput || "0"}
+                  </span>
+                  <span className="text-[18px] font-medium text-muted-foreground">
+                    {currency}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-col items-center gap-1 text-[11px]">
+                  <div className="text-muted-foreground">
+                    Min {symbol}
+                    {MIN_AMOUNT} • Max {symbol}
+                    {MAX_AMOUNT.toLocaleString()}
+                  </div>
+                  {amountTooLow && (
+                    <div className="text-destructive">
+                      Minimum deposit is {symbol}
+                      {MIN_AMOUNT}
+                    </div>
+                  )}
+                  {amountTooHigh && (
+                    <div className="text-destructive">
+                      Maximum deposit is {symbol}
+                      {MAX_AMOUNT.toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Amount Presets */}
+              <div className="mb-4">
+                <div className="grid grid-cols-4 gap-2">
+                  {amountPresets.map((preset) => (
                     <button
-                      key={k}
+                      key={preset}
                       type="button"
-                      onClick={() => pressKey(k)}
+                      onClick={() => selectPresetAmount(preset)}
                       className={[
-                        "h-14 sm:h-16 rounded-2xl text-[20px] font-semibold transition-all bg-secondary hover:bg-accent active:scale-95 border border-border",
-                        k === "DEL"
-                          ? "text-muted-foreground"
-                          : "text-foreground",
+                        "py-2.5 rounded-xl text-[13px] font-semibold transition-all border",
+                        amountDisplay === preset
+                          ? "bg-primary/20 border-primary text-primary"
+                          : "bg-secondary border-border text-foreground hover:bg-accent",
                       ].join(" ")}
                     >
-                      {k === "DEL" ? "⌫" : k}
+                      {symbol}
+                      {preset}
                     </button>
                   ))}
                 </div>
+              </div>
 
-                <div className="mt-5 haven-card-soft px-4 py-3 border-primary/20 bg-primary/5">
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      <strong className="text-foreground">
-                        Secure checkout:
-                      </strong>{" "}
-                      You will complete payment via the Coinbase secure
-                      checkout. Haven never sees your card details.
-                    </p>
+              {/* Numpad */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "DEL",
+                ].map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => pressKey(k)}
+                    className={[
+                      "h-12 sm:h-14 rounded-2xl text-[18px] font-semibold transition-all bg-secondary hover:bg-accent active:scale-95 border border-border",
+                      k === "DEL" ? "text-muted-foreground" : "text-foreground",
+                    ].join(" ")}
+                  >
+                    {k === "DEL" ? "⌫" : k}
+                  </button>
+                ))}
+              </div>
+
+              {/* Skip amount option */}
+              {amountDisplay === 0 && (
+                <div className="mt-4 text-center">
+                  <p className="text-[11px] text-muted-foreground">
+                    Or skip this and enter the amount in Coinbase
+                  </p>
+                </div>
+              )}
+
+              {/* Payment methods info */}
+              <div className="mt-4 haven-card-soft px-4 py-3">
+                <div className="flex items-start gap-3">
+                  <CreditCard className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-muted-foreground leading-relaxed">
+                    <strong className="text-foreground">
+                      Payment methods:
+                    </strong>{" "}
+                    {isGuestCheckoutEligible ? (
+                      <>
+                        Debit card, Apple Pay, or existing Coinbase balance.
+                        Credit cards not supported.
+                      </>
+                    ) : (
+                      <>
+                        Debit/credit card, linked bank account, or existing
+                        Coinbase balance.
+                      </>
+                    )}
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
 
-                {/* Skip amount hint */}
-                {amountDisplay === 0 && (
-                  <div className="mt-3 text-center">
-                    <p className="text-[11px] text-muted-foreground">
-                      You can also skip this and enter the amount in Coinbase
-                      checkout
-                    </p>
+          {/* BANK TAB - Confirm Step */}
+          {tab === "bank" && bankStep === "confirm" && (
+            <div className="p-5">
+              <div className="text-center py-6">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-2">
+                  {amountDisplay > 0 ? "You are depositing" : "Deposit via"}
+                </p>
+                {amountDisplay > 0 ? (
+                  <span className="text-[44px] font-bold text-foreground tracking-tight">
+                    {formatCurrency(amountDisplay, currency)}
+                  </span>
+                ) : (
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-[#0052FF] flex items-center justify-center">
+                      <svg viewBox="0 0 40 40" fill="none" className="w-5 h-5">
+                        <path
+                          d="M20 40C31.0457 40 40 31.0457 40 20C40 8.9543 31.0457 0 20 0C8.9543 0 0 8.9543 0 20C0 31.0457 8.9543 40 20 40Z"
+                          fill="#0052FF"
+                        />
+                        <path
+                          d="M20 6C12.268 6 6 12.268 6 20C6 27.732 12.268 34 20 34C27.732 34 34 27.732 34 20C34 12.268 27.732 6 20 6ZM20 28C15.582 28 12 24.418 12 20C12 15.582 15.582 12 20 12C23.874 12 27.092 14.746 27.82 18.4H22V21.6H27.82C27.092 25.254 23.874 28 20 28Z"
+                          fill="white"
+                        />
+                      </svg>
+                    </div>
+                    <span className="text-[24px] font-semibold text-foreground">
+                      Coinbase
+                    </span>
                   </div>
                 )}
-              </div>
-            )}
-
-          {/* BANK TAB - Direct flow for non-US users (no amount entry) */}
-          {tab === "bank" && !isGuestCheckoutEligible && (
-            <div className="p-5">
-              <div className="text-center">
-                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                  <CreditCard className="w-8 h-8 text-primary" />
-                </div>
-                <h3 className="text-lg font-semibold text-foreground">
-                  Deposit via Coinbase
-                </h3>
-                <p className="mt-2 text-sm text-muted-foreground max-w-xs mx-auto">
-                  You&apos;ll be redirected to Coinbase to complete your
-                  deposit.
-                </p>
               </div>
 
               {/* Details card */}
@@ -1035,7 +1104,7 @@ const Deposit: React.FC<DepositProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[12px] text-muted-foreground">
-                        You will receive
+                        You receive
                       </span>
                       <span className="text-[13px] text-foreground font-medium">
                         USDC
@@ -1057,6 +1126,16 @@ const Deposit: React.FC<DepositProps> = ({
                         {currency}
                       </span>
                     </div>
+                    {amountDisplay > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[12px] text-muted-foreground">
+                          Amount
+                        </span>
+                        <span className="text-[13px] text-foreground font-medium">
+                          {formatCurrency(amountDisplay, currency)}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[12px] text-muted-foreground">
                         Destination
@@ -1068,23 +1147,41 @@ const Deposit: React.FC<DepositProps> = ({
                   </div>
                 </div>
 
+                {/* Flow-specific info */}
                 <div className="p-4 bg-secondary/30">
                   <div className="flex items-start gap-3">
-                    <Globe className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <div className="text-[11px] text-muted-foreground leading-relaxed">
-                      <strong className="text-foreground">
-                        Coinbase account required:
-                      </strong>{" "}
-                      You&apos;ll sign in with your Coinbase account and can use{" "}
-                      <span className="text-foreground">
-                        linked payment methods
-                      </span>{" "}
-                      or{" "}
-                      <span className="text-foreground">
-                        existing crypto balance
-                      </span>
-                      . Don&apos;t have an account? Create one for free.
-                    </div>
+                    {isGuestCheckoutEligible ? (
+                      <>
+                        <Zap className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
+                        <div className="text-[11px] text-muted-foreground leading-relaxed">
+                          <strong className="text-foreground">
+                            Quick checkout:
+                          </strong>{" "}
+                          Pay with{" "}
+                          <span className="text-foreground">Apple Pay</span> or{" "}
+                          <span className="text-foreground">debit card</span>.
+                          No Coinbase account needed.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <Building2 className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                        <div className="text-[11px] text-muted-foreground leading-relaxed">
+                          <strong className="text-foreground">
+                            Secure with Coinbase:
+                          </strong>{" "}
+                          Sign in or create a free account. Use your{" "}
+                          <span className="text-foreground">
+                            saved payment methods
+                          </span>{" "}
+                          or{" "}
+                          <span className="text-foreground">
+                            Coinbase balance
+                          </span>
+                          .
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1098,12 +1195,11 @@ const Deposit: React.FC<DepositProps> = ({
                   className="mt-1 h-4 w-4 accent-primary"
                 />
                 <div className="text-[12px] text-muted-foreground leading-snug">
-                  I acknowledge that this transfer is facilitated by{" "}
+                  I understand this deposit is processed by{" "}
                   <span className="text-foreground font-semibold">
                     Coinbase
                   </span>
-                  , and I will need to sign in with my Coinbase account. Haven
-                  does not handle card or banking details.
+                  . Haven never sees my payment details.
                 </div>
               </label>
 
@@ -1117,130 +1213,6 @@ const Deposit: React.FC<DepositProps> = ({
               )}
             </div>
           )}
-
-          {/* BANK TAB - Confirm Step (US users only) */}
-          {tab === "bank" &&
-            bankStep === "confirm" &&
-            isGuestCheckoutEligible && (
-              <div className="p-5">
-                <div className="text-center py-6">
-                  <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-2">
-                    {amountDisplay > 0
-                      ? "You are depositing"
-                      : "Deposit via Coinbase"}
-                  </p>
-                  {amountDisplay > 0 ? (
-                    <span className="text-[44px] font-bold text-foreground tracking-tight">
-                      {formatCurrency(amountDisplay, currency)}
-                    </span>
-                  ) : (
-                    <span className="text-[24px] font-semibold text-muted-foreground">
-                      Amount to be entered in checkout
-                    </span>
-                  )}
-                </div>
-
-                {/* Details card */}
-                <div className="haven-card-soft overflow-hidden">
-                  <div className="p-4 border-b border-border">
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-                      Deposit Details
-                    </p>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[12px] text-muted-foreground">
-                          You are buying
-                        </span>
-                        <span className="text-[13px] text-foreground font-medium">
-                          USDC
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[12px] text-muted-foreground">
-                          Network
-                        </span>
-                        <span className="text-[13px] text-foreground font-medium">
-                          Solana
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[12px] text-muted-foreground">
-                          Payment currency
-                        </span>
-                        <span className="text-[13px] text-foreground font-medium">
-                          {currency}
-                        </span>
-                      </div>
-                      {amountDisplay > 0 && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-muted-foreground">
-                            Amount
-                          </span>
-                          <span className="text-[13px] text-foreground font-medium">
-                            {formatCurrency(amountDisplay, currency)}
-                          </span>
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-[12px] text-muted-foreground">
-                          Destination
-                        </span>
-                        <span className="text-[12px] text-foreground font-mono truncate max-w-[55%]">
-                          {shortAddress(walletAddress)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-4 bg-secondary/30">
-                    <div className="flex items-start gap-3">
-                      <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-                      <div className="text-[11px] text-muted-foreground leading-relaxed">
-                        <strong className="text-foreground">
-                          Payment methods:
-                        </strong>{" "}
-                        Coinbase supports{" "}
-                        <span className="text-foreground">
-                          Visa/Mastercard debit
-                        </span>
-                        , <span className="text-foreground">Apple Pay</span>,
-                        and{" "}
-                        <span className="text-foreground">
-                          existing Coinbase balance
-                        </span>
-                        . Credit cards are not supported.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Acknowledgement */}
-                <label className="mt-4 flex items-start gap-3 rounded-2xl border border-border bg-card p-4 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={acknowledged}
-                    onChange={(e) => setAcknowledged(e.target.checked)}
-                    className="mt-1 h-4 w-4 accent-primary"
-                  />
-                  <div className="text-[12px] text-muted-foreground leading-snug">
-                    I acknowledge that this transfer is facilitated by{" "}
-                    <span className="text-foreground font-semibold">
-                      Coinbase
-                    </span>
-                    . Haven does not handle card or banking details.
-                  </div>
-                </label>
-
-                {/* Error */}
-                {coinbaseError && (
-                  <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-xl">
-                    <p className="text-[12px] text-destructive">
-                      {coinbaseError}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
 
           {/* CRYPTO TAB */}
           {tab === "crypto" && (
@@ -1368,57 +1340,28 @@ const Deposit: React.FC<DepositProps> = ({
 
         {/* Footer */}
         <div className="flex-shrink-0 p-5 border-t border-border bg-card/80 backdrop-blur-sm">
-          {/* US users: Amount step -> Continue button */}
-          {tab === "bank" &&
-            bankStep === "amount" &&
-            isGuestCheckoutEligible && (
-              <button
-                type="button"
-                onClick={() => goToStep("confirm")}
-                disabled={!canProceedToConfirm}
-                className={[
-                  "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
-                  canProceedToConfirm
-                    ? "haven-btn-primary"
-                    : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
-                ].join(" ")}
-              >
-                Continue
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            )}
+          {/* Amount step -> Continue button */}
+          {tab === "bank" && bankStep === "amount" && (
+            <button
+              type="button"
+              onClick={() => goToStep("confirm")}
+              disabled={!canProceedToConfirm}
+              className={[
+                "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
+                canProceedToConfirm
+                  ? "haven-btn-primary"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
+              ].join(" ")}
+            >
+              {amountDisplay > 0
+                ? `Continue with ${formatCurrency(amountDisplay, currency)}`
+                : "Continue"}
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          )}
 
-          {/* US users: Confirm step -> Launch Coinbase */}
-          {tab === "bank" &&
-            bankStep === "confirm" &&
-            isGuestCheckoutEligible && (
-              <button
-                type="button"
-                onClick={launchCoinbase}
-                disabled={!canLaunchCoinbase || coinbaseLaunching}
-                className={[
-                  "w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold transition-all flex items-center justify-center gap-2",
-                  canLaunchCoinbase && !coinbaseLaunching
-                    ? "haven-btn-primary"
-                    : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
-                ].join(" ")}
-              >
-                {coinbaseLaunching ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Opening Coinbase...
-                  </>
-                ) : (
-                  <>
-                    <ExternalLink className="w-4 h-4" />
-                    Continue to Coinbase
-                  </>
-                )}
-              </button>
-            )}
-
-          {/* Non-US users: Direct launch button */}
-          {tab === "bank" && !isGuestCheckoutEligible && (
+          {/* Confirm step -> Launch Coinbase */}
+          {tab === "bank" && bankStep === "confirm" && (
             <button
               type="button"
               onClick={launchCoinbase}
@@ -1438,7 +1381,9 @@ const Deposit: React.FC<DepositProps> = ({
               ) : (
                 <>
                   <ExternalLink className="w-4 h-4" />
-                  Proceed to Coinbase
+                  {isGuestCheckoutEligible
+                    ? "Continue to Checkout"
+                    : "Continue with Coinbase"}
                 </>
               )}
             </button>
@@ -1455,17 +1400,24 @@ const Deposit: React.FC<DepositProps> = ({
           )}
 
           <div className="mt-2 text-center text-[11px] text-muted-foreground">
-            {tab === "bank"
-              ? isGuestCheckoutEligible
-                ? "Secure checkout via Coinbase"
-                : "Requires Coinbase account • Secure checkout"
-              : "Only deposit USDC on Solana"}
+            {tab === "bank" ? (
+              isGuestCheckoutEligible ? (
+                "Quick checkout • No account needed"
+              ) : (
+                <>
+                  <ShieldCheck className="w-3 h-3 inline mr-1" />
+                  Powered by Coinbase • Secure checkout
+                </>
+              )
+            ) : (
+              "Only deposit USDC on Solana"
+            )}
           </div>
         </div>
       </div>
     </div>,
     document.body,
   );
-};;
+};
 
 export default Deposit;
