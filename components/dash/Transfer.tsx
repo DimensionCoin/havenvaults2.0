@@ -747,7 +747,7 @@ export default function TransferDash({
         <div className="mt-3">
           <div className="flex items-center gap-2">
             <div className="flex-1 relative">
-              <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
               <input
                 value={walletInput}
                 onChange={(e) => {
@@ -979,7 +979,7 @@ export default function TransferDash({
                           profileImageUrl={resolvedRecipient.profileImageUrl}
                         />
                       ) : (
-                        <Wallet className="w-5 h-5 text-muted-foreground" />
+                        <Wallet className="w-5 h-5 text-black" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
