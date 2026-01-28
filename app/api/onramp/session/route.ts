@@ -1,6 +1,10 @@
 // app/api/onramp/session/route.ts
-// FIXED: Uses V1 Buy Quote API for proper one-click-buy URLs
-// The V1 Buy Quote API returns a ready-to-use URL with all parameters pre-filled
+// Uses V1 Buy Quote API for proper one-click-buy URLs
+// CHANGE: Do NOT force a payment method. Let Coinbase choose the user's best/eligible method.
+//
+// NOTE: We still *accept* an incoming paymentMethod from the client, but we DO NOT
+//       send it to Coinbase Buy Quote API. This prevents Coinbase from selecting
+//       an incompatible method and clearing the preset amount.
 import "server-only";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -153,7 +157,7 @@ type RequestBody = {
   destinationNetwork?: string;
   paymentCurrency?: string;
   paymentAmount?: string;
-  paymentMethod?: string;
+  paymentMethod?: string; // accepted, but NOT forwarded to Coinbase quote
   redirectUrl?: string;
   sandbox?: boolean;
   country?: string;
@@ -174,13 +178,6 @@ const ALLOWED_PAYMENT_CURRENCIES = new Set([
 ]);
 
 const GUEST_CHECKOUT_COUNTRIES = new Set(["US"]);
-
-const VALID_PAYMENT_METHODS = new Set([
-  "CARD",
-  "ACH_BANK_ACCOUNT",
-  "APPLE_PAY",
-  "FIAT_WALLET",
-]);
 
 const COUNTRY_NAME_TO_CODE: Record<string, string> = {
   CANADA: "CA",
@@ -252,7 +249,9 @@ async function generateCoinbaseJwtV1(method: string, path: string) {
 
 /**
  * Build a one-click-buy URL manually from a session token
- * This is the fallback if we don't have an amount
+ * This is the fallback if we don't have an amount or quote failed.
+ *
+ * IMPORTANT: We do NOT set defaultPaymentMethod here.
  */
 function buildManualUrl(
   sessionToken: string,
@@ -275,6 +274,43 @@ function buildManualUrl(
   }
 
   return url.toString();
+}
+
+/**
+ * Patch Coinbase-provided URL to ensure amount/currency/asset/network are present,
+ * while intentionally NOT setting defaultPaymentMethod.
+ */
+function forcePrefillParams(
+  rawUrl: string,
+  opts: {
+    paymentAmount?: string;
+    paymentCurrency: string;
+    purchaseCurrency: string;
+    destinationNetwork: string;
+  },
+): string {
+  const u = new URL(rawUrl);
+
+  // DO NOT force a payment method (this is the whole point of this change)
+  u.searchParams.delete("defaultPaymentMethod");
+
+  // Ensure asset/network are pinned
+  if (!u.searchParams.get("defaultAsset")) {
+    u.searchParams.set("defaultAsset", opts.purchaseCurrency);
+  }
+  if (!u.searchParams.get("defaultNetwork")) {
+    u.searchParams.set("defaultNetwork", opts.destinationNetwork);
+  }
+
+  // Ensure amount/currency are present
+  if (opts.paymentAmount && !u.searchParams.get("presetFiatAmount")) {
+    u.searchParams.set("presetFiatAmount", opts.paymentAmount);
+  }
+  if (!u.searchParams.get("fiatCurrency")) {
+    u.searchParams.set("fiatCurrency", opts.paymentCurrency);
+  }
+
+  return u.toString();
 }
 
 /* ───────── main ───────── */
@@ -342,7 +378,7 @@ export async function POST(req: NextRequest) {
     return json(req, 400, { error: "Unsupported destinationNetwork" });
   }
 
-  // CRITICAL: Use the payment currency from the request (CAD for Canada, etc.)
+  // Use payment currency from request (CAD for Canada, etc.)
   const paymentCurrency = normalizeCurrency(body.paymentCurrency) || "USD";
   if (!ALLOWED_PAYMENT_CURRENCIES.has(paymentCurrency)) {
     return json(req, 400, { error: "Unsupported paymentCurrency" });
@@ -366,30 +402,31 @@ export async function POST(req: NextRequest) {
 
   const isGuestCheckoutEligible = GUEST_CHECKOUT_COUNTRIES.has(userCountry);
 
-  let paymentMethod = (body.paymentMethod || "").toUpperCase();
-  if (!paymentMethod || !VALID_PAYMENT_METHODS.has(paymentMethod)) {
-    paymentMethod = "CARD";
-  }
+  // We still *log* whatever the client said, but we no longer force it on Coinbase.
+  const requestedPaymentMethod =
+    (body.paymentMethod || "").toUpperCase() || "(none)";
 
   console.log("[Onramp] Request params:", {
     country: userCountry,
     currency: paymentCurrency,
     amount: paymentAmount || "(none)",
-    method: paymentMethod,
+    requestedMethod: requestedPaymentMethod,
     destination: userDepositAddress.slice(0, 8) + "...",
     clientIp: clientIp.slice(0, 8) + "...",
   });
 
   try {
-    // If user specified an amount, use the V1 Buy Quote API for a proper one-click-buy URL
+    // If user specified an amount, use the V1 Buy Quote API for a one-click-buy URL
     if (paymentAmount) {
       console.log("[Onramp] Using V1 Buy Quote API for one-click-buy URL");
 
+      // IMPORTANT CHANGE:
+      // Do NOT include paymentMethod. Let Coinbase decide the best eligible method
+      // for this user (especially for non-US logged-in flows).
       const quoteBody: Record<string, string> = {
         country: userCountry || "US",
         paymentAmount: paymentAmount,
         paymentCurrency: paymentCurrency, // CAD, USD, etc.
-        paymentMethod: paymentMethod,
         purchaseCurrency: purchaseCurrency, // USDC
         purchaseNetwork: destinationNetwork, // solana
         destinationAddress: userDepositAddress,
@@ -406,6 +443,7 @@ export async function POST(req: NextRequest) {
         country: quoteBody.country,
         paymentCurrency: quoteBody.paymentCurrency,
         paymentAmount: quoteBody.paymentAmount,
+        paymentMethod: "(auto)", // no longer forced
       });
 
       const response = await fetch(BUY_QUOTE_URL, {
@@ -434,7 +472,7 @@ export async function POST(req: NextRequest) {
           data?.error ||
           "Coinbase API error") as string;
 
-        // If quote fails for international users, fall back to session token approach
+        // If quote fails, fall back to session token approach
         if (response.status === 400 || response.status === 422) {
           console.log(
             "[Onramp] Quote failed, falling back to session token approach",
@@ -446,10 +484,18 @@ export async function POST(req: NextRequest) {
           });
         }
       } else {
-        // Success! The Buy Quote API returns a ready-to-use one-click URL
-        const onrampUrl = data.onramp_url as string;
+        const onrampUrlRaw = data.onramp_url as string;
 
-        if (onrampUrl) {
+        if (onrampUrlRaw) {
+          // Patch URL to ensure prefill params are present,
+          // and explicitly remove defaultPaymentMethod if Coinbase included it.
+          const onrampUrl = forcePrefillParams(onrampUrlRaw, {
+            paymentAmount,
+            paymentCurrency,
+            purchaseCurrency,
+            destinationNetwork,
+          });
+
           console.log(
             "[Onramp] Got one-click URL from Buy Quote API:",
             onrampUrl,
@@ -470,7 +516,8 @@ export async function POST(req: NextRequest) {
             destinationNetwork: "solana",
             paymentCurrency,
             paymentAmount,
-            paymentMethod,
+            // We no longer force method; report "(auto)" to the client for clarity
+            paymentMethod: null,
             redirectUrl: safeRedirectUrl || null,
             flowType: isGuestCheckoutEligible ? "guest" : "coinbase_login",
             country: userCountry || null,
@@ -481,7 +528,6 @@ export async function POST(req: NextRequest) {
     }
 
     // Fallback: Use V1 Session Token API and build URL manually
-    // This is for when no amount is specified or quote failed
     console.log("[Onramp] Using V1 Session Token API");
 
     const sessionBody = {
@@ -532,7 +578,6 @@ export async function POST(req: NextRequest) {
       return json(req, 502, { error: "No session token from Coinbase" });
     }
 
-    // Build the URL manually with the correct parameters
     const onrampUrl = buildManualUrl(sessionToken, {
       paymentAmount,
       paymentCurrency,
@@ -550,7 +595,8 @@ export async function POST(req: NextRequest) {
       destinationNetwork: "solana",
       paymentCurrency,
       paymentAmount: paymentAmount || null,
-      paymentMethod,
+      // not forced
+      paymentMethod: null,
       redirectUrl: safeRedirectUrl || null,
       flowType: isGuestCheckoutEligible ? "guest" : "coinbase_login",
       country: userCountry || null,
