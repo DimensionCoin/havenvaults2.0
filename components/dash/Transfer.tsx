@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { PublicKey } from "@solana/web3.js";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { useSponsoredExternalTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 import { useBalance } from "@/providers/BalanceProvider";
@@ -48,8 +49,8 @@ type ResolvedRecipient = {
   email?: string;
   name?: string;
   profileImageUrl?: string;
-  inputValue: string; // IMPORTANT: for wallet tab this will be the .sol input OR raw address input
-  resolvedAddress: string; // the resolved base58 address
+  inputValue: string;
+  resolvedAddress: string;
   isDomain?: boolean;
 };
 
@@ -66,11 +67,6 @@ const isSolAddress = (s: string) => {
   try {
     const t = s.trim();
     if (!t) return false;
-    // PublicKey throws if invalid
-    // Also rejects many non-base58 strings.
-    // NOTE: This will accept any valid Solana pubkey (32 bytes).
-    // That’s what we want for "regular wallets".
-    // eslint-disable-next-line no-new
     new PublicKey(t);
     return true;
   } catch {
@@ -113,6 +109,30 @@ function normalizeContactName(c: Contact) {
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Animation Variants - Smooth spring-based transitions
+───────────────────────────────────────────────────────────── */
+
+const tabVariants = {
+  enter: (direction: number) => ({
+    x: direction > 0 ? 30 : -30,
+    opacity: 0,
+  }),
+  center: {
+    x: 0,
+    opacity: 1,
+  },
+  exit: (direction: number) => ({
+    x: direction < 0 ? 30 : -30,
+    opacity: 0,
+  }),
+};
+
+const tabTransition = {
+  x: { type: "spring" as const, stiffness: 300, damping: 30 },
+  opacity: { duration: 0.2 },
+};
+
+/* ─────────────────────────────────────────────────────────────
    Avatar Component
 ───────────────────────────────────────────────────────────── */
 
@@ -142,7 +162,6 @@ function Avatar({
       style={{ width: size, height: size }}
     >
       {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={url}
           alt={label}
@@ -263,7 +282,10 @@ export default function TransferDash({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const [tab, setTab] = useState<"contacts" | "wallet">("contacts");
+  // Tab state with direction for animations
+  const [[currentTab, direction], setCurrentTab] = useState<
+    ["contacts" | "wallet", number]
+  >(["contacts", 0]);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
@@ -317,9 +339,19 @@ export default function TransferDash({
     { key: "wallet", label: "Wallet" },
   ];
 
+  // Handle tab change with direction for smooth animation
+  const handleTabChange = useCallback(
+    (newTab: "contacts" | "wallet") => {
+      if (newTab === currentTab) return;
+      const newDirection = newTab === "wallet" ? 1 : -1;
+      setCurrentTab([newTab, newDirection]);
+    },
+    [currentTab],
+  );
+
   useEffect(() => {
-    if (tab === "wallet") setDeleteMode(false);
-  }, [tab]);
+    if (currentTab === "wallet") setDeleteMode(false);
+  }, [currentTab]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -358,14 +390,9 @@ export default function TransferDash({
     };
   }, []);
 
-  /* ─────────────────────────────────────────────
-     Wallet resolution (Sol address OR .sol)
-     - IMPORTANT: allow backspacing / edits (do not "lock" input)
-     - Clear resolved/error immediately on typing (done in input onChange)
-     - Debounce resolution for .sol
-  ────────────────────────────────────────────── */
+  // Wallet resolution
   useEffect(() => {
-    if (tab !== "wallet") return;
+    if (currentTab !== "wallet") return;
 
     if (!walletInput.trim()) {
       setWalletResolved(null);
@@ -376,7 +403,6 @@ export default function TransferDash({
     const inputRaw = walletInput.trim();
     const inputLower = inputRaw.toLowerCase();
 
-    // If it's a valid Solana address, resolve instantly (no SNS call)
     if (isSolAddress(inputRaw)) {
       setWalletResolved({
         address: inputRaw,
@@ -386,7 +412,6 @@ export default function TransferDash({
       return;
     }
 
-    // If it's not a .sol domain, show a gentle error (after a couple chars)
     if (!isSolDomain(inputLower)) {
       setWalletResolved(null);
       setWalletError(
@@ -395,7 +420,6 @@ export default function TransferDash({
       return;
     }
 
-    // .sol domain -> resolve with debounce
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
@@ -425,7 +449,7 @@ export default function TransferDash({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [tab, walletInput, validateAndResolve]);
+  }, [currentTab, walletInput, validateAndResolve]);
 
   // Handlers
   const openSendModal = useCallback(
@@ -522,9 +546,6 @@ export default function TransferDash({
     const raw = walletInput.trim();
     const lower = raw.toLowerCase();
 
-    // IMPORTANT:
-    // - if domain: inputValue stays the domain string
-    // - if address: inputValue is the address string
     openSendModal({
       type: "wallet",
       inputValue: walletResolved.isDomain ? lower : raw,
@@ -563,9 +584,6 @@ export default function TransferDash({
     clearError();
 
     try {
-      // IMPORTANT:
-      // If recipient is a .sol domain, pass the DOMAIN STRING into the hook.
-      // Otherwise pass the resolved base58 address.
       const destination = resolvedRecipient.isDomain
         ? resolvedRecipient.inputValue
         : resolvedRecipient.resolvedAddress;
@@ -609,16 +627,16 @@ export default function TransferDash({
 
   return (
     <div className="w-full">
-      {/* Header with tabs - carousel style */}
+      {/* Header with tabs */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex gap-1.5">
           {tabs.map((t) => {
-            const isActive = t.key === tab;
+            const isActive = t.key === currentTab;
             return (
               <button
                 key={t.key}
                 type="button"
-                onClick={() => setTab(t.key)}
+                onClick={() => handleTabChange(t.key)}
                 className={[
                   "rounded-full px-3 py-1 text-[11px] font-medium transition border",
                   "bg-secondary text-muted-foreground border-border hover:bg-accent hover:text-foreground",
@@ -633,7 +651,7 @@ export default function TransferDash({
           })}
         </div>
 
-        {tab === "contacts" && contacts.length > 0 && (
+        {currentTab === "contacts" && contacts.length > 0 && (
           <button
             type="button"
             onClick={() => setDeleteMode(!deleteMode)}
@@ -649,154 +667,175 @@ export default function TransferDash({
         )}
       </div>
 
-      {/* Contacts Tab */}
-      {tab === "contacts" && (
-        <div className="mt-3">
-          <div
-            className={[
-              "flex items-start gap-4 py-2",
-              contactsLoading || contacts.length > 0
-                ? "overflow-x-auto no-scrollbar"
-                : "overflow-x-hidden",
-            ].join(" ")}
-          >
-            {/* Add Button */}
-            <button
-              type="button"
-              onClick={openAddModal}
-              className="flex flex-col items-center gap-2 min-w-[80px] active:scale-95 transition-transform"
+      {/* Tab Content with AnimatePresence for smooth transitions */}
+      <div className="relative overflow-hidden min-h-[80px]">
+        <AnimatePresence initial={false} custom={direction} mode="wait">
+          {currentTab === "contacts" && (
+            <motion.div
+              key="contacts"
+              custom={direction}
+              variants={tabVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={tabTransition}
+              className="mt-3"
             >
               <div
-                className="rounded-full bg-secondary border border-dashed border-border flex items-center justify-center"
-                style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
-              >
-                <Plus className="w-6 h-6 text-muted-foreground" />
-              </div>
-              <span className="text-[9px] font-medium text-muted-foreground">
-                Add
-              </span>
-            </button>
-
-            {/* Empty-state hint (beside Add) */}
-            {!contactsLoading && contacts.length === 0 && (
-              <button
-                type="button"
-                onClick={openAddModal}
                 className={[
-                  "h-[64px] mt-[2px] rounded-2xl px-4",
-                  "flex items-center gap-3",
-                  "border border-border bg-secondary/40",
-                  "text-left transition hover:bg-accent active:scale-[0.99]",
-                  "min-w-[240px] sm:min-w-[300px]",
+                  "flex items-start gap-4 py-2",
+                  contactsLoading || contacts.length > 0
+                    ? "overflow-x-auto no-scrollbar"
+                    : "overflow-x-hidden",
                 ].join(" ")}
               >
-                <div className="w-10 h-10 rounded-2xl bg-card border border-border flex items-center justify-center flex-shrink-0">
-                  <Mail className="w-4 h-4 text-foreground/80" />
-                </div>
-
-                <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-foreground leading-tight">
-                    Add a Haven user by email
-                  </p>
-                  <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">
-                    Save contacts for quick access when transferring.
-                  </p>
-                </div>
-              </button>
-            )}
-
-            {/* Loading State */}
-            {contactsLoading && (
-              <>
-                {[1, 2, 3].map((i) => (
+                {/* Add Button */}
+                <button
+                  type="button"
+                  onClick={openAddModal}
+                  className="flex flex-col items-center gap-2 min-w-[80px] active:scale-95 transition-transform"
+                >
                   <div
-                    key={i}
-                    className="flex flex-col items-center gap-2 min-w-[80px]"
+                    className="rounded-full bg-secondary border border-dashed border-border flex items-center justify-center"
+                    style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
                   >
-                    <div
-                      className="rounded-full bg-secondary animate-pulse border border-border"
-                      style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
-                    />
-                    <div className="h-4 w-12 bg-secondary rounded animate-pulse" />
+                    <Plus className="w-6 h-6 text-muted-foreground" />
                   </div>
-                ))}
-              </>
-            )}
+                  <span className="text-[9px] font-medium text-muted-foreground">
+                    Add
+                  </span>
+                </button>
 
-            {/* Contacts */}
-            {!contactsLoading &&
-              contacts.map((c, idx) => (
-                <ContactCircle
-                  key={c.id || c.email || idx}
-                  contact={c}
-                  onTap={() => handleContactTap(c)}
-                  onDelete={() => handleDeleteContact(c)}
-                  isDeleteMode={deleteMode}
-                  disabled={
-                    !c.walletAddress ||
-                    deleting === (c.email || c.walletAddress)
-                  }
-                />
-              ))}
-          </div>
-        </div>
-      )}
+                {/* Empty-state hint */}
+                {!contactsLoading && contacts.length === 0 && (
+                  <button
+                    type="button"
+                    onClick={openAddModal}
+                    className={[
+                      "h-[64px] mt-[2px] rounded-2xl px-4",
+                      "flex items-center gap-3",
+                      "border border-border bg-secondary/40",
+                      "text-left transition hover:bg-accent active:scale-[0.99]",
+                      "min-w-[240px] sm:min-w-[300px]",
+                    ].join(" ")}
+                  >
+                    <div className="w-10 h-10 rounded-2xl bg-card border border-border flex items-center justify-center flex-shrink-0">
+                      <Mail className="w-4 h-4 text-foreground/80" />
+                    </div>
 
-      {/* Wallet Tab (Sol address OR .sol) */}
-      {tab === "wallet" && (
-        <div className="mt-3">
-          <div className="flex items-center gap-2">
-            <div className="flex-1 relative">
-              <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
-              <input
-                value={walletInput}
-                onChange={(e) => {
-                  // Allow free edits (backspace etc) without stale resolved state fighting you
-                  const v = e.target.value;
-                  setWalletInput(v);
-                  setWalletResolved(null);
-                  setWalletError(null);
-                }}
-                placeholder="wallet address or name.sol"
-                className="haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground"
-              />
-              {walletResolving && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
-                </div>
-              )}
-            </div>
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold text-foreground leading-tight">
+                        Add a Haven user by email
+                      </p>
+                      <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">
+                        Save contacts for quick access when transferring.
+                      </p>
+                    </div>
+                  </button>
+                )}
 
-            <button
-              type="button"
-              onClick={handleWalletSend}
-              disabled={!walletResolved?.address}
-              className={[
-                // Keep button size stable even if haven-btn-primary sets width styles
-                "px-4 h-[44px] rounded-2xl font-semibold text-[13px] transition-all shrink-0 whitespace-nowrap !w-auto",
-                walletResolved?.address
-                  ? "haven-btn-primary"
-                  : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
-              ].join(" ")}
+                {/* Loading State */}
+                {contactsLoading && (
+                  <>
+                    {[1, 2, 3].map((i) => (
+                      <div
+                        key={i}
+                        className="flex flex-col items-center gap-2 min-w-[80px]"
+                      >
+                        <div
+                          className="rounded-full bg-secondary animate-pulse border border-border"
+                          style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
+                        />
+                        <div className="h-4 w-12 bg-secondary rounded animate-pulse" />
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Contacts */}
+                {!contactsLoading &&
+                  contacts.map((c, idx) => (
+                    <ContactCircle
+                      key={c.id || c.email || idx}
+                      contact={c}
+                      onTap={() => handleContactTap(c)}
+                      onDelete={() => handleDeleteContact(c)}
+                      isDeleteMode={deleteMode}
+                      disabled={
+                        !c.walletAddress ||
+                        deleting === (c.email || c.walletAddress)
+                      }
+                    />
+                  ))}
+              </div>
+            </motion.div>
+          )}
+
+          {currentTab === "wallet" && (
+            <motion.div
+              key="wallet"
+              custom={direction}
+              variants={tabVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={tabTransition}
+              className="mt-3"
             >
-              Send
-            </button>
-          </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
+                  <input
+                    value={walletInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setWalletInput(v);
+                      setWalletResolved(null);
+                      setWalletError(null);
+                    }}
+                    placeholder="wallet address or name.sol"
+                    className="haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground"
+                  />
+                  {walletResolving && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                    </div>
+                  )}
+                </div>
 
-          {walletError && (
-            <p className="mt-2 text-[11px] text-destructive">{walletError}</p>
-          )}
+                <button
+                  type="button"
+                  onClick={handleWalletSend}
+                  disabled={!walletResolved?.address}
+                  className={[
+                    "px-4 h-[44px] rounded-2xl font-semibold text-[13px] transition-all shrink-0 whitespace-nowrap !w-auto",
+                    walletResolved?.address
+                      ? "haven-btn-primary"
+                      : "bg-secondary text-muted-foreground cursor-not-allowed border border-border",
+                  ].join(" ")}
+                >
+                  Send
+                </button>
+              </div>
 
-          {walletResolved?.address && (
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {walletResolved.isDomain ? "Resolved:" : "Address:"}{" "}
-              <span className="font-mono">
-                {truncateAddress(walletResolved.address, 8)}
-              </span>
-            </p>
+              {walletError && (
+                <p className="mt-2 text-[11px] text-destructive">
+                  {walletError}
+                </p>
+              )}
+
+              {walletResolved?.address && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  {walletResolved.isDomain ? "Resolved:" : "Address:"}{" "}
+                  <span className="font-mono">
+                    {truncateAddress(walletResolved.address, 8)}
+                  </span>
+                </p>
+              )}
+            </motion.div>
           )}
-        </div>
-      )}
+        </AnimatePresence>
+      </div>
 
       {/* ─────────────────────────────
           ADD CONTACT MODAL
