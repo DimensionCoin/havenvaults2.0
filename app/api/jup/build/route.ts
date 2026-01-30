@@ -1,7 +1,7 @@
 // app/api/jup/build/route.ts
 import "server-only";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
@@ -21,6 +21,7 @@ import {
 import { Buffer } from "buffer";
 
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,28 +64,18 @@ const PRIORITY_FEE_CONFIG = {
   PRIORITY_LEVEL: "Medium" as const,
 };
 
-/* ───────── Slippage Config ─────────
-   Goals:
-   - Default stays tight (fast + fair)
-   - But we automatically widen for problematic pairs
-   - And we enable Jupiter dynamic slippage to reduce 0x1771 failures
-*/
+/* ───────── Slippage Config ───────── */
 
 const SLIPPAGE_CONFIG = {
-  // If client sends nothing, start here
   DEFAULT_BPS: 50,
-  // Hard clamp user input (avoid insane values)
   MIN_BPS: 10,
   MAX_BPS: 800,
 
-  // Dynamic slippage caps (Jupiter will pick within these)
   DYNAMIC_MIN_BPS: 50,
-  DYNAMIC_MAX_BPS_DEFAULT: 300, // 3%
-  DYNAMIC_MAX_BPS_PROBLEM: 800, // 8% for problematic mints/pairs
+  DYNAMIC_MAX_BPS_DEFAULT: 300,
+  DYNAMIC_MAX_BPS_PROBLEM: 800,
 };
 
-// If ONE coin is a pain, put its mint(s) here.
-// You can add both input & output mints. Keep it small and explicit.
 const PROBLEM_MINTS = new Set<string>([
   // "YourProblemMintHere11111111111111111111111111111",
 ]);
@@ -203,10 +194,7 @@ async function getHeliusPriorityFee(accountKeys?: string[]): Promise<number> {
           {
             ...(accountKeys?.length ? { accountKeys } : {}),
             options: {
-              // ✅ valid combination: ask for levels, then pick ours
               includeAllPriorityFeeLevels: true,
-              // ❌ recommended cannot be combined with includeAllPriorityFeeLevels
-              // recommended: true,
               evaluateEmptySlotAsZero: true,
             },
           },
@@ -329,7 +317,6 @@ function computeFeeUnits(amountUnits: number) {
   if (!Number.isFinite(amountUnits) || amountUnits <= 0 || bps <= 0) {
     return { feeUnits: 0, feeBps: 0, feeRate: 0 };
   }
-  // ceil(amount * bps / 10_000)
   const feeUnits = Math.floor((amountUnits * bps + 9999) / 10_000);
   return { feeUnits, feeBps: bps, feeRate: bps / 10_000 };
 }
@@ -460,7 +447,7 @@ function computeSlippage(params: {
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
@@ -485,9 +472,37 @@ export async function POST(req: Request) {
       });
     }
 
+    // ✅ Rate limit EARLY (after auth, before any RPC/Jupiter calls)
+    // BUILD is the most abuseable endpoint (quote + swap-instructions + RPC).
+    // We fail closed so if Convex is down, attackers can't hammer infra.
+    stage = "rateLimit";
+    const blocked = await rateLimitServer(req, {
+      api: "jup:build",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+
+      // ✅ Global protection (multi-account / botnet safety)
+      globalTiers: [
+        { limit: 50, windowMs: 2000, suffix: "g_burst" },
+        { limit: 600, windowMs: 60_000, suffix: "g_minute" },
+        { limit: 10_000, windowMs: 60 * 60 * 1000, suffix: "g_hour" },
+        { limit: 80_000, windowMs: 24 * 60 * 60 * 1000, suffix: "g_day" },
+      ],
+
+      // ✅ Per-user protection (UX + abuse prevention)
+      tiers: [
+        { limit: 3, windowMs: 2000, suffix: "burst" },
+        { limit: 20, windowMs: 60_000, suffix: "minute" },
+        { limit: 120, windowMs: 60 * 60 * 1000, suffix: "hour" },
+        { limit: 800, windowMs: 24 * 60 * 60 * 1000, suffix: "day" },
+      ],
+    });
+    if (blocked) return blocked;
+
     stage = "parseBody";
     const body = (await req.json().catch(() => null)) as {
-      fromOwnerBase58?: string; // optional hint for mismatch detection
+      fromOwnerBase58?: string;
       inputMint?: string;
       outputMint?: string;
       amountUnits?: number;
@@ -512,7 +527,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Optional: detect client wallet mismatch (debug + better UX)
     if (hinted && hinted !== userOwner.toBase58()) {
       return jsonError(400, {
         code: "WALLET_MISMATCH",
@@ -539,7 +553,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // ✅ slippage: clamp + dynamic slippage settings
     const slip = computeSlippage({
       requestedBps: body?.slippageBps,
       inputMint,
@@ -648,7 +661,7 @@ export async function POST(req: Request) {
       new URLSearchParams({
         inputMint: inputMint.toBase58(),
         outputMint: outputMint.toBase58(),
-        amount: String(netUnits), // ✅ swap uses net (after fee)
+        amount: String(netUnits),
         slippageBps: String(slip.slippageBps),
       });
 
@@ -685,9 +698,7 @@ export async function POST(req: Request) {
         userPublicKey: userOwner.toBase58(),
         wrapAndUnwrapSol: false,
         dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 0, // ✅ we add our own compute budget ixs
-
-        // ✅ reduce 0x1771 failures on volatile / thin-liquidity routes
+        prioritizationFeeLamports: 0,
         dynamicSlippage: {
           minBps: slip.dynamicMinBps,
           maxBps: slip.dynamicMaxBps,
@@ -733,14 +744,12 @@ export async function POST(req: Request) {
 
     stage = "buildInstructions";
 
-    // Jupiter setup rewritten as sponsored ATAs (payer = HAVEN_FEEPAYER)
     const setupIxs = (swapData.setupInstructions ?? []).map(toIx);
     const { sponsoredAtaIxs, nonAtaSetupIxs } =
       rebuildAtaCreatesAsSponsored(setupIxs);
 
     const filteredNonAtaSetupIxs = filterComputeBudgetIxs(nonAtaSetupIxs);
 
-    // Ensure treasury ATA exists for fee mint (payer = HAVEN_FEEPAYER)
     const treasuryAtaCreateIx =
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER,
@@ -750,7 +759,6 @@ export async function POST(req: Request) {
         inputProgId,
       );
 
-    // Transfer fee from user -> treasury (user signs; fee payer pays SOL)
     const feeIx =
       feeUnits > 0
         ? createTransferCheckedInstruction(
@@ -770,9 +778,8 @@ export async function POST(req: Request) {
     const cleanupIxs = (swapData.cleanupInstructions ?? []).map(toIx);
     const filteredCleanupIxs = filterComputeBudgetIxs(cleanupIxs);
 
-    // Compute budget sizing
     const baseComputeUnits = swapData.computeUnitLimit || 200_000;
-    const additionalIxCount = sponsoredAtaIxs.length + 1 + (feeIx ? 1 : 0); // treasury ATA + fee ix
+    const additionalIxCount = sponsoredAtaIxs.length + 1 + (feeIx ? 1 : 0);
     const computeUnits = Math.min(
       baseComputeUnits + additionalIxCount * 30_000,
       1_400_000,
@@ -783,7 +790,6 @@ export async function POST(req: Request) {
       priorityFeeMicroLamports,
     );
 
-    // ✅ Final instruction order
     const ixs: TransactionInstruction[] = [
       ...computeBudgetIxs,
       ...sponsoredAtaIxs,
@@ -799,7 +805,7 @@ export async function POST(req: Request) {
 
     const tx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: HAVEN_FEEPAYER, // ✅ Haven pays SOL
+        payerKey: HAVEN_FEEPAYER,
         recentBlockhash: blockhash,
         instructions: ixs,
       }).compileToV0Message(altAccounts),
@@ -842,12 +848,10 @@ export async function POST(req: Request) {
       lastValidBlockHeight,
       traceId,
 
-      // ✅ keep existing UI fields
       expectedFeeUnits: feeUnits,
       expectedFeeBps: feeBps,
       expectedFeeRate: feeRate,
 
-      // ✅ AND include the names your hook expects (your hook currently reads feeUnits)
       feeUnits,
       feeBps,
       feeRate,
@@ -855,18 +859,15 @@ export async function POST(req: Request) {
       feeMint: inputMint.toBase58(),
       feeDecimals: inputDecimals,
 
-      // Priority fee info
       priorityFeeMicroLamports,
       priorityFeeLamports: cappedPriorityFeeLamports,
       computeUnits,
 
-      // Slippage info (handy for client + debugging)
       slippageBpsUsed: slip.slippageBps,
       dynamicSlippageMinBps: slip.dynamicMinBps,
       dynamicSlippageMaxBps: slip.dynamicMaxBps,
       isProblemPair: slip.isProblem,
 
-      // Swap sizing
       grossInUnits: amountUnits,
       netInUnits: netUnits,
       isMax,
@@ -874,13 +875,11 @@ export async function POST(req: Request) {
       outputMint: outputMint.toBase58(),
       buildTimeMs: buildTime,
 
-      // Audit info
       treasuryOwner: TREASURY_OWNER.toBase58(),
       treasuryFeeAta: treasuryInputAta.toBase58(),
       userInputAta: userInputAta.toBase58(),
       userOutputAta: userOutputAta.toBase58(),
 
-      // Helpful for debugging client hydration issues
       owner: userOwner.toBase58(),
     });
   } catch (e) {

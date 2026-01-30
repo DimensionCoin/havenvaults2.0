@@ -50,7 +50,7 @@ type EarnPosition = {
 };
 
 type UserEarningsResponse = {
-  address: string;
+  address: string; // (often the position token address)
   ownerAddress: string;
   totalDeposits: string;
   totalWithdraws: string;
@@ -137,35 +137,110 @@ function bigSumStrings(vals: Array<string | undefined>) {
   return total.toString();
 }
 
-/** Normalize /earn/earnings response (object OR array) into a single combined object. */
+/**
+ * Normalize /earn/earnings response into one combined object.
+ *
+ * IMPORTANT:
+ * - Sometimes API returns an array.
+ * - That array can contain duplicates / repeated totals.
+ * - We must filter to the positions we requested and de-dupe by `address`
+ *   before combining, otherwise totals can be wildly inflated.
+ */
 function normalizeEarningsPayload(
   owner: string,
   payload: unknown,
+  allowedPositions: string[],
 ): UserEarningsResponse | null {
   if (!payload) return null;
 
-  // Case A: array (what you are actually getting)
-  if (Array.isArray(payload)) {
-    const arr = payload as UserEarningsResponse[];
-    if (arr.length === 0) return null;
-    if (arr.length === 1) return arr[0] ?? null;
+  const allowed = new Set(
+    (allowedPositions || []).map((x) => String(x || "").trim()).filter(Boolean),
+  );
 
-    // Combine (sum) if multiple positions were returned
+  // Case A: array
+  if (Array.isArray(payload)) {
+    const arr = payload as Partial<UserEarningsResponse>[];
+
+    // Filter to only what we asked for (by `address`), IF address is present.
+    const filtered = arr.filter((x) => {
+      const addr = String(x?.address || "").trim();
+      if (!addr) {
+        if (allowed.size > 0) {
+          dbg("earnings item missing address; skipping due to allowlist", x);
+          return false;
+        }
+        return true; // allowed set empty → best-effort keep (will log + skip later if still empty)
+      }
+      return allowed.size === 0 ? true : allowed.has(addr);
+    });
+
+    if (filtered.length === 0) return null;
+
+    // De-dupe by address (this prevents double counting when API repeats rows)
+    const byAddress = new Map<string, UserEarningsResponse>();
+    for (const item of filtered) {
+      const addr = String(item?.address || "").trim();
+
+      if (!addr) {
+        dbg("earnings item missing address after filter; skipping", item);
+        continue;
+      }
+
+      const normalized: UserEarningsResponse = {
+        address: addr,
+        ownerAddress: String(item?.ownerAddress || owner),
+        totalDeposits: String(item?.totalDeposits || "0"),
+        totalWithdraws: String(item?.totalWithdraws || "0"),
+        totalBalance: String(item?.totalBalance || "0"),
+        totalAssets: String(item?.totalAssets || "0"),
+        earnings: String(item?.earnings || "0"),
+      };
+
+      // If the same address appears multiple times, KEEP THE LATEST ONE
+      // (do NOT sum duplicates)
+      byAddress.set(addr, normalized);
+    }
+
+    const uniq = Array.from(byAddress.values());
+    if (uniq.length === 1) return uniq[0];
+
+    // Combine ONLY across unique addresses (i.e., multiple different vaults)
     return {
       address: "multiple",
-      ownerAddress: arr[0]?.ownerAddress || owner,
-      totalDeposits: bigSumStrings(arr.map((x) => x?.totalDeposits)),
-      totalWithdraws: bigSumStrings(arr.map((x) => x?.totalWithdraws)),
-      totalBalance: bigSumStrings(arr.map((x) => x?.totalBalance)),
-      totalAssets: bigSumStrings(arr.map((x) => x?.totalAssets)),
-      earnings: bigSumStrings(arr.map((x) => x?.earnings)),
+      ownerAddress: uniq[0]?.ownerAddress || owner,
+      totalDeposits: bigSumStrings(uniq.map((x) => x.totalDeposits)),
+      totalWithdraws: bigSumStrings(uniq.map((x) => x.totalWithdraws)),
+      totalBalance: bigSumStrings(uniq.map((x) => x.totalBalance)),
+      totalAssets: bigSumStrings(uniq.map((x) => x.totalAssets)),
+      earnings: bigSumStrings(uniq.map((x) => x.earnings)),
     };
   }
 
   // Case B: object
   if (typeof payload === "object") {
     const obj = payload as Partial<UserEarningsResponse>;
-    if (typeof obj.earnings === "string") return obj as UserEarningsResponse;
+    if (typeof obj.earnings === "string") {
+      const addr = String(obj.address || "").trim();
+      if (allowed.size > 0) {
+        const key = addr || "unknown";
+        if (!allowed.has(key)) {
+          dbg("earnings object address not in allowlist; skipping", {
+            addr: key,
+            allowed: Array.from(allowed),
+          });
+          return null;
+        }
+      }
+      return {
+        address: String(obj.address || "unknown"),
+        ownerAddress: String(obj.ownerAddress || owner),
+        totalDeposits: String(obj.totalDeposits || "0"),
+        totalWithdraws: String(obj.totalWithdraws || "0"),
+        totalBalance: String(obj.totalBalance || "0"),
+        totalAssets: String(obj.totalAssets || "0"),
+        earnings: String(obj.earnings || "0"),
+      };
+    }
     return null;
   }
 
@@ -286,6 +361,10 @@ export async function GET() {
     const matching = positions.filter((p) => {
       const sym = String(p?.token?.symbol || "").trim();
       const assetAddr = String(p?.token?.assetAddress || "").trim();
+
+      // Prefer strict matching:
+      // - symbol is the jl token symbol
+      // - OR underlying asset address matches JupUSD mint
       return sym === TARGET_JL_SYMBOL || assetAddr === JUPUSD_MINT;
     });
 
@@ -307,12 +386,20 @@ export async function GET() {
     }
 
     // ✅ /earn/earnings expects jlToken mint(s) in `positions=`
-    const jlTokenAddresses = matching
+    const jlTokenAddressesRaw = matching
       .map((p) => String(p?.token?.address || "").trim())
       .filter(Boolean);
 
-    dbg("jlTokenAddresses (for positions=)", jlTokenAddresses.map(redactAddr));
-    debug.positionsParam = jlTokenAddresses.map(redactAddr);
+    // IMPORTANT: de-dupe (prevents double-counting)
+    const jlTokenAddresses = Array.from(new Set(jlTokenAddressesRaw));
+
+    dbg("jlTokenAddresses raw", jlTokenAddressesRaw.map(redactAddr));
+    dbg(
+      "jlTokenAddresses uniq (for positions=)",
+      jlTokenAddresses.map(redactAddr),
+    );
+    debug.positionsParamRaw = jlTokenAddressesRaw.map(redactAddr);
+    debug.positionsParamUniq = jlTokenAddresses.map(redactAddr);
 
     if (jlTokenAddresses.length === 0) {
       dbg("missing jlToken mint for matching position");
@@ -325,11 +412,10 @@ export async function GET() {
       });
     }
 
-    const underlyingDecimals = Number(
-      matching[0]?.token?.asset?.decimals ?? matching[0]?.token?.decimals ?? 6,
-    );
+    // Use underlying decimals for formatting (JupUSD should be 6)
+    const underlyingDecimals = Number(matching[0]?.token?.asset?.decimals ?? 6);
     const decimals = Number.isFinite(underlyingDecimals)
-      ? underlyingDecimals
+      ? Math.max(0, Math.min(18, underlyingDecimals))
       : 6;
     debug.decimals = decimals;
 
@@ -368,7 +454,12 @@ export async function GET() {
       earningsParsed = null;
     }
 
-    const combined = normalizeEarningsPayload(owner, earningsParsed);
+    // ✅ normalize safely (filter + dedupe by address; sum only unique)
+    const combined = normalizeEarningsPayload(
+      owner,
+      earningsParsed,
+      jlTokenAddresses,
+    );
 
     if (!combined?.earnings) {
       dbg("earnings payload missing expected fields", safeJson(earningsParsed));

@@ -6,49 +6,37 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import { getSessionFromCookies } from "@/lib/auth";
 
-/* ───────── Types ───────── */
+type AuthSession = { sub?: string; userId?: string } | null;
 
-/**
- * Minimal session shape we care about.
- * Matches what Privy + your auth layer provide.
- */
-type AuthSession = {
-  sub?: string;
-  userId?: string;
-} | null;
-
-type RateLimitServerOptions = {
-  /** Stable name for the API (e.g. "jup:build", "auth:onboard") */
-  api: string;
-
-  /**
-   * Convenience: calls allowed per second.
-   * If provided, it overrides limit/windowMs as: limit=perSecond, windowMs=1000.
-   *
-   * Example:
-   *   perSecond: 30  -> 30 req/sec
-   */
-  perSecond?: number;
-
-  /** Defaults to 5 (ignored if perSecond is set) */
-  limit?: number;
-
-  /** Defaults to 1000ms (ignored if perSecond is set) */
-  windowMs?: number;
-
-  /** If true, only authenticated users are allowed */
-  requireAuth?: boolean;
-
-  /** Optional extra scoping */
-  scope?: string;
-
-  /** Allow IP fallback if unauthenticated (default true unless requireAuth) */
-  allowIpFallback?: boolean;
+export type RateLimitTier = {
+  limit: number;
+  windowMs: number;
+  suffix: string;
 };
 
-/* ───────── Helpers ───────── */
+export type RateLimitServerOptions = {
+  api: string;
+  scope?: string;
+
+  requireAuth?: boolean;
+  allowIpFallback?: boolean;
+
+  tiers?: RateLimitTier[];
+
+  perSecond?: number;
+  limit?: number;
+  windowMs?: number;
+
+  failMode?: "closed" | "open";
+
+  /** ✅ NEW: global tiers across all users */
+  globalTiers?: RateLimitTier[];
+};
 
 function getClientIp(req: NextRequest): string {
+  const cf = req.headers.get("cf-connecting-ip");
+  if (cf) return cf.trim();
+
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0]?.trim() || "unknown";
 
@@ -99,24 +87,90 @@ async function buildRateLimitKey(
   return { key: null, kind: "none" };
 }
 
-/* ───────── Main Entry ───────── */
+function resolveTiers(opts: RateLimitServerOptions): RateLimitTier[] {
+  if (opts.tiers && opts.tiers.length > 0) return opts.tiers;
+
+  const perSecond = opts.perSecond;
+  const limit = perSecond ?? opts.limit ?? 5;
+  const windowMs = perSecond ? 1000 : (opts.windowMs ?? 1000);
+
+  return [{ limit, windowMs, suffix: "default" }];
+}
+
+function tooManyRequestsResponse(params: {
+  limit: number;
+  windowMs: number;
+  resetMs: number;
+  scopeLabel?: string;
+}): NextResponse {
+  const { limit, windowMs, resetMs, scopeLabel } = params;
+
+  const retryAfterSec = Math.max(1, Math.ceil((resetMs - Date.now()) / 1000));
+
+  const res = NextResponse.json(
+    {
+      error: "Too Many Requests",
+      limit,
+      windowMs,
+      retryAfterSec,
+      ...(scopeLabel ? { scope: scopeLabel } : {}),
+    },
+    { status: 429 },
+  );
+
+  res.headers.set("Retry-After", String(retryAfterSec));
+  res.headers.set("X-RateLimit-Limit", String(limit));
+  res.headers.set("X-RateLimit-Remaining", "0");
+  res.headers.set("X-RateLimit-Reset", String(Math.floor(resetMs / 1000)));
+  return res;
+}
+
+async function consumeTier(params: {
+  client: ConvexHttpClient;
+  rlKey: string;
+  tier: RateLimitTier;
+  failMode: "closed" | "open";
+}): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+  const { client, rlKey, tier, failMode } = params;
+
+  try {
+    const result = await client.mutation(api.rateLimit.consume, {
+      key: rlKey,
+      limit: tier.limit,
+      windowMs: tier.windowMs,
+    });
+
+    if (result.ok) return { ok: true };
+
+    return {
+      ok: false,
+      res: tooManyRequestsResponse({
+        limit: tier.limit,
+        windowMs: tier.windowMs,
+        resetMs: result.resetMs,
+      }),
+    };
+  } catch (err) {
+    if (failMode === "open") return { ok: true };
+
+    console.error("[rateLimitServer] Convex consume failed:", err);
+    return {
+      ok: false,
+      res: NextResponse.json(
+        { error: "Temporarily unavailable" },
+        { status: 503 },
+      ),
+    };
+  }
+}
 
 /**
- * Call at the TOP of any API route.
- *
- * Returns:
- *  - NextResponse (429 / 401) → immediately return it
- *  - null → request is allowed, continue handler
+ * ✅ Call at the TOP of any API route.
  */
 export async function rateLimitServer(
   req: NextRequest,
   opts: RateLimitServerOptions,
 ): Promise<NextResponse | null> {
-  // perSecond convenience overrides (limit/windowMs)
-  const perSecond = opts.perSecond;
-  const limit = perSecond ?? opts.limit ?? 5;
-  const windowMs = perSecond ? 1000 : (opts.windowMs ?? 1000);
-
   const { key, kind } = await buildRateLimitKey(req, opts);
 
   if (opts.requireAuth && kind !== "user") {
@@ -132,35 +186,31 @@ export async function rateLimitServer(
 
   const method = req.method || "UNKNOWN";
   const scope = opts.scope ? `:${opts.scope}` : "";
-  const rlKey = `${opts.api}${scope}:${method}:${key}`;
-
+  const failMode = opts.failMode ?? "closed";
   const client = getConvexClient();
-  const result = await client.mutation(api.rateLimit.consume, {
-    key: rlKey,
-    limit,
-    windowMs,
-  });
 
-  if (result.ok) return null;
+  // ✅ 1) GLOBAL TIERS (protect infra even if attackers have many accounts)
+  const globalTiers = opts.globalTiers ?? [];
+  for (const tier of globalTiers) {
+    const globalKey = `${opts.api}${scope}:${method}:global:${tier.suffix}`;
+    const r = await consumeTier({ client, rlKey: globalKey, tier, failMode });
+    if (!r.ok) {
+      // Add a hint so you can tell it was global in logs/UI if you want
+      r.res.headers.set("X-RateLimit-Scope", "global");
+      return r.res;
+    }
+  }
 
-  const retryAfterSec = Math.max(
-    1,
-    Math.ceil((result.resetMs - Date.now()) / 1000),
-  );
+  // ✅ 2) PER-USER / PER-IP TIERS
+  const tiers = resolveTiers(opts);
+  for (const tier of tiers) {
+    const rlKey = `${opts.api}${scope}:${method}:${key}:${tier.suffix}`;
+    const r = await consumeTier({ client, rlKey, tier, failMode });
+    if (!r.ok) {
+      r.res.headers.set("X-RateLimit-Scope", "user");
+      return r.res;
+    }
+  }
 
-  const res = NextResponse.json(
-    {
-      error: "Too Many Requests",
-      limit,
-      windowMs,
-      retryAfterSec,
-    },
-    { status: 429 },
-  );
-
-  res.headers.set("Retry-After", String(retryAfterSec));
-  res.headers.set("X-RateLimit-Limit", String(limit));
-  res.headers.set("X-RateLimit-Remaining", "0");
-  res.headers.set("X-RateLimit-Reset", String(result.resetMs));
-  return res;
+  return null;
 }

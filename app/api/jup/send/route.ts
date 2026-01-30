@@ -9,6 +9,7 @@ import {
   SendTransactionError,
   ParsedInstruction,
   ParsedTransactionWithMeta,
+  SystemProgram,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 import mongoose from "mongoose";
@@ -27,6 +28,7 @@ import {
   getUserWalletPubkey,
   assertUserSigned,
 } from "@/lib/getServerUser";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,31 +56,24 @@ const TREASURY_OWNER = new PublicKey(
   required("NEXT_PUBLIC_APP_TREASURY_OWNER"),
 );
 
-/* ───────── Broadcast/Confirm Tuning ─────────
-   Goals:
-   - fast response to client
-   - high landing rate
-   - minimize RPC + compute costs
-*/
+/**
+ * Hard cap on how many lamports Haven is allowed to fund in *a single tx*
+ * via SystemProgram createAccount/createAccountWithSeed.
+ * - ATA creation rent is tiny (~0.002 SOL).
+ * - This blocks draining attacks where a user asks Haven to fund a large createAccount.
+ */
+const HAVEN_MAX_LAMPORTS_FUND_PER_TX = Number(
+  process.env.HAVEN_MAX_LAMPORTS_FUND_PER_TX ?? "20000000", // 0.02 SOL default
+);
+
+/* ───────── Broadcast/Confirm Tuning ───────── */
 
 const SEND_CONFIG = {
-  // If you have a very reliable RPC, you can set this true to shave latency.
-  // I keep it false because you want "it lands" > micro speed.
   SKIP_PREFLIGHT: false,
-
-  // Keep retries modest to avoid long waits + duplicate tx spam
   MAX_RETRIES: 2,
-
-  // Confirm quickly but don't block too long
   CONFIRM_COMMITMENT: "confirmed" as const,
   CONFIRM_TIMEOUT_MS: 6_500,
-
-  // If confirm fails (timeout), we still return the signature but we’ll
-  // do a background landing check for telemetry if you add it later.
   RETURN_SIG_ON_TIMEOUT: true,
-
-  // If preflight fails with blockhash/expired, client should rebuild.
-  // We'll map these codes to retryable.
 };
 
 /* ───────── Token Lookup ───────── */
@@ -101,7 +96,6 @@ function getConnection(): Connection {
   if (!_conn) {
     _conn = new Connection(SOLANA_RPC, {
       commitment: "confirmed",
-      // Keep this a bit lower to avoid long stuck confirmations
       confirmTransactionInitialTimeout: 20_000,
       disableRetryOnRateLimit: false,
     });
@@ -123,13 +117,13 @@ function getPrivyClient(): PrivyClient {
 
 interface SendRequestBody {
   transaction?: string; // base64 VersionedTransaction, already signed by user
-  // Optional hint from build; server will parse actual fee from chain
   feeMint?: string;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: number;
 }
 
 type JsonErrorExtra = Record<string, unknown> | undefined;
 
-/** Privy signTransaction() return shapes we handle (no `any`). */
 type SignResp =
   | string
   | Uint8Array
@@ -143,7 +137,6 @@ type SignResp =
         | { serialize: () => Uint8Array };
     };
 
-/** Type guard for Privy wrapped response */
 function hasSignedTransaction(x: unknown): x is {
   signedTransaction:
     | string
@@ -164,7 +157,6 @@ type UserWithWalletLike = {
   embeddedWallet?: string | { address?: string | null } | null;
 };
 
-/** Narrow ParsedInstruction.parsed without `any`. */
 type TransferCheckedParsed = {
   type: "transferChecked";
   info: {
@@ -191,15 +183,10 @@ function toSignedBytes(resp: unknown): Uint8Array {
   if (typeof payload === "string") {
     return new Uint8Array(Buffer.from(payload, "base64"));
   }
-
-  if (payload instanceof Uint8Array) {
-    return payload;
-  }
-
+  if (payload instanceof Uint8Array) return payload;
   if (Array.isArray(payload) && payload.every((n) => typeof n === "number")) {
     return new Uint8Array(payload);
   }
-
   if (
     payload &&
     typeof payload === "object" &&
@@ -210,13 +197,16 @@ function toSignedBytes(resp: unknown): Uint8Array {
       (payload as { serialize: () => Uint8Array }).serialize(),
     );
   }
-
   throw new Error("Unexpected signTransaction return type");
 }
 
 function isBlockhashError(msg: string) {
   const m = msg.toLowerCase();
   return m.includes("blockhash") || m.includes("expired");
+}
+
+function isBlockhashNotFoundError(msg: string) {
+  return msg.toLowerCase().includes("blockhash not found");
 }
 
 function isSlippageError(msg: string) {
@@ -227,6 +217,200 @@ function isSlippageError(msg: string) {
 function isInsufficientError(msg: string) {
   const m = msg.toLowerCase();
   return m.includes("insufficient") || /\b0x1\b/.test(msg);
+}
+
+function isAlreadyProcessedError(msg: string) {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("already processed") ||
+    m.includes("alreadyconfirmed") ||
+    m.includes("already confirmed") ||
+    m.includes("duplicate")
+  );
+}
+
+/* ───────── SystemProgram guard (prevents draining Haven SOL) ─────────
+   We only allow Haven to pay *small* system lamports for safe account creation (e.g. ATA rent).
+   We reject:
+   - any SystemProgram.transfer from HAVEN_PUBKEY
+   - any createAccount/createAccountWithSeed where lamports is too large
+   We also require every instruction's programIdIndex to point to a STATIC key, so we can validate safely.
+*/
+
+function readU32LE(buf: Uint8Array, offset: number): number {
+  const b = Buffer.from(buf);
+  return b.readUInt32LE(offset);
+}
+
+function readU64LEBigint(buf: Uint8Array, offset: number): bigint {
+  const b = Buffer.from(buf);
+  const lo = BigInt(b.readUInt32LE(offset));
+  const hi = BigInt(b.readUInt32LE(offset + 4));
+  return (hi << BigInt(32)) + lo;
+}
+
+/**
+ * Returns total lamports Haven funds via SystemProgram create* in this tx.
+ * Throws on disallowed patterns.
+ */
+function validateHavenSpendGuards(tx: VersionedTransaction): {
+  fundedLamports: number;
+} {
+  const msg = tx.message;
+
+  const staticKeys = msg.staticAccountKeys;
+  const staticLen = staticKeys.length;
+
+  // Ensure we can resolve every programId deterministically (no program IDs in lookups).
+  // This is a strong safety invariant for sponsored txs.
+  const compiled = (msg as unknown as { compiledInstructions?: unknown })
+    .compiledInstructions as
+    | Array<{
+        programIdIndex: number;
+        accountKeyIndexes: number[];
+        data: Uint8Array;
+      }>
+    | undefined;
+
+  if (!compiled || !Array.isArray(compiled)) {
+    throw new Error("Unsupported transaction message format");
+  }
+
+  let fundedLamports = 0;
+
+  for (const ix of compiled) {
+    const pidIndex = ix.programIdIndex;
+
+    if (!Number.isFinite(pidIndex) || pidIndex < 0) {
+      throw new Error("Invalid instruction program id index");
+    }
+
+    // Must be static so we can validate it.
+    if (pidIndex >= staticLen) {
+      throw new Error("Unsafe transaction (program id in lookup table)");
+    }
+
+    const programId = staticKeys[pidIndex];
+
+    // Only guard SystemProgram. (Token drains would require authority signers; Haven signer is the payer.)
+    if (!programId.equals(SystemProgram.programId)) continue;
+
+    const data = ix.data;
+    if (!(data instanceof Uint8Array) || data.length < 4) {
+      throw new Error("Invalid SystemProgram instruction data");
+    }
+
+    const ixType = readU32LE(data, 0);
+
+    // SystemProgram instruction layouts:
+    // 0 = CreateAccount { lamports: u64, space: u64, programId: Pubkey }
+    // 2 = Transfer { lamports: u64 }
+    // 3 = CreateAccountWithSeed { base: Pubkey, seed: string, lamports: u64, space: u64, programId: Pubkey }
+    //
+    // We care about lamports + who is "from".
+    //
+    // Account index conventions (for Transfer/CreateAccount):
+    // - accounts[0] is "from"/payer
+    // - accounts[1] is "to"/new account
+    const acctIdxs = Array.isArray(ix.accountKeyIndexes)
+      ? ix.accountKeyIndexes
+      : [];
+
+    const fromIndex = acctIdxs[0];
+    if (typeof fromIndex !== "number" || fromIndex < 0) {
+      throw new Error("Invalid SystemProgram accounts");
+    }
+
+    const fromKey = fromIndex < staticLen ? staticKeys[fromIndex] : undefined;
+
+    // If we can't resolve fromKey, treat as unsafe.
+    if (!fromKey) {
+      throw new Error("Unsafe transaction (system fromKey unresolved)");
+    }
+
+    // ---- Transfer: hard block if from=Haven ----
+    if (ixType === 2) {
+      // transfer lamports is at offset 4
+      if (data.length < 12) throw new Error("Invalid transfer data");
+      const lamports = readU64LEBigint(data, 4);
+
+      if (fromKey.equals(HAVEN_PUBKEY)) {
+        throw new Error(
+          `Unsafe transaction (SystemProgram.transfer from fee payer: ${lamports.toString()} lamports)`,
+        );
+      }
+
+      continue;
+    }
+
+    // ---- CreateAccount: cap lamports if from=Haven ----
+    if (ixType === 0) {
+      if (data.length < 12) throw new Error("Invalid createAccount data");
+      const lamports = readU64LEBigint(data, 4);
+
+      if (fromKey.equals(HAVEN_PUBKEY)) {
+        const n = Number(lamports);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error("Invalid createAccount lamports");
+        }
+        fundedLamports += n;
+
+        if (n > HAVEN_MAX_LAMPORTS_FUND_PER_TX) {
+          throw new Error(
+            `Unsafe transaction (createAccount funds too much: ${n} lamports)`,
+          );
+        }
+      }
+
+      continue;
+    }
+
+    // ---- CreateAccountWithSeed: cap lamports if from=Haven ----
+    if (ixType === 3) {
+      // The lamports offset depends on seed length; decode minimally:
+      // data = u32 ixType + basePubkey(32) + seedLen(u32) + seedBytes + lamports(u64) + space(u64) + programId(32)
+      if (data.length < 4 + 32 + 4 + 8) {
+        throw new Error("Invalid createAccountWithSeed data");
+      }
+
+      const seedLen = readU32LE(data, 4 + 32);
+      const lamportsOffset = 4 + 32 + 4 + seedLen;
+
+      if (data.length < lamportsOffset + 8) {
+        throw new Error("Invalid createAccountWithSeed lamports");
+      }
+
+      const lamports = readU64LEBigint(data, lamportsOffset);
+
+      if (fromKey.equals(HAVEN_PUBKEY)) {
+        const n = Number(lamports);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error("Invalid createAccountWithSeed lamports");
+        }
+        fundedLamports += n;
+
+        if (n > HAVEN_MAX_LAMPORTS_FUND_PER_TX) {
+          throw new Error(
+            `Unsafe transaction (createAccountWithSeed funds too much: ${n} lamports)`,
+          );
+        }
+      }
+
+      continue;
+    }
+
+    // Other SystemProgram instructions: allow by default,
+    // BUT if you ever see abuse here, flip this to a strict allowlist.
+  }
+
+  // Cap total funded lamports across multiple create instructions too.
+  if (fundedLamports > HAVEN_MAX_LAMPORTS_FUND_PER_TX) {
+    throw new Error(
+      `Unsafe transaction (total funded lamports too much: ${fundedLamports})`,
+    );
+  }
+
+  return { fundedLamports };
 }
 
 /* ───────── fees helpers (INLINED, no BigInt literals) ───────── */
@@ -247,12 +431,6 @@ function normalizeSymbol(symbol?: string | null): string | undefined {
   return s ? s : undefined;
 }
 
-/**
- * Exact base units → UI decimal string.
- * No bigint literals used (0n, 10n), only BigInt("...").
- *
- * NOTE: Uses BigInt exponentiation (requires ES2020 target).
- */
 function baseUnitsToUiString(baseUnits: string, decimals: number): string {
   const d = clampDecimals(decimals);
 
@@ -287,7 +465,7 @@ function addBase(a: string, b: string): string {
 
 type FeeToken = {
   mint: string;
-  amountBase: string; // exact integer string
+  amountBase: string;
   decimals: number;
   symbol?: string;
 };
@@ -390,19 +568,23 @@ async function recordUserFeesExact(params: {
         ? (curRaw as Record<string, unknown>)
         : {};
 
-    const curBase = typeof cur.amountBase === "string" ? cur.amountBase : "0";
+    const curBase =
+      typeof (cur as { amountBase?: unknown }).amountBase === "string"
+        ? ((cur as { amountBase?: string }).amountBase as string)
+        : "0";
+
     const nextBase = addBase(curBase, t.amountBase);
 
     $set[`feesPaidTotals.${t.mint}.amountBase`] = nextBase;
 
     $set[`feesPaidTotals.${t.mint}.decimals`] =
-      typeof cur.decimals === "number" &&
-      Number.isFinite(cur.decimals) &&
-      cur.decimals > 0
-        ? cur.decimals
+      typeof (cur as { decimals?: unknown }).decimals === "number" &&
+      Number.isFinite((cur as { decimals?: number }).decimals) &&
+      (cur as { decimals?: number }).decimals! > 0
+        ? (cur as { decimals?: number }).decimals
         : t.decimals;
 
-    if (t.symbol && !cur.symbol) {
+    if (t.symbol && !(cur as { symbol?: unknown }).symbol) {
       $set[`feesPaidTotals.${t.mint}.symbol`] = t.symbol;
     }
   }
@@ -459,11 +641,6 @@ async function fetchParsedTxWithRetry(
   return null;
 }
 
-/**
- * Derive the treasury ATA for a mint.
- * We try Tokenkeg first; if the tx’s transferChecked uses Token-2022,
- * we’ll detect programId and derive with TOKEN_2022_PROGRAM_ID too.
- */
 async function deriveTreasuryAtaForMint(params: {
   mint: PublicKey;
   tokenProgramId: PublicKey;
@@ -479,7 +656,7 @@ async function deriveTreasuryAtaForMint(params: {
 /* ───────── Fee recorder (fire-and-forget) ───────── */
 
 async function recordSwapFeeFromChainAsync(params: {
-  userId: string; // can be Mongo _id OR privyId; we resolve both
+  userId: string;
   signature: string;
   feeMintHint?: string;
 }): Promise<void> {
@@ -603,7 +780,6 @@ async function confirmFast(params: {
   const { conn, signature, lastValidBlockHeight, blockhash, timeoutMs } =
     params;
 
-  // Prefer confirmTransaction with blockhash context if provided (best)
   const p = (async () => {
     if (blockhash && typeof lastValidBlockHeight === "number") {
       return conn.confirmTransaction(
@@ -611,7 +787,6 @@ async function confirmFast(params: {
         SEND_CONFIG.CONFIRM_COMMITMENT,
       );
     }
-    // Fallback: signature-only confirm
     return conn.confirmTransaction(signature, SEND_CONFIG.CONFIRM_COMMITMENT);
   })();
 
@@ -622,8 +797,6 @@ async function confirmFast(params: {
   const res = await Promise.race([p, t]);
   if (res === "timeout") return { ok: false as const, timeout: true as const };
 
-  // res is RpcResponseAndContext<SignatureResult>
-  // @solana/web3.js types are a little loose here; handle defensively.
   const value = (res as unknown as { value?: { err?: unknown } }).value;
   const err = value?.err;
   if (err) return { ok: false as const, timeout: false as const, err };
@@ -644,7 +817,6 @@ export async function POST(req: NextRequest) {
       const user = await requireServerUser();
       userPk = getUserWalletPubkey(user as UserWithWalletLike);
 
-      // Prefer Mongo _id if present for fee events; fallback to privyId.
       const u = user as unknown as { _id?: unknown; privyId?: unknown };
       userIdForFeeEvents =
         typeof u?._id === "string"
@@ -664,14 +836,30 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ✅ Rate limit EARLY (after auth, before any signing/broadcast)
+    // Money-moving endpoint: fail closed.
+    const blocked = await rateLimitServer(req, {
+      api: "jup:send",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+
+      globalTiers: [
+        { limit: 30, windowMs: 2000, suffix: "g_burst" },
+        { limit: 300, windowMs: 60_000, suffix: "g_minute" },
+        { limit: 2000, windowMs: 60 * 60 * 1000, suffix: "g_hour" },
+      ],
+
+      tiers: [
+        { limit: 2, windowMs: 2000, suffix: "burst" }, // double-click protection
+        { limit: 6, windowMs: 60_000, suffix: "minute" },
+        { limit: 30, windowMs: 60 * 60 * 1000, suffix: "hour" },
+      ],
+    });
+    if (blocked) return blocked;
+
     // ─────────── Parse Body ───────────
-    const body = (await req.json().catch(() => null)) as
-      | (SendRequestBody & {
-          // optional context from build (lets us confirm cheaply/accurately)
-          recentBlockhash?: string;
-          lastValidBlockHeight?: number;
-        })
-      | null;
+    const body = (await req.json().catch(() => null)) as SendRequestBody | null;
 
     if (!body?.transaction || typeof body.transaction !== "string") {
       return jsonError(400, "Missing 'transaction' in body", {
@@ -712,6 +900,8 @@ export async function POST(req: NextRequest) {
     }
 
     // ─────────── Validate Transaction (server invariants) ───────────
+
+    // Fee payer must be Haven
     const feePayer = userSignedTx.message.staticAccountKeys[0];
     if (!feePayer.equals(HAVEN_PUBKEY)) {
       return jsonError(400, "Invalid fee payer", {
@@ -729,7 +919,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ✅ Ensure the logged-in user's wallet is a required signer AND signature exists
+    // User signature must be present
     try {
       assertUserSigned(userSignedTx, userPk);
     } catch (e) {
@@ -743,6 +933,19 @@ export async function POST(req: NextRequest) {
         userMessage:
           "Your wallet isn’t ready to sign yet. Please try again in a moment.",
         tip: "If it keeps happening, refresh the app or log out and back in.",
+      });
+    }
+
+    // ✅ CRITICAL: prevent users from getting Haven to sign SOL-draining txs
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, "Unsafe transaction", {
+        code: "UNSAFE_TX",
+        userMessage:
+          "This swap request is invalid. Please refresh and try again.",
+        details: msg,
       });
     }
 
@@ -798,6 +1001,26 @@ export async function POST(req: NextRequest) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[JUP/SEND] Broadcast failed:", msg, logs.slice(0, 5));
 
+      if (isAlreadyProcessedError(msg)) {
+        // Most RPCs don't give us the signature here, but returning a retryable error is worse UX.
+        // Client should re-fetch status (or user can see history).
+        return jsonError(400, "Already processed", {
+          code: "ALREADY_PROCESSED",
+          userMessage: "This swap was already submitted. Check your activity.",
+          logs: logs.slice(0, 10),
+          retryable: false,
+        });
+      }
+
+      if (isBlockhashNotFoundError(msg) || isBlockhashError(msg)) {
+        return jsonError(400, "Transaction expired", {
+          code: "BLOCKHASH_EXPIRED",
+          userMessage: "This swap expired. Please try again.",
+          logs: logs.slice(0, 10),
+          retryable: true,
+        });
+      }
+
       if (isSlippageError(msg)) {
         return jsonError(400, "Slippage exceeded", {
           code: "SLIPPAGE_EXCEEDED",
@@ -817,15 +1040,6 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      if (isBlockhashError(msg)) {
-        return jsonError(400, "Transaction expired", {
-          code: "BLOCKHASH_EXPIRED",
-          userMessage: "This swap expired. Please try again.",
-          logs: logs.slice(0, 10),
-          retryable: true,
-        });
-      }
-
       return jsonError(400, "Broadcast failed", {
         code: "BROADCAST_FAILED",
         userMessage: "Couldn't send this swap. Please try again.",
@@ -835,10 +1049,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ─────────── Confirm quickly (optional but boosts UX) ───────────
-    // This does NOT increase on-chain fees. It’s just an RPC call.
-    // We keep it short so we don’t block the UI. If it times out,
-    // we still return the signature.
+    // ─────────── Confirm quickly ───────────
     const confirmRes = await confirmFast({
       conn,
       signature,
@@ -861,8 +1072,6 @@ export async function POST(req: NextRequest) {
     // ─────────── Success ───────────
     const sendTime = Date.now() - startTime;
 
-    // If confirm timed out, we still return success + signature
-    // so the UI can show "Submitted" and poll if you want.
     if (
       !confirmRes.ok &&
       confirmRes.timeout &&
@@ -880,7 +1089,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (!confirmRes.ok && !confirmRes.timeout) {
-      // On-chain error after send (rare but possible). Give the user a useful message.
       console.warn(
         "[JUP/SEND] confirm returned err:",
         signature.slice(0, 8),

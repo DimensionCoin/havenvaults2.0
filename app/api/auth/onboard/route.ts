@@ -67,20 +67,32 @@ function cleanCountry(v: unknown): string | undefined {
 
 export async function POST(req: NextRequest) {
   try {
-    // ✅ Rate limit BEFORE any expensive work
-    const blocked = await rateLimitServer(req, {
-      api: "auth:onboard",
-      perSecond: 2,
-      requireAuth: true,
-    });
-    if (blocked) return blocked;
-
-    // ✅ Auth check early
+    // ✅ Auth check early (also avoids burning Convex on totally unauthenticated spam)
     const session = await getSessionFromCookies();
     if (!session?.sub) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const privyId = session.sub;
+
+    /**
+     * ✅ Rate limit early (before DB)
+     * Using tiers (burst + sustained) is stronger than perSecond alone.
+     *
+     * Onboarding should be STRICT:
+     * - prevents brute force / spam
+     * - doesn't affect normal users (they onboard once)
+     */
+    const blocked = await rateLimitServer(req, {
+      api: "auth:onboard",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 3, windowMs: 2000, suffix: "burst" }, // 3 requests per 2s
+        { limit: 10, windowMs: 60000, suffix: "minute" }, // 10 per minute
+      ],
+    });
+    if (blocked) return blocked;
 
     // ✅ Parse body safely
     const body = (await req.json().catch(() => ({}))) as Body;
@@ -116,7 +128,6 @@ export async function POST(req: NextRequest) {
     }
 
     // ───────── Optional validation ─────────
-    // If optional fields were PROVIDED but invalid, reject clearly.
     if (body.country !== undefined && !country) {
       return NextResponse.json(
         { error: "Invalid country code." },
@@ -167,18 +178,20 @@ export async function POST(req: NextRequest) {
       { new: true },
     );
 
-    // If null, either user doesn't exist OR already onboarded
     if (!user) {
       const existing = await User.findOne({ privyId })
         .select("_id isOnboarded")
         .lean();
+
       if (!existing) {
         return NextResponse.json(
           { error: "User not found for this session." },
           { status: 404 },
         );
       }
-      // ✅ Idempotent: already onboarded
+
+      // Idempotent-ish behavior:
+      // You can keep 409, or return 200 with current user if you prefer.
       return NextResponse.json(
         { error: "User already onboarded." },
         { status: 409 },
