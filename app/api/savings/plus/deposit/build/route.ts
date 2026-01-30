@@ -1,5 +1,5 @@
 // app/api/savings/plus/deposit/build/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
@@ -16,6 +16,9 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
 } from "@solana/spl-token";
 import { Buffer } from "buffer";
+
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,6 +81,16 @@ interface AccountMetaJson {
   writable?: boolean;
   is_writable?: boolean;
 }
+
+/**
+ * Minimal structural type for getUserWalletPubkey().
+ * Keep in sync with lib/getServerUser.ts
+ */
+type UserWithWalletLike = {
+  walletAddress?: string | null;
+  depositWallet?: string | { address?: string | null } | null;
+  embeddedWallet?: string | { address?: string | null } | null;
+};
 
 /* ───────── ENV ───────── */
 
@@ -510,11 +523,8 @@ async function fetchQuoteWithFallbacks(opts: {
     onlyDirect: boolean;
     restrict: boolean;
   }> = [
-    // smallest / cleanest tx first
     { maxAccounts: 8, onlyDirect: true, restrict: true },
-    // allow multi-hop (often fixes "no route")
     { maxAccounts: 20, onlyDirect: false, restrict: true },
-    // last resort: more accounts + less restrictive intermediates
     { maxAccounts: 40, onlyDirect: false, restrict: false },
   ];
 
@@ -539,14 +549,10 @@ async function fetchQuoteWithFallbacks(opts: {
       return { quote, urlUsed: url };
     }
 
-    // capture useful error text (this is what you were missing)
     lastBody = await res.text().catch(() => "");
     console.warn(
       `[PLUS/DEPOSIT/BUILD] ${traceId} quote failed (${res.status}) with maxAccounts=${a.maxAccounts}, onlyDirect=${a.onlyDirect}, restrict=${a.restrict}. body=${lastBody.slice(0, 240)}`,
     );
-
-    // For 4xx, try next attempt immediately.
-    continue;
   }
 
   throw new Error(
@@ -556,12 +562,50 @@ async function fetchQuoteWithFallbacks(opts: {
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
 
   try {
+    // ─────────── Auth (cookie session) ───────────
+    let authedUserPk: PublicKey;
+    try {
+      const user = (await requireServerUser()) as unknown as UserWithWalletLike;
+      authedUserPk = getUserWalletPubkey(user);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unauthorized";
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: msg,
+        userMessage: "Please log in again.",
+        tip: "Refresh the app and try again.",
+        stage,
+        traceId,
+      });
+    }
+
+    // ─────────── Rate limit (AFTER auth, BEFORE heavy work) ───────────
+    const blocked = await rateLimitServer(req, {
+      api: "plus:deposit:build",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      // double-click + normal usage + abuse cap
+      tiers: [
+        { limit: 2, windowMs: 2000, suffix: "burst" },
+        { limit: 8, windowMs: 60_000, suffix: "minute" },
+        { limit: 60, windowMs: 60 * 60_000, suffix: "hour" },
+      ],
+      // protect infra even if attacker rotates accounts
+      globalTiers: [
+        { limit: 50, windowMs: 2000, suffix: "burst" },
+        { limit: 400, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
+    // ─────────── Parse Body ───────────
     stage = "parseBody";
     const body = (await req.json().catch(() => null)) as RequestBody | null;
 
@@ -581,7 +625,40 @@ export async function POST(req: Request) {
       });
     }
 
-    const userOwner = new PublicKey(fromOwnerBase58);
+    // ─────────── Bind request wallet to authenticated user ───────────
+    stage = "authWalletCheck";
+    let userOwner: PublicKey;
+    try {
+      userOwner = new PublicKey(fromOwnerBase58);
+    } catch {
+      return jsonError(400, {
+        code: "INVALID_WALLET",
+        error: "Invalid fromOwnerBase58",
+        userMessage: "Something went wrong. Please try again.",
+        tip: "Refresh the app and try again.",
+        stage,
+        traceId,
+      });
+    }
+
+    if (!userOwner.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "fromOwnerBase58 does not match authenticated user wallet",
+        userMessage: "This request doesn't match your account.",
+        tip: "Log out and back in, then try again.",
+        stage,
+        traceId,
+        debug: IS_PROD
+          ? undefined
+          : {
+              authed: authedUserPk.toBase58(),
+              provided: userOwner.toBase58(),
+            },
+      });
+    }
+
+    // ─────────── Continue original logic ───────────
     const conn = getConnection();
 
     stage = "tokenInfo";
@@ -649,7 +726,7 @@ export async function POST(req: Request) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // STEP 1: Quote USDC → JupUSD (WITH FALLBACKS + REAL ERROR BODY)
+    // STEP 1: Quote USDC → JupUSD
     // ─────────────────────────────────────────────────────────────
     stage = "quote";
     const [blockhashData, quotePack] = await Promise.all([
@@ -685,16 +762,6 @@ export async function POST(req: Request) {
       });
     }
 
-    console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} quote ok via ${quotePack.urlUsed}`,
-    );
-    console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} quote: in=${amountUnits.toString()} USDC out=${outAmount} JupUSD minOut=${minOut}`,
-    );
-
-    // IMPORTANT RELIABILITY FIX:
-    // Use MIN OUT (otherAmountThreshold) for vault deposit amount.
-    // If swap succeeds, user will have >= minOut. If we use outAmount, deposit can fail.
     const jupUsdDepositAmount = minOut;
 
     // ─────────────────────────────────────────────────────────────
@@ -754,7 +821,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         asset: JUPUSD_MINT.toBase58(),
         signer: userOwner.toBase58(),
-        amount: jupUsdDepositAmount, // <-- MIN OUT, not outAmount
+        amount: jupUsdDepositAmount,
       }),
     });
 
@@ -835,17 +902,12 @@ export async function POST(req: Request) {
 
     const ixs: TransactionInstruction[] = [];
 
-    // Better landing odds: give the tx enough CU + a modest priority fee.
-    // (Keep it conservative so it’s cheap for Haven.)
     ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 }));
     ixs.push(
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 20_000 }),
     );
 
-    // Sponsored ATAs first (Haven pays rent)
     ixs.push(...sponsoredAtaIxs);
-
-    // Swap then Earn deposit
     ixs.push(...otherIxs);
 
     // ─────────────────────────────────────────────────────────────
@@ -894,7 +956,7 @@ export async function POST(req: Request) {
 
       usdcInUnits: amountUnits.toString(),
       jupUsdQuotedOutUnits: outAmount,
-      jupUsdDepositUnits: jupUsdDepositAmount, // <-- minOut used
+      jupUsdDepositUnits: jupUsdDepositAmount,
       slippageBps,
 
       payer: HAVEN_FEEPAYER.toBase58(),

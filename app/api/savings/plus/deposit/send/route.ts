@@ -10,7 +10,12 @@ import {
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 
-import { getSessionFromCookies } from "@/lib/auth";
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import {
+  requireServerUser,
+  getUserWalletPubkey,
+  assertUserSigned,
+} from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +37,8 @@ const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 const HAVEN_PUBKEY = new PublicKey(
   required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS"),
 );
+
+const IS_PROD = process.env.NODE_ENV === "production";
 
 /* ───────── Singletons ───────── */
 
@@ -69,9 +76,18 @@ function jsonError(
     logs?: string[];
     traceId?: string;
     signature?: string;
+    debug?: Record<string, unknown>;
   },
 ) {
-  return NextResponse.json(payload, { status });
+  if (!IS_PROD && payload.debug) {
+    // eslint-disable-next-line no-console
+    console.error("[/api/savings/plus/deposit/send]", status, payload.code, {
+      error: payload.error,
+      debug: payload.debug,
+    });
+  }
+  const responsePayload = IS_PROD ? { ...payload, debug: undefined } : payload;
+  return NextResponse.json(responsePayload, { status });
 }
 
 /* ───────── Privy signing helpers (NO any) ───────── */
@@ -141,10 +157,6 @@ function isLikelySlippageError(msg: string) {
   );
 }
 
-function hasNonZeroSig(sig: Uint8Array) {
-  return sig.some((b) => b !== 0);
-}
-
 /* ───────── Route ───────── */
 
 export async function POST(req: NextRequest) {
@@ -152,18 +164,40 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
-    /* ───── Auth ───── */
-
-    const session = await getSessionFromCookies();
-    if (!session?.userId) {
+    // ─────────── Auth (cookie session -> user -> wallet pubkey) ───────────
+    let authedUserPk: PublicKey;
+    try {
+      const user = await requireServerUser();
+      authedUserPk = getUserWalletPubkey(user);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unauthorized";
       return jsonError(401, {
         code: "UNAUTHORIZED",
-        error: "Unauthorized",
+        error: msg,
         userMessage: "Please sign in again.",
         traceId,
       });
     }
 
+    // ─────────── Rate limit (STRICTER than build) ───────────
+    const blocked = await rateLimitServer(req, {
+      api: "plus:deposit:send",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 2, windowMs: 10_000, suffix: "burst" },
+        { limit: 6, windowMs: 60_000, suffix: "minute" },
+        { limit: 30, windowMs: 60 * 60_000, suffix: "hour" },
+      ],
+      globalTiers: [
+        { limit: 25, windowMs: 10_000, suffix: "burst" },
+        { limit: 180, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
+    // ─────────── Parse Body ───────────
     const body = (await req.json().catch(() => null)) as {
       transaction?: string;
       expectedUserBase58?: string;
@@ -180,8 +214,49 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ───── Deserialize ───── */
+    // Require expectedUserBase58 and bind it to session user wallet
+    const expectedUserBase58 =
+      typeof body.expectedUserBase58 === "string"
+        ? body.expectedUserBase58.trim()
+        : "";
 
+    if (!expectedUserBase58) {
+      return jsonError(400, {
+        code: "MISSING_EXPECTED_USER",
+        error: "Missing expectedUserBase58",
+        userMessage: "Please approve the deposit again.",
+        traceId,
+      });
+    }
+
+    let expectedPk: PublicKey;
+    try {
+      expectedPk = new PublicKey(expectedUserBase58);
+    } catch {
+      return jsonError(400, {
+        code: "BAD_EXPECTED_USER",
+        error: "Invalid expectedUserBase58",
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+      });
+    }
+
+    if (!expectedPk.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "expectedUserBase58 does not match authenticated user wallet",
+        userMessage: "This request doesn't match your account.",
+        traceId,
+        debug: IS_PROD
+          ? undefined
+          : {
+              authed: authedUserPk.toBase58(),
+              provided: expectedPk.toBase58(),
+            },
+      });
+    }
+
+    // ─────────── Deserialize ───────────
     const raw = Buffer.from(body.transaction, "base64");
     if (!raw.length) {
       return jsonError(400, {
@@ -204,8 +279,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ───── Validation ───── */
-
+    // ─────────── Validation ───────────
     const msg = userSignedTx.message;
 
     // Fee payer check
@@ -230,11 +304,22 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Required signer set (v0): first numRequiredSignatures keys are signers
+    // Require the authenticated user to be a required signer AND have signed
+    try {
+      assertUserSigned(userSignedTx, authedUserPk);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Missing user signature";
+      return jsonError(400, {
+        code: "MISSING_USER_SIGNATURE",
+        error: m,
+        userMessage: "Please approve the transaction in your wallet.",
+        traceId,
+      });
+    }
+
+    // Haven MUST be signer 0
     const numSigners = msg.header.numRequiredSignatures;
     const signerKeys = msg.staticAccountKeys.slice(0, numSigners);
-
-    // Haven MUST be a required signer (payer)
     if (!signerKeys[0]?.equals(HAVEN_PUBKEY)) {
       return jsonError(400, {
         code: "MISSING_HAVEN_SIGNER",
@@ -244,66 +329,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Optional (recommended): verify expected user signer is present + signed
-    const expectedUserBase58 =
-      typeof body.expectedUserBase58 === "string"
-        ? body.expectedUserBase58
-        : "";
-    if (expectedUserBase58) {
-      let expectedPk: PublicKey;
-      try {
-        expectedPk = new PublicKey(expectedUserBase58);
-      } catch {
-        return jsonError(400, {
-          code: "BAD_EXPECTED_USER",
-          error: "Invalid expectedUserBase58",
-          userMessage: "Security check failed. Please try again.",
-          traceId,
-        });
-      }
-
-      const signerIndex = signerKeys.findIndex((k) => k.equals(expectedPk));
-      if (signerIndex === -1) {
-        return jsonError(400, {
-          code: "MISSING_USER_SIGNER",
-          error: "Expected user is not a required signer",
-          userMessage: "Please approve the deposit again.",
-          traceId,
-        });
-      }
-
-      const sig = userSignedTx.signatures[signerIndex];
-      if (!sig || !hasNonZeroSig(sig)) {
-        return jsonError(400, {
-          code: "MISSING_USER_SIGNATURE",
-          error: "Transaction is not signed by the user",
-          userMessage: "Please approve the transaction in your wallet.",
-          traceId,
-        });
-      }
-    } else {
-      // Fallback: at least one non-zero signature (keeps compat)
-      const anyUserSig = userSignedTx.signatures.some((sig) =>
-        hasNonZeroSig(sig),
-      );
-      if (!anyUserSig) {
-        return jsonError(400, {
-          code: "MISSING_USER_SIGNATURE",
-          error: "Transaction is not signed by the user",
-          userMessage: "Please approve the transaction in your wallet.",
-          traceId,
-        });
-      }
-    }
-
     const conn = getConnection();
     const privy = getPrivyClient();
 
-    /* ───── Haven co-sign ───── */
-
+    // ─────────── Haven co-sign ───────────
     let coSignedBytes: Uint8Array;
     try {
-      const resp = await privy.walletApi.solana.signTransaction({
+      const resp: SignResp = await privy.walletApi.solana.signTransaction({
         walletId: HAVEN_WALLET_ID,
         transaction: userSignedTx,
       });
@@ -320,16 +352,26 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ───── Simulate (sigVerify TRUE for safety) ───── */
-
+    // ─────────── Simulate (sigVerify TRUE for safety) ───────────
     const coSignedTx = VersionedTransaction.deserialize(coSignedBytes);
 
-    const sim = await conn
-      .simulateTransaction(coSignedTx, {
+    let sim;
+    try {
+      sim = await conn.simulateTransaction(coSignedTx, {
         commitment: "confirmed",
-        sigVerify: true, // ✅ catches signature mismatch / missing signer early
-      })
-      .catch(() => null);
+        sigVerify: true,
+      });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.error("[PLUS/DEPOSIT/SEND] Simulation threw", m);
+      return jsonError(400, {
+        code: "SIMULATION_FAILED",
+        error: "Simulation threw",
+        userMessage: "Couldn't simulate this transaction. Please try again.",
+        details: m,
+        traceId,
+      });
+    }
 
     if (sim?.value?.err) {
       const logs = sim.value.logs ?? [];
@@ -382,8 +424,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ───── Broadcast ───── */
-
+    // ─────────── Broadcast ───────────
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
@@ -446,8 +487,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    /* ───── Confirm on server (best landing rate) ───── */
-
+    // ─────────── Confirm on server ───────────
     const providedBh =
       typeof body.recentBlockhash === "string" ? body.recentBlockhash : null;
     const providedLvb =
@@ -476,7 +516,6 @@ export async function POST(req: NextRequest) {
           });
         }
       } else {
-        // fallback confirmation (still useful)
         const conf = await conn.confirmTransaction(signature, "confirmed");
         if (conf.value.err) {
           return jsonError(400, {
@@ -491,7 +530,6 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
-      // Don’t mark it as failed if broadcast succeeded — return signature for UI polling.
       console.warn("[PLUS/DEPOSIT/SEND] confirm warning:", m);
       return NextResponse.json({
         signature,
