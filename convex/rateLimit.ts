@@ -103,7 +103,13 @@ export const cleanupExpired = internalMutation({
   },
   handler: async (ctx, args) => {
     const nowMs = args.nowMs ?? Date.now();
-    const maxDeletes = Math.max(1, Math.min(50_000, args.maxDeletes ?? 500));
+    // Keep per-mutation work bounded to avoid Convex timeouts.
+    const hardCap =
+      Number(process.env.RATE_LIMIT_MAX_DELETES ?? "5000") || 5000;
+    const maxDeletes = Math.max(
+      1,
+      Math.min(hardCap, args.maxDeletes ?? 500),
+    );
 
     let deleted = 0;
 
