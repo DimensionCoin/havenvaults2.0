@@ -14,9 +14,8 @@ const SOLANA_RPC =
  * - jlJupUSD share token mint (shows up when user deposits into Earn)
  * - JupUSD underlying mint (treat like USD; don’t show as a wallet “asset”)
  *
- * IMPORTANT:
- * We still MEASURE jlJupUSD for Plus fallback (returned separately),
- * but we keep it out of the wallet "tokens" list.
+ * IMPORTANT: We only hide them in *wallet balance list*.
+ * Your Plus/Earn APIs can still use these mints for position/earnings logic.
  */
 const EXCLUDED_MINTS = new Set(
   [
@@ -24,9 +23,6 @@ const EXCLUDED_MINTS = new Set(
     "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD", // JupUSD (underlying)
   ].map((m) => m.toLowerCase()),
 );
-
-// jlJupUSD mint (share token)
-const JLJUPUSD_MINT = "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk";
 
 // REAL mainnet USDC mint
 const REAL_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -105,13 +101,6 @@ type RawTokenAccount = {
   };
 };
 
-/**
- * ✅ Original behavior for "positions" remains unchanged:
- * - Still returns all tokens except excluded mints.
- *
- * ✅ New behavior:
- * - Also returns excluded balances separately (so we can read jlJupUSD)
- */
 async function getSplTokenPositions(owner: string) {
   const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
   const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
@@ -161,12 +150,6 @@ async function getSplTokenPositions(owner: string) {
     { mint: string; uiAmount: number; decimals: number }
   >();
 
-  // NEW: track excluded mints separately (jlJupUSD, JupUSD)
-  const excludedByMint = new Map<
-    string,
-    { mint: string; uiAmount: number; decimals: number }
-  >();
-
   for (const acc of all) {
     try {
       const info = acc.account.data.parsed.info;
@@ -181,22 +164,8 @@ async function getSplTokenPositions(owner: string) {
 
       if (!mint || !Number.isFinite(ui) || ui <= 0) continue;
 
-      const mintLower = mint.toLowerCase();
-
-      // ✅ Excluded mints are NOT added to main positions,
-      // but we still measure them for fallback use.
-      if (EXCLUDED_MINTS.has(mintLower)) {
-        const prev = excludedByMint.get(mintLower);
-        if (!prev)
-          excludedByMint.set(mintLower, { mint, uiAmount: ui, decimals });
-        else
-          excludedByMint.set(mintLower, {
-            mint,
-            uiAmount: prev.uiAmount + ui,
-            decimals: prev.decimals,
-          });
-        continue;
-      }
+      // ✅ Skip excluded mints at the source
+      if (EXCLUDED_MINTS.has(mint.toLowerCase())) continue;
 
       const prev = byMint.get(mint);
       if (!prev) byMint.set(mint, { mint, uiAmount: ui, decimals });
@@ -211,10 +180,7 @@ async function getSplTokenPositions(owner: string) {
     }
   }
 
-  return {
-    positions: Array.from(byMint.values()),
-    excluded: Array.from(excludedByMint.values()),
-  };
+  return Array.from(byMint.values());
 }
 
 type JupPriceEntry = {
@@ -227,10 +193,9 @@ type JupPriceEntry = {
 async function fetchJupPrices(
   mints: string[],
 ): Promise<Record<string, JupPriceEntry>> {
-  // ✅ For pricing, we allow any mint (including excluded),
-  // because we need jlJupUSD price for fallback.
+  // ✅ Filter excluded mints before pricing
   const normalized = mints
-    .filter((m) => m)
+    .filter((m) => m && !EXCLUDED_MINTS.has(m.toLowerCase()))
     .map(normalizeMintForPricing)
     .filter(Boolean);
 
@@ -280,11 +245,10 @@ export async function GET(req: NextRequest) {
   try {
     console.log("[/api/user/wallet/balance] owner:", owner);
 
-    const [{ positions: splPositions, excluded }, nativeSol] =
-      await Promise.all([
-        getSplTokenPositions(owner),
-        getNativeSolBalance(owner),
-      ]);
+    const [splPositions, nativeSol] = await Promise.all([
+      getSplTokenPositions(owner),
+      getNativeSolBalance(owner),
+    ]);
 
     const positions: {
       mint: string;
@@ -293,34 +257,7 @@ export async function GET(req: NextRequest) {
       symbol?: string;
     }[] = [...splPositions];
 
-    // ✅ Pull jlJupUSD out of excluded list (if present)
-    const jl = excluded.find(
-      (x) => x.mint.toLowerCase() === JLJUPUSD_MINT.toLowerCase(),
-    );
-
     if (positions.length === 0) {
-      // still return fallback if present (jlJupUSD), even when no other tokens
-      const priceMap = await fetchJupPrices(jl ? [jl.mint] : []);
-      const entry = jl ? priceMap[normalizeMintForPricing(jl.mint)] : undefined;
-
-      const price =
-        typeof entry?.usdPrice === "number" && entry.usdPrice > 0
-          ? entry.usdPrice
-          : undefined;
-
-      const plusFallback =
-        jl && jl.uiAmount > 0
-          ? {
-              mint: jl.mint,
-              uiAmount: jl.uiAmount,
-              decimals: jl.decimals,
-              price,
-              usdValue: price
-                ? Number((jl.uiAmount * price).toFixed(4))
-                : undefined,
-            }
-          : null;
-
       return NextResponse.json({
         owner,
         totalUsd: 0,
@@ -329,16 +266,10 @@ export async function GET(req: NextRequest) {
         tokens: [],
         count: 0,
         nativeSol,
-        plusFallback,
       });
     }
 
-    // ✅ Price main tokens + jlJupUSD (if present) in one call
-    const mintsForPricing = [
-      ...positions.map((p) => p.mint),
-      ...(jl ? [jl.mint] : []),
-    ];
-    const priceMap = await fetchJupPrices(mintsForPricing);
+    const priceMap = await fetchJupPrices(positions.map((p) => p.mint));
 
     type TokenOut = {
       mint: string;
@@ -358,7 +289,7 @@ export async function GET(req: NextRequest) {
     let totalChange24hUsd = 0;
 
     for (const p of positions) {
-      // ✅ Keep original behavior: excluded mints do NOT show in tokens list
+      // ✅ Extra guard (even though we filtered earlier)
       if (EXCLUDED_MINTS.has(p.mint.toLowerCase())) continue;
 
       const pricingMint = normalizeMintForPricing(p.mint);
@@ -402,31 +333,6 @@ export async function GET(req: NextRequest) {
         priceChange24h,
         usdChange24h,
       });
-    }
-
-    // ✅ Compute jlJupUSD fallback separately (not in tokens list)
-    let plusFallback: {
-      mint: string;
-      uiAmount: number;
-      decimals: number;
-      price?: number;
-      usdValue?: number;
-    } | null = null;
-
-    if (jl && jl.uiAmount > 0) {
-      const entry = priceMap[normalizeMintForPricing(jl.mint)];
-      const price =
-        typeof entry?.usdPrice === "number" && entry.usdPrice > 0
-          ? entry.usdPrice
-          : undefined;
-
-      plusFallback = {
-        mint: jl.mint,
-        uiAmount: jl.uiAmount,
-        decimals: jl.decimals,
-        price,
-        usdValue: price ? Number((jl.uiAmount * price).toFixed(4)) : undefined,
-      };
     }
 
     // 🔗 Enrich from static tokenConfig
@@ -481,7 +387,6 @@ export async function GET(req: NextRequest) {
       totalChangePct,
       tokenCount: tokensEnriched.length,
       nativeSol,
-      plusFallback: plusFallback ? { usdValue: plusFallback.usdValue } : null,
     });
 
     return NextResponse.json({
@@ -492,7 +397,6 @@ export async function GET(req: NextRequest) {
       tokens: tokensEnriched,
       count: tokensEnriched.length,
       nativeSol,
-      plusFallback, // ✅ NEW: jlJupUSD balance/value (not in tokens list)
     });
   } catch (err) {
     console.error("[/api/user/wallet/balance] error:", err);

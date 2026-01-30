@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
+  ComputeBudgetProgram,
   Connection,
   PublicKey,
   TransactionInstruction,
@@ -34,7 +35,7 @@ interface RequestBody {
 interface JupiterQuoteResponse {
   inAmount?: string;
   outAmount?: string;
-  otherAmountThreshold?: string;
+  otherAmountThreshold?: string; // <-- IMPORTANT: minOut after slippage
   priceImpactPct?: string;
 }
 
@@ -91,6 +92,8 @@ const JUP_API_KEY = required("JUP_API_KEY");
 const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
 
+const IS_PROD = process.env.NODE_ENV === "production";
+
 /* ───────── Jupiter endpoints ───────── */
 
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
@@ -102,17 +105,21 @@ const JUP_EARN_DEPOSIT_IX =
 
 // Mainnet USDC
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-// jupUSD mint - this is what we deposit into the JupUSD vault
+// JupUSD mint
 const JUPUSD_MINT = new PublicKey(
-  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD"
+  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",
 );
 
-// v0 raw tx size limit
 const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
+
+// Reliability knobs
+const API_TIMEOUT_MS = 8000;
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF_BASE_MS = 150;
 
 /* ───────── Connection + caches ───────── */
 
@@ -147,23 +154,24 @@ function jsonError(
     stage?: string;
     traceId?: string;
     debug?: Record<string, unknown>;
-  }
+  },
 ) {
   console.error(
     "[/api/savings/plus/deposit/build]",
     status,
     payload.code,
     payload.error,
-    payload.debug ? { debug: payload.debug } : ""
+    !IS_PROD && payload.debug ? { debug: payload.debug } : "",
   );
-  return NextResponse.json(payload, { status });
+  const responsePayload = IS_PROD ? { ...payload, debug: undefined } : payload;
+  return NextResponse.json(responsePayload, { status });
 }
 
 /* ───────── Token helpers ───────── */
 
 async function getTokenProgramId(
   conn: Connection,
-  mint: PublicKey
+  mint: PublicKey,
 ): Promise<PublicKey> {
   const key = mint.toBase58();
   const cached = tokenProgramCache.get(key);
@@ -198,7 +206,7 @@ async function getDecimals(conn: Connection, mint: PublicKey): Promise<number> {
 
 async function getAltCached(
   conn: Connection,
-  key: string
+  key: string,
 ): Promise<AddressLookupTableAccount | null> {
   const now = Date.now();
   const cached = altCache.get(key);
@@ -210,38 +218,75 @@ async function getAltCached(
   return value;
 }
 
-/* ───────── Jupiter fetch ───────── */
+/* ───────── Jupiter fetch with retry + timeout ───────── */
 
-async function jupFetch(url: string, init?: RequestInit) {
-  return fetch(url, {
-    cache: "no-store",
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      "x-api-key": JUP_API_KEY,
-    },
-  });
+async function jupFetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  maxRetries = MAX_RETRIES,
+  timeoutMs = API_TIMEOUT_MS,
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        cache: "no-store",
+        ...init,
+        signal: controller.signal,
+        headers: {
+          ...(init?.headers || {}),
+          "x-api-key": JUP_API_KEY,
+        },
+      });
+
+      clearTimeout(timeout);
+
+      // Retry on rate limit / transient
+      if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+        if (attempt === maxRetries) return res;
+        const backoff = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+
+      return res;
+    } catch (e) {
+      clearTimeout(timeout);
+      lastError = e as Error;
+
+      if ((e as Error).name === "AbortError") {
+        throw new Error(`Jupiter API timeout after ${timeoutMs}ms`);
+      }
+
+      if (attempt === maxRetries) throw lastError;
+
+      const backoff = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+
+  throw lastError ?? new Error("Jupiter fetch failed");
 }
 
-/* ───────── Amount parsing ───────── */
+/* ───────── Amount parsing (BIGINT-safe) ───────── */
 
-function parseUiAmountToUnits(amountUi: string, decimals: number): number {
+function parseUiAmountToUnits(amountUi: string, decimals: number): bigint {
   const s = (amountUi ?? "").trim().replace(/,/g, "");
-  if (!s) return 0;
+  if (!s) return BigInt(0);
 
   const [wRaw, fRaw = ""] = s.split(".");
   const whole = wRaw.replace(/[^\d]/g, "");
   const frac = fRaw.replace(/[^\d]/g, "");
-  if (!whole && !frac) return 0;
+  if (!whole && !frac) return BigInt(0);
 
   const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
   const unitsStr = (whole || "0") + fracPadded;
 
-  const units = Number(unitsStr);
-  if (!Number.isFinite(units) || units > Number.MAX_SAFE_INTEGER) {
-    throw new Error("Amount is too large.");
-  }
-  return units;
+  return BigInt(unitsStr);
 }
 
 function readAmountUi(body: RequestBody | null): string {
@@ -268,7 +313,7 @@ function safePreview(v: unknown) {
           return val.slice(0, 180) + "…";
         return val;
       },
-      2
+      2,
     );
     return s.length > 2000 ? s.slice(0, 2000) + "…(truncated)" : s;
   } catch {
@@ -276,9 +321,6 @@ function safePreview(v: unknown) {
   }
 }
 
-/**
- * Decodes many Jupiter instruction shapes
- */
 function toIx(obj: unknown): TransactionInstruction {
   const root =
     obj && typeof obj === "object" && "instruction" in obj
@@ -310,7 +352,7 @@ function toIx(obj: unknown): TransactionInstruction {
           : null;
 
   const accountsRaw: (AccountMetaJson | string)[] | null = Array.isArray(
-    rec.keys
+    rec.keys,
   )
     ? rec.keys
     : Array.isArray(rec.accounts)
@@ -319,10 +361,9 @@ function toIx(obj: unknown): TransactionInstruction {
         ? rec.accountMetas
         : null;
 
-  // data can be empty string "" for ATA creates
   if (!programId || data === null || !accountsRaw) {
     throw new Error(
-      "Invalid instruction object (missing programId/data/accounts)"
+      "Invalid instruction object (missing programId/data/accounts)",
     );
   }
 
@@ -377,33 +418,30 @@ function safeToIx(
   obj: unknown,
   label: string,
   index: number,
-  traceId: string
+  traceId: string,
 ): TransactionInstruction {
   try {
     return toIx(obj);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} bad ix in ${label}[${index}]: ${msg}`
+      `[PLUS/DEPOSIT/BUILD] ${traceId} bad ix in ${label}[${index}]: ${msg}`,
     );
-    console.error(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} ${label}[${index}] preview:`,
-      safePreview(obj)
-    );
+    if (!IS_PROD) {
+      console.error(
+        `[PLUS/DEPOSIT/BUILD] ${traceId} ${label}[${index}] preview:`,
+        safePreview(obj),
+      );
+    }
     throw e;
   }
 }
 
 /* ───────── Sponsored ATA rewrite ───────── */
 
-/**
- * Collects ALL ATA creation instructions and rewrites them to use Haven as payer.
- * Deduplicates across all instruction sources.
- * Returns the deduplicated sponsored ATAs and all non-ATA instructions in order.
- */
 function collectAndSponsorAtas(
   allIxs: TransactionInstruction[],
-  traceId: string
+  traceId: string,
 ): {
   sponsoredAtaIxs: TransactionInstruction[];
   otherIxs: TransactionInstruction[];
@@ -418,10 +456,8 @@ function collectAndSponsorAtas(
       continue;
     }
 
-    // ATA create layout: [payer, ata, owner, mint, system, tokenProgram]
     const keys = ix.keys;
     if (keys.length < 6) {
-      // Not a standard ATA create, keep as-is
       other.push(ix);
       continue;
     }
@@ -436,33 +472,86 @@ function collectAndSponsorAtas(
       continue;
     }
 
-    // Deduplicate by ATA address (the actual account being created)
     const dedupeKey = ata.toBase58();
-    if (seenAtas.has(dedupeKey)) {
-      console.log(
-        `[PLUS/DEPOSIT/BUILD] ${traceId} skipping duplicate ATA: ${dedupeKey.slice(0, 8)}...`
-      );
-      continue;
-    }
+    if (seenAtas.has(dedupeKey)) continue;
     seenAtas.add(dedupeKey);
 
-    // Rebuild with Haven as payer
     sponsored.push(
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER,
         ata,
         owner,
         mint,
-        tokenProgram
-      )
+        tokenProgram,
+      ),
     );
   }
 
   console.log(
-    `[PLUS/DEPOSIT/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other instructions`
+    `[PLUS/DEPOSIT/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other`,
   );
 
   return { sponsoredAtaIxs: sponsored, otherIxs: other };
+}
+
+/* ───────── Quote helper with fallbacks ───────── */
+
+async function fetchQuoteWithFallbacks(opts: {
+  inputMint: PublicKey;
+  outputMint: PublicKey;
+  amount: bigint;
+  slippageBps: number;
+  traceId: string;
+}): Promise<{ quote: JupiterQuoteResponse; urlUsed: string }> {
+  const { inputMint, outputMint, amount, slippageBps, traceId } = opts;
+
+  const attempts: Array<{
+    maxAccounts: number;
+    onlyDirect: boolean;
+    restrict: boolean;
+  }> = [
+    // smallest / cleanest tx first
+    { maxAccounts: 8, onlyDirect: true, restrict: true },
+    // allow multi-hop (often fixes "no route")
+    { maxAccounts: 20, onlyDirect: false, restrict: true },
+    // last resort: more accounts + less restrictive intermediates
+    { maxAccounts: 40, onlyDirect: false, restrict: false },
+  ];
+
+  let lastBody = "";
+  for (const a of attempts) {
+    const url =
+      `${JUP_QUOTE}?` +
+      new URLSearchParams({
+        inputMint: inputMint.toBase58(),
+        outputMint: outputMint.toBase58(),
+        amount: amount.toString(),
+        slippageBps: String(slippageBps),
+        maxAccounts: String(a.maxAccounts),
+        onlyDirectRoutes: String(a.onlyDirect),
+        restrictIntermediateTokens: String(a.restrict),
+      });
+
+    const res = await jupFetchWithRetry(url);
+
+    if (res.ok) {
+      const quote = (await res.json()) as JupiterQuoteResponse;
+      return { quote, urlUsed: url };
+    }
+
+    // capture useful error text (this is what you were missing)
+    lastBody = await res.text().catch(() => "");
+    console.warn(
+      `[PLUS/DEPOSIT/BUILD] ${traceId} quote failed (${res.status}) with maxAccounts=${a.maxAccounts}, onlyDirect=${a.onlyDirect}, restrict=${a.restrict}. body=${lastBody.slice(0, 240)}`,
+    );
+
+    // For 4xx, try next attempt immediately.
+    continue;
+  }
+
+  throw new Error(
+    `Quote failed for all attempts. Last body: ${lastBody.slice(0, 500)}`,
+  );
 }
 
 /* ───────── ROUTE ───────── */
@@ -474,12 +563,11 @@ export async function POST(req: Request) {
 
   try {
     stage = "parseBody";
-
     const body = (await req.json().catch(() => null)) as RequestBody | null;
 
     const fromOwnerBase58 = body?.fromOwnerBase58?.trim() ?? "";
     const slippageBps = Number.isFinite(body?.slippageBps)
-      ? Math.max(1, Math.min(10_000, Number(body?.slippageBps)))
+      ? Math.max(10, Math.min(10_000, Number(body?.slippageBps)))
       : 50;
 
     if (!fromOwnerBase58) {
@@ -502,24 +590,25 @@ export async function POST(req: Request) {
 
     stage = "amount";
     const amountUiRaw = readAmountUi(body);
-    let amountUnits = 0;
+    let amountUnits = BigInt(0);
 
     if (amountUiRaw) {
       amountUnits = parseUiAmountToUnits(amountUiRaw, usdcDecimals);
     } else {
       const n = Number(body?.amountUnits ?? 0);
-      amountUnits = Number.isFinite(n) ? Math.floor(n) : 0;
+      amountUnits =
+        Number.isFinite(n) && n > 0 ? BigInt(Math.floor(n)) : BigInt(0);
     }
 
     console.log("[PLUS/DEPOSIT/BUILD] payload", {
       traceId,
       fromOwnerBase58,
       amountUiRaw,
-      amountUnits,
+      amountUnits: amountUnits.toString(),
       slippageBps,
     });
 
-    if (!Number.isFinite(amountUnits) || amountUnits <= 0) {
+    if (amountUnits <= BigInt(0)) {
       return jsonError(400, {
         code: "INVALID_AMOUNT",
         error: "Amount must be > 0",
@@ -529,7 +618,7 @@ export async function POST(req: Request) {
         traceId,
         debug: {
           amountUiRaw,
-          amountUnits,
+          amountUnits: amountUnits.toString(),
           keysPresent: body ? Object.keys(body) : [],
         },
       });
@@ -540,18 +629,18 @@ export async function POST(req: Request) {
       USDC_MINT,
       userOwner,
       false,
-      usdcProgId
+      usdcProgId,
     );
 
     const balResp = await conn
       .getTokenAccountBalance(userUsdcAta, "confirmed")
       .catch(() => null);
-    const available = Number(balResp?.value?.amount || "0");
+    const available = BigInt(balResp?.value?.amount || "0");
 
     if (available < amountUnits) {
       return jsonError(400, {
         code: "INSUFFICIENT_BALANCE",
-        error: `need=${amountUnits}, have=${available}`,
+        error: `need=${amountUnits.toString()}, have=${available.toString()}`,
         userMessage: "You don't have enough USDC.",
         tip: "Try a smaller amount.",
         stage,
@@ -559,62 +648,60 @@ export async function POST(req: Request) {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 1: Get quote for USDC → JupUSD swap
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ─────────────────────────────────────────────────────────────
+    // STEP 1: Quote USDC → JupUSD (WITH FALLBACKS + REAL ERROR BODY)
+    // ─────────────────────────────────────────────────────────────
     stage = "quote";
-    const quoteUrl =
-      `${JUP_QUOTE}?` +
-      new URLSearchParams({
-        inputMint: USDC_MINT.toBase58(),
-        outputMint: JUPUSD_MINT.toBase58(),
-        amount: String(amountUnits),
-        slippageBps: String(slippageBps),
-      });
-
-    const [quoteRes, blockhashData] = await Promise.all([
-      jupFetch(quoteUrl),
+    const [blockhashData, quotePack] = await Promise.all([
       conn.getLatestBlockhash("confirmed"),
+      fetchQuoteWithFallbacks({
+        inputMint: USDC_MINT,
+        outputMint: JUPUSD_MINT,
+        amount: amountUnits,
+        slippageBps,
+        traceId,
+      }),
     ]);
 
-    if (!quoteRes.ok) {
-      return jsonError(quoteRes.status, {
-        code: "JUP_QUOTE_FAILED",
-        error: `Quote failed: ${quoteRes.status}`,
-        userMessage: "Couldn't price this deposit right now.",
-        tip: "Try again in a moment.",
-        stage,
-        traceId,
-      });
-    }
+    const quoteResponse = quotePack.quote;
 
-    const quoteResponse =
-      (await quoteRes.json()) as JupiterQuoteResponse | null;
-    const jupUsdOutAmount = String(quoteResponse?.outAmount ?? "");
+    const outAmount = String(quoteResponse?.outAmount ?? "");
+    const minOut = String(quoteResponse?.otherAmountThreshold ?? "");
 
-    if (!jupUsdOutAmount || !/^\d+$/.test(jupUsdOutAmount)) {
+    if (
+      !outAmount ||
+      !/^\d+$/.test(outAmount) ||
+      !minOut ||
+      !/^\d+$/.test(minOut)
+    ) {
       return jsonError(500, {
         code: "BAD_QUOTE",
-        error: "Quote missing outAmount",
+        error: "Quote missing outAmount/otherAmountThreshold",
         userMessage: "Couldn't prepare this deposit route.",
         tip: "Try again in a moment.",
         stage,
         traceId,
-        debug: { outAmount: quoteResponse?.outAmount },
+        debug: { quoteResponse, urlUsed: quotePack.urlUsed },
       });
     }
 
     console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} quote: ${amountUnits} USDC -> ${jupUsdOutAmount} JupUSD`
+      `[PLUS/DEPOSIT/BUILD] ${traceId} quote ok via ${quotePack.urlUsed}`,
+    );
+    console.log(
+      `[PLUS/DEPOSIT/BUILD] ${traceId} quote: in=${amountUnits.toString()} USDC out=${outAmount} JupUSD minOut=${minOut}`,
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 2: Get swap instructions (USDC → JupUSD)
-    // ═══════════════════════════════════════════════════════════════════════════
+    // IMPORTANT RELIABILITY FIX:
+    // Use MIN OUT (otherAmountThreshold) for vault deposit amount.
+    // If swap succeeds, user will have >= minOut. If we use outAmount, deposit can fail.
+    const jupUsdDepositAmount = minOut;
 
+    // ─────────────────────────────────────────────────────────────
+    // STEP 2: Swap instructions (USDC → JupUSD)
+    // ─────────────────────────────────────────────────────────────
     stage = "swapInstructions";
-    const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
+    const swapIxRes = await jupFetchWithRetry(JUP_SWAP_IXS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -632,10 +719,13 @@ export async function POST(req: Request) {
         code: "JUP_SWAP_IX_FAILED",
         error: `swap-instructions failed: ${swapIxRes.status}`,
         userMessage: "Couldn't prepare this deposit.",
-        tip: "Try again in a moment.",
+        tip:
+          swapIxRes.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
-        debug: { body: t.slice(0, 500) },
+        debug: { body: t.slice(0, 800) },
       });
     }
 
@@ -654,18 +744,17 @@ export async function POST(req: Request) {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 3: Get earn deposit instructions (JupUSD → JupUSD Vault)
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ─────────────────────────────────────────────────────────────
+    // STEP 3: Earn deposit instructions (JupUSD → JupUSD Vault)
+    // ─────────────────────────────────────────────────────────────
     stage = "earnDepositInstruction";
-    const earnIxRes = await jupFetch(JUP_EARN_DEPOSIT_IX, {
+    const earnIxRes = await jupFetchWithRetry(JUP_EARN_DEPOSIT_IX, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        asset: JUPUSD_MINT.toBase58(), // Deposit JupUSD into JupUSD vault!
+        asset: JUPUSD_MINT.toBase58(),
         signer: userOwner.toBase58(),
-        amount: jupUsdOutAmount, // Amount of JupUSD from swap
+        amount: jupUsdDepositAmount, // <-- MIN OUT, not outAmount
       }),
     });
 
@@ -675,20 +764,17 @@ export async function POST(req: Request) {
         code: "EARN_DEPOSIT_IX_FAILED",
         error: `deposit-instructions failed: ${earnIxRes.status}`,
         userMessage: "Couldn't prepare the vault deposit.",
-        tip: "Try again in a moment.",
+        tip:
+          earnIxRes.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
-        debug: { body: t.slice(0, 500) },
+        debug: { body: t.slice(0, 800) },
       });
     }
 
     const earnJson = (await earnIxRes.json()) as JupiterEarnResponse | null;
-
-    console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} earnJson keys:`,
-      earnJson ? Object.keys(earnJson) : []
-    );
-
     const earnList: unknown[] = Array.isArray(earnJson?.instructions)
       ? earnJson.instructions
       : earnJson
@@ -707,43 +793,29 @@ export async function POST(req: Request) {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 4: Load ALTs for swap
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ─────────────────────────────────────────────────────────────
+    // STEP 4: Load ALTs
+    // ─────────────────────────────────────────────────────────────
     stage = "loadALTs";
     const altKeys = (swapData.addressLookupTableAddresses ?? []).slice(0, 16);
     const altAccounts = (
       await Promise.all(altKeys.map((k: string) => getAltCached(conn, k)))
     ).filter((a): a is AddressLookupTableAccount => a !== null);
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 5: Decode all instructions
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ─────────────────────────────────────────────────────────────
+    // STEP 5: Decode instructions
+    // ─────────────────────────────────────────────────────────────
     stage = "buildInstructions";
 
-    // Decode swap instructions
     const swapSetupIxs = (swapData.setupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapSetup", i, traceId)
+      (x: InstructionJson, i: number) => safeToIx(x, "swapSetup", i, traceId),
     );
     const swapIx = safeToIx(swapData.swapInstruction, "swap", 0, traceId);
     const swapCleanupIxs = (swapData.cleanupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapCleanup", i, traceId)
+      (x: InstructionJson, i: number) => safeToIx(x, "swapCleanup", i, traceId),
     );
-
-    // Decode earn instructions
     const earnIxs = earnList.map((x, i) => safeToIx(x, "earn", i, traceId));
 
-    console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} raw ix counts: swapSetup=${swapSetupIxs.length}, swap=1, swapCleanup=${swapCleanupIxs.length}, earn=${earnIxs.length}`
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 6: Collect ALL instructions, extract and sponsor ATAs
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // Combine all instructions in logical order (before ATA extraction)
     const allInstructionsInOrder: TransactionInstruction[] = [
       ...swapSetupIxs,
       swapIx,
@@ -751,25 +823,34 @@ export async function POST(req: Request) {
       ...earnIxs,
     ];
 
-    // Extract and dedupe all ATA creates, sponsor them with Haven
     const { sponsoredAtaIxs, otherIxs } = collectAndSponsorAtas(
       allInstructionsInOrder,
-      traceId
+      traceId,
     );
 
-    // Final instruction order:
-    // 1. All sponsored ATA creates (Haven pays rent, deduplicated)
-    // 2. All other instructions in original order
-    const ixs: TransactionInstruction[] = [...sponsoredAtaIxs, ...otherIxs];
+    // ─────────────────────────────────────────────────────────────
+    // STEP 6: Add compute budget + final ordering
+    // ─────────────────────────────────────────────────────────────
+    stage = "finalizeInstructions";
 
-    console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} final ix count: ${ixs.length} (${sponsoredAtaIxs.length} ATAs + ${otherIxs.length} other)`
+    const ixs: TransactionInstruction[] = [];
+
+    // Better landing odds: give the tx enough CU + a modest priority fee.
+    // (Keep it conservative so it’s cheap for Haven.)
+    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 }));
+    ixs.push(
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 20_000 }),
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // Sponsored ATAs first (Haven pays rent)
+    ixs.push(...sponsoredAtaIxs);
+
+    // Swap then Earn deposit
+    ixs.push(...otherIxs);
+
+    // ─────────────────────────────────────────────────────────────
     // STEP 7: Compile transaction
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ─────────────────────────────────────────────────────────────
     stage = "compile";
     const { blockhash, lastValidBlockHeight } = blockhashData;
 
@@ -778,7 +859,7 @@ export async function POST(req: Request) {
         payerKey: HAVEN_FEEPAYER,
         recentBlockhash: blockhash,
         instructions: ixs,
-      }).compileToV0Message(altAccounts)
+      }).compileToV0Message(altAccounts),
     );
 
     const rawLen = tx.serialize().length;
@@ -787,10 +868,14 @@ export async function POST(req: Request) {
         code: "TX_TOO_LARGE",
         error: `Raw size ${rawLen} > ${MAX_TX_RAW_BYTES}`,
         userMessage: "This route is too large. Try a smaller amount.",
-        tip: "If this happens often, you can pre-create common ATAs.",
+        tip: "If this happens often, we can tighten quote params further.",
         stage,
         traceId,
-        debug: { rawLen },
+        debug: {
+          rawLen,
+          ixCount: ixs.length,
+          altCount: altAccounts.length,
+        },
       });
     }
 
@@ -798,7 +883,7 @@ export async function POST(req: Request) {
     const buildTime = Date.now() - startTime;
 
     console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} ${buildTime}ms swapIn=${amountUnits} jupUsdOut=${jupUsdOutAmount}`
+      `[PLUS/DEPOSIT/BUILD] ${traceId} SUCCESS ${buildTime}ms usdcIn=${amountUnits.toString()} jupUsdOut=${outAmount} jupUsdDeposit(minOut)=${jupUsdDepositAmount} txSize=${rawLen}`,
     );
 
     return NextResponse.json({
@@ -807,22 +892,34 @@ export async function POST(req: Request) {
       lastValidBlockHeight,
       traceId,
 
-      usdcInUnits: amountUnits,
-      jupUsdDepositUnits: jupUsdOutAmount,
+      usdcInUnits: amountUnits.toString(),
+      jupUsdQuotedOutUnits: outAmount,
+      jupUsdDepositUnits: jupUsdDepositAmount, // <-- minOut used
       slippageBps,
 
       payer: HAVEN_FEEPAYER.toBase58(),
       userUsdcAta: userUsdcAta.toBase58(),
+
       quote: {
         inAmount: quoteResponse?.inAmount,
         outAmount: quoteResponse?.outAmount,
         otherAmountThreshold: quoteResponse?.otherAmountThreshold,
         priceImpactPct: quoteResponse?.priceImpactPct,
       },
+
+      debug: IS_PROD
+        ? undefined
+        : {
+            quoteUrlUsed: quotePack.urlUsed,
+            altKeys,
+            txSize: rawLen,
+            ixCount: ixs.length,
+          },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`[PLUS/DEPOSIT/BUILD] ${traceId} error at ${stage}:`, msg);
+
     return jsonError(500, {
       code: "UNHANDLED_BUILD_ERROR",
       error: msg,

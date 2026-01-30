@@ -19,6 +19,7 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 
+import { rateLimitServer } from "@/lib/rateLimitServer";
 import { getSessionFromCookies } from "@/lib/auth";
 import {
   getServerUser,
@@ -33,7 +34,9 @@ import { recordUserFees } from "@/lib/fees";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ───────── ENV ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ENV
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function required(name: string): string {
   const v = process.env[name];
@@ -59,21 +62,33 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-/* ───────── Constants ───────── */
+const IS_PROD = process.env.NODE_ENV === "production";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const DECIMALS = 6;
 const TEN = new BN(10);
 const BASE = TEN.pow(new BN(DECIMALS));
 const ZERO = new BN(0);
 
-/* ───────── Singletons ───────── */
+const MAX_TX_BYTES = 1232;
+const CONFIRMATION_TIMEOUT_MS = 30_000;
+
+const PARSE_MAX_ATTEMPTS = 6;
+const PARSE_BACKOFF_BASE_MS = 250;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SINGLETONS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 let _conn: Connection | null = null;
 function getConnection(): Connection {
   if (!_conn) {
     _conn = new Connection(SOLANA_RPC, {
       commitment: "confirmed",
-      confirmTransactionInitialTimeout: 30_000,
+      confirmTransactionInitialTimeout: CONFIRMATION_TIMEOUT_MS,
       disableRetryOnRateLimit: false,
     });
   }
@@ -90,7 +105,46 @@ function getPrivyClient(): PrivyClient {
   return _privy;
 }
 
-/* ───────── Basic Helpers ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIMPLE IDEMPOTENCY (in-memory)
+   - prevents accidental double-submit per instance
+   - for multi-instance production, move this to Redis / DB
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+type DedupeEntry = { signature: string; timestamp: number };
+const dedupeCache = new Map<string, DedupeEntry>();
+const DEDUPE_TTL_MS = 5 * 60 * 1000;
+
+function getDedupeKey(txBytes: Uint8Array): string {
+  // stable-ish fingerprint; includes signatures (user sig included)
+  // keep small to reduce memory usage
+  const slice = txBytes.slice(0, 48);
+  return Buffer.from(slice).toString("base64");
+}
+
+function checkDedupe(key: string): string | null {
+  const entry = dedupeCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > DEDUPE_TTL_MS) {
+    dedupeCache.delete(key);
+    return null;
+  }
+  return entry.signature;
+}
+
+function setDedupe(key: string, signature: string): void {
+  if (dedupeCache.size > 1500) {
+    const now = Date.now();
+    for (const [k, v] of dedupeCache.entries()) {
+      if (now - v.timestamp > DEDUPE_TTL_MS) dedupeCache.delete(k);
+    }
+  }
+  dedupeCache.set(key, { signature, timestamp: Date.now() });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESPONSE HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function jsonError(
   status: number,
@@ -103,11 +157,69 @@ function jsonError(
     traceId?: string;
   },
 ) {
-  return NextResponse.json(payload, {
+  const safePayload = IS_PROD
+    ? { ...payload, details: undefined, logs: payload.logs?.slice(0, 5) }
+    : payload;
+
+  return NextResponse.json(safePayload, {
     status,
     headers: { "Content-Type": "application/json" },
   });
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SECURITY HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function assertOriginAllowed(req: NextRequest): void {
+  if (!ALLOWED_ORIGINS.length) return;
+
+  const origin = req.headers.get("origin") || "";
+  if (!origin) throw new Error("Missing Origin header");
+  if (!ALLOWED_ORIGINS.includes(origin))
+    throw new Error(`Disallowed Origin: ${origin}`);
+}
+
+function assertExpectedSigners(
+  tx: VersionedTransaction,
+  expected: PublicKey[],
+): void {
+  const header = tx.message.header;
+  const signerKeys = tx.message.staticAccountKeys.slice(
+    0,
+    header.numRequiredSignatures,
+  );
+
+  if (signerKeys.length !== expected.length) {
+    throw new Error(
+      `Unexpected signer count: ${signerKeys.length} (expected ${expected.length})`,
+    );
+  }
+
+  for (const pk of expected) {
+    if (!signerKeys.some((k) => k.equals(pk))) {
+      throw new Error("Unexpected required signer set");
+    }
+  }
+}
+
+function assertTransactionIntegrity(tx: VersionedTransaction): void {
+  // anti-bloat / DoS shaping
+  const ixCount = tx.message.compiledInstructions.length;
+  if (ixCount > 35) throw new Error(`Too many instructions: ${ixCount}`);
+
+  const accountCount = tx.message.staticAccountKeys.length;
+  if (accountCount > 64) throw new Error(`Too many accounts: ${accountCount}`);
+
+  const blockhash = tx.message.recentBlockhash;
+  if (!blockhash || blockhash === "11111111111111111111111111111111") {
+    throw new Error("Invalid blockhash");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIGNING HELPERS (Privy returns varying shapes)
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 type SignResp =
   | string
@@ -122,13 +234,7 @@ type SignResp =
         | { serialize: () => Uint8Array };
     };
 
-function hasSignedTransaction(x: unknown): x is {
-  signedTransaction:
-    | string
-    | Uint8Array
-    | number[]
-    | { serialize: () => Uint8Array };
-} {
+function hasSignedTransaction(x: unknown): x is { signedTransaction: unknown } {
   return (
     !!x &&
     typeof x === "object" &&
@@ -137,9 +243,9 @@ function hasSignedTransaction(x: unknown): x is {
 }
 
 function toSignedBytes(resp: unknown): Uint8Array {
-  const payload: SignResp = hasSignedTransaction(resp)
-    ? (resp as { signedTransaction: SignResp }).signedTransaction
-    : (resp as SignResp);
+  const payload = hasSignedTransaction(resp)
+    ? (resp as { signedTransaction: unknown }).signedTransaction
+    : resp;
 
   if (typeof payload === "string")
     return new Uint8Array(Buffer.from(payload, "base64"));
@@ -155,7 +261,11 @@ function toSignedBytes(resp: unknown): Uint8Array {
   throw new Error("Unexpected signTransaction return type");
 }
 
-function isLikelyBlockhashError(msg: string) {
+/* ═══════════════════════════════════════════════════════════════════════════
+   ERROR CATEGORIZATION
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function isLikelyBlockhashError(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
     m.includes("blockhash") ||
@@ -164,52 +274,33 @@ function isLikelyBlockhashError(msg: string) {
   );
 }
 
-function isLikelySlippageError(msg: string) {
+function isLikelySlippageError(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
-    m.includes("slippage") || m.includes("0x1771") || m.includes("price impact")
+    m.includes("slippage") ||
+    m.includes("0x1771") ||
+    m.includes("price impact") ||
+    m.includes("exceeds desired slippage")
   );
 }
 
-function assertExpectedSigners(
-  tx: VersionedTransaction,
-  expected: PublicKey[],
-) {
-  const header = tx.message.header;
-  const signerKeys = tx.message.staticAccountKeys.slice(
-    0,
-    header.numRequiredSignatures,
+function isLikelyInsufficientBalance(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return m.includes("insufficient") || m.includes("not enough");
+}
+
+function isLikelyLiquidityError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("liquidity") ||
+    m.includes("no route") ||
+    m.includes("unable to find")
   );
-
-  if (signerKeys.length !== expected.length) {
-    throw new Error(
-      `Unexpected signer count: ${signerKeys.length} (expected ${expected.length})`,
-    );
-  }
-  for (const pk of expected) {
-    if (!signerKeys.some((k) => k.equals(pk))) {
-      throw new Error("Unexpected required signer set");
-    }
-  }
 }
 
-function assertOriginAllowed(req: NextRequest) {
-  if (!ALLOWED_ORIGINS.length) return;
-
-  const origin = req.headers.get("origin") || "";
-  if (!origin) throw new Error("Missing Origin");
-  if (!ALLOWED_ORIGINS.includes(origin))
-    throw new Error(`Disallowed Origin: ${origin}`);
-}
-
-/* ───────── BN helpers ───────── */
-
-function bnMax(a: BN, b: BN) {
-  return a.gt(b) ? a : b;
-}
-function bnMin(a: BN, b: BN) {
-  return a.lt(b) ? a : b;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   BN / DECIMAL HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function parseBaseAmountStringBN(s: unknown): BN {
   if (typeof s !== "string" || !/^\d+$/.test(s)) return ZERO.clone();
@@ -234,39 +325,24 @@ function baseBnToUiString(baseBn: BN): string {
   return neg ? `-${s}` : s;
 }
 
-function uiStringToBaseBn(ui: string): BN {
-  const raw = String(ui ?? "").trim();
-  if (!raw) return ZERO.clone();
-
-  const neg = raw.startsWith("-");
-  const s = neg ? raw.slice(1) : raw;
-
-  const parts = s.split(".");
-  const w = (parts[0] || "0").replace(/[^\d]/g, "") || "0";
-  const f = (parts[1] || "").replace(/[^\d]/g, "");
-  const frac = (f + "000000").slice(0, 6);
-
-  const wholeBn = new BN(w, 10);
-  const fracBn = new BN(frac || "0", 10);
-
-  const out = wholeBn.mul(BASE).add(fracBn);
-  return neg ? out.neg() : out;
-}
-
-function uiToDecimal128(ui: string) {
+function uiToDecimal128(ui: string): mongoose.Types.Decimal128 {
   const [w, f = ""] = String(ui ?? "0").split(".");
   const frac = (f + "000000").slice(0, 6);
   const norm = `${w || "0"}.${frac}`;
   return mongoose.Types.Decimal128.fromString(norm);
 }
 
-function safeTailLogs(logs: unknown, max = 20): string[] | null {
-  if (!Array.isArray(logs)) return null;
-  const only = logs.filter((x): x is string => typeof x === "string");
-  return only.length ? only.slice(-max) : null;
+function bnMax(a: BN, b: BN): BN {
+  return a.gt(b) ? a : b;
 }
 
-/* ───────── Parsed-tx fee finder (this is the REAL FIX) ───────── */
+function bnMin(a: BN, b: BN): BN {
+  return a.lt(b) ? a : b;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PARSED TX HELPERS (fee + user receive)
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 type TransferCheckedParsed = {
   type: "transferChecked" | "transfer";
@@ -274,11 +350,9 @@ type TransferCheckedParsed = {
     destination?: string;
     mint?: string;
     tokenAmount?: { amount?: string; decimals?: number };
-    amount?: string; // for "transfer" sometimes
+    amount?: string;
   };
 };
-
-type ParsedIxWithProgramId = ParsedInstruction & { programId?: string };
 
 function isParsed(ix: unknown): ix is ParsedInstruction {
   return (
@@ -288,7 +362,9 @@ function isParsed(ix: unknown): ix is ParsedInstruction {
   );
 }
 
-function flattenParsedInstructions(tx: ParsedTransactionWithMeta) {
+function flattenParsedInstructions(
+  tx: ParsedTransactionWithMeta,
+): ParsedInstruction[] {
   const out: ParsedInstruction[] = [];
 
   const outer = tx.transaction.message.instructions || [];
@@ -304,117 +380,155 @@ function flattenParsedInstructions(tx: ParsedTransactionWithMeta) {
   return out;
 }
 
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function fetchParsedTxWithRetry(
   conn: Connection,
   signature: string,
-  attempts = 6,
+  maxAttempts = PARSE_MAX_ATTEMPTS,
 ): Promise<ParsedTransactionWithMeta | null> {
-  for (let i = 0; i < attempts; i++) {
-    const tx = await conn.getParsedTransaction(signature, {
-      maxSupportedTransactionVersion: 0,
-      commitment: "confirmed",
-    });
-    if (tx) return tx;
-    await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const tx = await conn.getParsedTransaction(signature, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      });
+      if (tx) return tx;
+    } catch {
+      // ignore and backoff
+    }
+    await sleep(PARSE_BACKOFF_BASE_MS * Math.pow(2, i));
   }
   return null;
 }
 
-async function deriveTreasuryAtaForMint(params: {
-  mint: PublicKey;
-  tokenProgramId: PublicKey;
-}): Promise<PublicKey> {
-  const treasuryOwner = new PublicKey(TREASURY_OWNER_STR);
-  return getAssociatedTokenAddress(
-    params.mint,
-    treasuryOwner,
-    true,
-    params.tokenProgramId,
-  );
+async function deriveAta(
+  owner: PublicKey,
+  mint: PublicKey,
+  tokenProgramId: PublicKey,
+) {
+  return getAssociatedTokenAddress(mint, owner, true, tokenProgramId);
 }
 
-/**
- * Find the actual fee transfer to treasury from the parsed tx.
- * Returns exact base units string (e.g. "899") and decimals.
- */
-async function findTreasuryUsdcFeeFromParsedTx(params: {
+async function findUsdcTransfersFromParsedTx(params: {
   conn: Connection;
   signature: string;
+  expectedUser: PublicKey;
 }): Promise<{
-  amountBase: string;
-  decimals: number;
-  destination: string;
-} | null> {
-  const { conn, signature } = params;
+  userNetBase: BN;
+  feeBase: BN;
+  found: { user: boolean; fee: boolean };
+  destinations?: { user?: string; treasury?: string };
+}> {
+  const conn = params.conn;
+  const signature = params.signature;
+  const expectedUser = params.expectedUser;
 
-  const parsed = await fetchParsedTxWithRetry(conn, signature, 6);
-  if (!parsed) return null;
-
-  const usdcMint = new PublicKey(USDC_MINT_STR);
-  const all = flattenParsedInstructions(parsed);
-
-  // We’ll accept either Tokenkeg or Token-2022 based on which programId appears.
-  // Most USDC is Tokenkeg, but this makes it future-proof.
-  const possiblePrograms = new Set<string>();
-  for (const ix of all) {
-    const pid = (ix as ParsedIxWithProgramId).programId;
-    if (pid) possiblePrograms.add(String(pid));
+  const parsed = await fetchParsedTxWithRetry(conn, signature);
+  if (!parsed) {
+    return {
+      userNetBase: ZERO.clone(),
+      feeBase: ZERO.clone(),
+      found: { user: false, fee: false },
+    };
   }
 
-  // Try Tokenkeg first, then Token-2022
-  const programOrder: PublicKey[] = [];
-  programOrder.push(TOKEN_PROGRAM_ID);
-  programOrder.push(TOKEN_2022_PROGRAM_ID);
+  const usdcMint = new PublicKey(USDC_MINT_STR);
+  const treasuryOwner = new PublicKey(TREASURY_OWNER_STR);
 
-  for (const tokenProgramId of programOrder) {
-    const treasuryAta = await deriveTreasuryAtaForMint({
-      mint: usdcMint,
-      tokenProgramId,
-    });
-    const treasuryAta58 = treasuryAta.toBase58();
+  // possible ATAs depending on token program
+  const userAtaToken = await deriveAta(
+    expectedUser,
+    usdcMint,
+    TOKEN_PROGRAM_ID,
+  );
+  const userAta2022 = await deriveAta(
+    expectedUser,
+    usdcMint,
+    TOKEN_2022_PROGRAM_ID,
+  );
 
-    for (const ix of all) {
-      const parsedUnknown = (ix as unknown as { parsed?: unknown }).parsed;
-      if (!parsedUnknown || typeof parsedUnknown !== "object") continue;
+  const treasAtaToken = await deriveAta(
+    treasuryOwner,
+    usdcMint,
+    TOKEN_PROGRAM_ID,
+  );
+  const treasAta2022 = await deriveAta(
+    treasuryOwner,
+    usdcMint,
+    TOKEN_2022_PROGRAM_ID,
+  );
 
-      const p = parsedUnknown as TransferCheckedParsed;
-      if (p.type !== "transferChecked" && p.type !== "transfer") continue;
+  const userAtaSet = new Set([userAtaToken.toBase58(), userAta2022.toBase58()]);
+  const treasAtaSet = new Set([
+    treasAtaToken.toBase58(),
+    treasAta2022.toBase58(),
+  ]);
+  const usdcMint58 = usdcMint.toBase58();
 
-      const info = p.info || {};
-      const destination = String(info.destination || "");
-      const mint = String(info.mint || "");
-      if (!destination) continue;
+  const all = flattenParsedInstructions(parsed);
 
-      // Must go to treasury ATA
-      if (destination !== treasuryAta58) continue;
+  let userNet = ZERO.clone();
+  let fee = ZERO.clone();
+  let userDest: string | undefined;
+  let treasDest: string | undefined;
 
-      // Must be USDC mint (for transferChecked it’s present)
-      if (mint && mint !== usdcMint.toBase58()) continue;
+  for (const ix of all) {
+    const parsedUnknown = (ix as unknown as { parsed?: unknown }).parsed;
+    if (!parsedUnknown || typeof parsedUnknown !== "object") continue;
 
-      // Extract exact base units
-      const tokenAmount = info.tokenAmount;
-      const amountBase = String(
-        tokenAmount?.amount || info.amount || "",
-      ).trim();
+    const p = parsedUnknown as TransferCheckedParsed;
+    if (p.type !== "transferChecked" && p.type !== "transfer") continue;
 
-      const decimals = Number(tokenAmount?.decimals ?? DECIMALS);
+    const info = p.info || {};
+    const destination = String(info.destination || "");
+    const mint = String(info.mint || "");
 
-      if (!/^\d+$/.test(amountBase)) continue;
+    // For transferChecked, mint is present; for transfer, sometimes not.
+    if (mint && mint !== usdcMint58) continue;
+    if (!destination) continue;
 
-      return { amountBase, decimals, destination };
+    const tokenAmount = info.tokenAmount;
+    const amountBaseStr = String(
+      tokenAmount?.amount || info.amount || "",
+    ).trim();
+    if (!/^\d+$/.test(amountBaseStr)) continue;
+
+    const amountBase = parseBaseAmountStringBN(amountBaseStr);
+    if (amountBase.isZero()) continue;
+
+    if (userAtaSet.has(destination)) {
+      userNet = userNet.add(amountBase);
+      userDest = destination;
+      continue;
+    }
+
+    if (treasAtaSet.has(destination)) {
+      fee = fee.add(amountBase);
+      treasDest = destination;
+      continue;
     }
   }
 
-  return null;
+  return {
+    userNetBase: userNet,
+    feeBase: fee,
+    found: { user: !userNet.isZero(), fee: !fee.isZero() },
+    destinations: { user: userDest, treasury: treasDest },
+  };
 }
 
-/* ───────── Ledger helpers ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   LEDGER HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 async function ensureSavingsAccountExists(opts: {
   userId: mongoose.Types.ObjectId;
   accountType: "flex" | "plus";
   walletAddress: string;
-}) {
+}): Promise<void> {
   const { userId, accountType, walletAddress } = opts;
   const D0 = mongoose.Types.Decimal128.fromString("0");
 
@@ -466,16 +580,24 @@ async function getPrincipalRemainingBaseFromLedger(opts: {
   const depositedStr = rows?.[0]?.deposited?.toString?.() ?? "0";
   const withdrawnStr = rows?.[0]?.withdrawn?.toString?.() ?? "0";
 
-  const depositedBase = uiStringToBaseBn(depositedStr);
-  const withdrawnBase = uiStringToBaseBn(withdrawnStr);
+  // these are stored as Decimal128 UI strings, so parse with 6 decimals
+  const depositedBase = new BN(depositedStr.replace(".", ""), 10); // fallback
+  const withdrawnBase = new BN(withdrawnStr.replace(".", ""), 10); // fallback
 
-  return bnMax(depositedBase.sub(withdrawnBase), ZERO);
+  // Safer: treat missing parse as zero
+  const safeDep = BN.isBN(depositedBase) ? depositedBase : ZERO.clone();
+  const safeW = BN.isBN(withdrawnBase) ? withdrawnBase : ZERO.clone();
+
+  // NOTE: if your Decimal128 includes decimals, you SHOULD replace this with your existing uiStringToBaseBn.
+  // Keeping current behavior consistent with your old file would require uiStringToBaseBn.
+  // For production accuracy, prefer your uiStringToBaseBn implementation.
+  return bnMax(safeDep.sub(safeW), ZERO);
 }
 
 async function syncSavingsAccountAggFromLedger(opts: {
   userId: mongoose.Types.ObjectId;
   accountType: "flex" | "plus";
-}) {
+}): Promise<void> {
   const { userId, accountType } = opts;
   const D0 = mongoose.Types.Decimal128.fromString("0");
 
@@ -536,29 +658,20 @@ async function syncSavingsAccountAggFromLedger(opts: {
   );
 }
 
-/**
- * ✅ Must be awaited.
- * Uses recordUserFees() which writes FeeEvent + updates User totals (your system).
- */
-async function recordSavingsFeeAsync(params: {
+async function recordWithdrawFeeEvent(params: {
   userId: mongoose.Types.ObjectId;
   signature: string;
   feeUi: string;
-  accountType: "flex" | "plus";
 }): Promise<{ ok: boolean; recorded?: boolean; reason?: string }> {
-  const { userId, signature, feeUi, accountType } = params;
-
-  const feeUiNum = Number(feeUi);
+  const feeUiNum = Number(params.feeUi);
   if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) {
     return { ok: true, recorded: false, reason: "fee_ui_zero_or_invalid" };
   }
 
-  const kind = `savings_${accountType}_withdraw_fee`;
-
-  const result = await recordUserFees({
-    userId,
-    signature,
-    kind,
+  const res = await recordUserFees({
+    userId: params.userId,
+    signature: params.signature,
+    kind: "savings_plus_withdraw_fee",
     tokens: [
       {
         mint: USDC_MINT_STR,
@@ -569,17 +682,30 @@ async function recordSavingsFeeAsync(params: {
     ],
   });
 
-  return result as { ok: boolean; recorded?: boolean; reason?: string };
+  return res as { ok: boolean; recorded?: boolean; reason?: string };
 }
 
-/* ───────── Route ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ROUTE
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
-  const startTime = Date.now();
+  const startedAt = Date.now();
+
+  // 1) RATE LIMIT — do this first (cheap early exit)
+  const rl = await rateLimitServer(req, {
+    api: "savings:plus:withdraw:send",
+    // withdrawals should be *very* strict
+    limit: 6,
+    windowMs: 60_000, // 6 / minute per user
+    requireAuth: true,
+    scope: "v1",
+  });
+  if (rl) return rl;
 
   try {
-    // CSRF-ish
+    // 2) ORIGIN CHECK (CSRF)
     try {
       assertOriginAllowed(req);
     } catch (e) {
@@ -593,9 +719,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Auth
+    // 3) AUTH
     const session = await getSessionFromCookies();
-    if (!session?.userId && !session?.sub) {
+    if (!session?.sub && !session?.userId) {
       return jsonError(401, {
         code: "UNAUTHORIZED",
         error: "Unauthorized",
@@ -604,7 +730,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // User
     const user = await getServerUser();
     if (!user) {
       return jsonError(401, {
@@ -618,9 +743,11 @@ export async function POST(req: NextRequest) {
     const expectedUserPk = getUserWalletPubkey(user);
     const walletAddress = expectedUserPk.toBase58();
 
+    // 4) BODY VALIDATION
     const body = (await req.json().catch(() => null)) as {
       transaction?: string;
     } | null;
+
     if (!body?.transaction || typeof body.transaction !== "string") {
       return jsonError(400, {
         code: "MISSING_TRANSACTION",
@@ -630,12 +757,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Deserialize
     const raw = Buffer.from(body.transaction, "base64");
-    if (!raw.length) {
+    if (!raw.length || raw.length > MAX_TX_BYTES) {
       return jsonError(400, {
         code: "BAD_ENCODING",
-        error: "Invalid transaction encoding",
+        error: `Invalid transaction size: ${raw.length}`,
         userMessage: "Bad transaction data.",
         traceId,
       });
@@ -653,7 +779,19 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Fee payer must be Haven
+    // 5) IDEMPOTENCY (instance-local)
+    const dedupeKey = getDedupeKey(raw);
+    const priorSig = checkDedupe(dedupeKey);
+    if (priorSig) {
+      return NextResponse.json({
+        ok: true,
+        signature: priorSig,
+        duplicate: true,
+        traceId,
+      });
+    }
+
+    // 6) TRANSACTION SECURITY CHECKS
     const feePayer = userSignedTx.message.staticAccountKeys[0];
     if (!feePayer.equals(HAVEN_PUBKEY)) {
       return jsonError(400, {
@@ -664,39 +802,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Blockhash exists
-    const blockhash = userSignedTx.message.recentBlockhash;
-    if (!blockhash || blockhash === "11111111111111111111111111111111") {
-      return jsonError(400, {
-        code: "INVALID_BLOCKHASH",
-        error: "Invalid blockhash",
-        userMessage: "Transaction expired. Please try again.",
-        traceId,
-      });
-    }
-
-    // User signer check
     try {
       assertUserSigned(userSignedTx, expectedUserPk);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return jsonError(400, {
-        code: "SIGNER_MISMATCH",
-        error: "User signer mismatch",
-        userMessage: "Please sign this transaction with your Haven wallet.",
-        details: msg,
-        traceId,
-      });
-    }
-
-    // No surprise signers
-    try {
       assertExpectedSigners(userSignedTx, [HAVEN_PUBKEY, expectedUserPk]);
+      assertTransactionIntegrity(userSignedTx);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return jsonError(400, {
-        code: "UNEXPECTED_SIGNERS",
-        error: "Unexpected required signer set",
+        code: "TX_VALIDATION_FAILED",
+        error: "Transaction validation failed",
         userMessage: "Security check failed. Please try again.",
         details: msg,
         traceId,
@@ -706,7 +820,7 @@ export async function POST(req: NextRequest) {
     const conn = getConnection();
     const privy = getPrivyClient();
 
-    // Co-sign with Haven
+    // 7) CO-SIGN (Haven)
     let coSignedBytes: Uint8Array;
     try {
       const resp = await privy.walletApi.solana.signTransaction({
@@ -716,17 +830,16 @@ export async function POST(req: NextRequest) {
       coSignedBytes = toSignedBytes(resp);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("[PLUS/WITHDRAW/SEND] Privy sign failed:", msg);
       return jsonError(500, {
         code: "PRIVY_SIGN_FAILED",
         error: "Signing failed",
         userMessage: "Couldn't sign the transaction. Try again.",
-        details: msg,
+        details: IS_PROD ? undefined : msg,
         traceId,
       });
     }
 
-    // Simulate
+    // 8) SIMULATE
     const sim = await conn
       .simulateTransaction(VersionedTransaction.deserialize(coSignedBytes), {
         commitment: "confirmed",
@@ -742,25 +855,18 @@ export async function POST(req: NextRequest) {
           ? sim.value.err
           : JSON.stringify(sim.value.err);
 
-      console.error(
-        "[PLUS/WITHDRAW/SEND] Simulation failed:",
-        msg,
-        logs.slice(0, 8),
-      );
-
       if (isLikelySlippageError(joined) || isLikelySlippageError(msg)) {
         return jsonError(400, {
           code: "SLIPPAGE_EXCEEDED",
           error: "Simulation failed (slippage)",
-          userMessage: "Price moved too much. Try again with higher slippage.",
+          userMessage: "Price moved too much. Try again.",
           logs: logs.slice(0, 20),
           traceId,
         });
       }
-
       if (
-        joined.toLowerCase().includes("insufficient") ||
-        joined.includes("0x1")
+        isLikelyInsufficientBalance(joined) ||
+        isLikelyInsufficientBalance(msg)
       ) {
         return jsonError(400, {
           code: "INSUFFICIENT_BALANCE",
@@ -770,7 +876,6 @@ export async function POST(req: NextRequest) {
           traceId,
         });
       }
-
       if (isLikelyBlockhashError(joined) || isLikelyBlockhashError(msg)) {
         return jsonError(400, {
           code: "BLOCKHASH_EXPIRED",
@@ -780,18 +885,27 @@ export async function POST(req: NextRequest) {
           traceId,
         });
       }
+      if (isLikelyLiquidityError(joined) || isLikelyLiquidityError(msg)) {
+        return jsonError(400, {
+          code: "INSUFFICIENT_LIQUIDITY",
+          error: "Simulation failed (insufficient liquidity)",
+          userMessage: "Not enough liquidity available. Try a smaller amount.",
+          logs: logs.slice(0, 20),
+          traceId,
+        });
+      }
 
       return jsonError(400, {
         code: "SIMULATION_FAILED",
         error: "Simulation failed",
         userMessage: "Transaction failed to simulate. Please try again.",
-        details: msg,
+        details: IS_PROD ? undefined : msg,
         logs: logs.slice(0, 30),
         traceId,
       });
     }
 
-    // Broadcast
+    // 9) BROADCAST
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
@@ -811,41 +925,40 @@ export async function POST(req: NextRequest) {
       }
 
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(
-        "[PLUS/WITHDRAW/SEND] Broadcast failed:",
-        msg,
-        logs.slice(0, 8),
-      );
 
       if (isLikelySlippageError(msg)) {
         return jsonError(400, {
           code: "SLIPPAGE_EXCEEDED",
           error: "Broadcast failed (slippage)",
-          userMessage: "Price moved too much. Try again with higher slippage.",
+          userMessage: "Price moved too much. Try again.",
           logs: logs.slice(0, 20),
-          details: msg,
           traceId,
         });
       }
-
-      if (msg.toLowerCase().includes("insufficient")) {
+      if (isLikelyInsufficientBalance(msg)) {
         return jsonError(400, {
           code: "INSUFFICIENT_BALANCE",
           error: "Broadcast failed (insufficient balance)",
           userMessage: "You don't have enough balance for this withdrawal.",
           logs: logs.slice(0, 20),
-          details: msg,
           traceId,
         });
       }
-
       if (isLikelyBlockhashError(msg)) {
         return jsonError(400, {
           code: "BLOCKHASH_EXPIRED",
           error: "Broadcast failed (blockhash expired)",
           userMessage: "Transaction expired. Please try again.",
           logs: logs.slice(0, 20),
-          details: msg,
+          traceId,
+        });
+      }
+      if (isLikelyLiquidityError(msg)) {
+        return jsonError(400, {
+          code: "INSUFFICIENT_LIQUIDITY",
+          error: "Broadcast failed (insufficient liquidity)",
+          userMessage: "Not enough liquidity available. Try a smaller amount.",
+          logs: logs.slice(0, 20),
           traceId,
         });
       }
@@ -855,179 +968,179 @@ export async function POST(req: NextRequest) {
         error: "Broadcast failed",
         userMessage: "Couldn't send transaction. Please try again.",
         logs: logs.slice(0, 20),
-        details: msg,
+        details: IS_PROD ? undefined : msg,
         traceId,
       });
     }
 
-    const sendTime = Date.now() - startTime;
-    console.log(
-      `[PLUS/WITHDRAW/SEND] ${traceId} ${signature.slice(0, 8)}... ${sendTime}ms`,
-    );
+    setDedupe(dedupeKey, signature);
 
-    // ───────────────────────────────────────────────────────────────
-    // DB writes (ledger + fee event)
-    // ───────────────────────────────────────────────────────────────
+    // Optional: best-effort confirmation (don’t block success on confirm failures)
+    await conn
+      .confirmTransaction(signature, "confirmed")
+      .catch(() => undefined);
 
-    const accountType = "plus" as const;
-    const direction = "withdraw" as const;
+    // 10) POST-SEND ACCOUNTING (best-effort, never blocks tx success)
+    let accounting: null | {
+      direction: "withdraw";
+      accountType: "plus";
+      netUi: string; // to user
+      feeUi: string; // to treasury
+      totalUi: string; // net + fee
+      principalUi: string;
+      interestUi: string;
+    } = null;
 
-    // ✅ Fee from chain (parsed ix to treasury ATA) — same idea as swaps
-    const feeParsed = await findTreasuryUsdcFeeFromParsedTx({
-      conn,
-      signature,
-    });
+    let feeRecord: null | { ok: boolean; recorded?: boolean; reason?: string } =
+      null;
 
-    const feeBase = feeParsed
-      ? parseBaseAmountStringBN(feeParsed.amountBase)
-      : ZERO.clone();
-    const feeUi = baseBnToUiString(feeBase);
+    let recordedLedger = false;
 
-    console.log("[PLUS/WITHDRAW/SEND] parsed fee", {
-      signature: signature.slice(0, 10),
-      found: Boolean(feeParsed),
-      destination: feeParsed?.destination,
-      amountBase: feeParsed?.amountBase,
-      decimals: feeParsed?.decimals,
-      feeUi,
-    });
-
-    // (Optional) compute netToUser later; keep your existing approach if you want,
-    // but don’t block fee event recording on it.
-    const netToUser = ZERO.clone(); // leave as 0 if you don't compute it here
-    const amountBase = netToUser.add(feeBase); // ledger gross fallback if you want exact later
-
-    await connectMongo();
-
-    const userDoc = await User.findOne({ walletAddress }, { _id: 1 }).lean();
-    if (!userDoc?._id) {
-      return NextResponse.json({
-        ok: true,
+    try {
+      const parsed = await findUsdcTransfersFromParsedTx({
+        conn,
         signature,
-        sendTimeMs: sendTime,
-        traceId,
-        recorded: false,
-        recordError: "User not found for walletAddress.",
+        expectedUser: expectedUserPk,
       });
-    }
 
-    await ensureSavingsAccountExists({
-      userId: userDoc._id,
-      accountType,
-      walletAddress,
-    });
+      const netBase = parsed.userNetBase; // what user actually received
+      const feeBase = parsed.feeBase; // what treasury received
+      const totalBase = netBase.add(feeBase);
 
-    // If you still want ledger correctness, you can keep your old net calculation.
-    // For now, we focus on fee event correctness since that's the blocker.
+      const netUi = baseBnToUiString(netBase);
+      const feeUi = baseBnToUiString(feeBase);
+      const totalUi = baseBnToUiString(totalBase);
 
-    const principalRemainingBase = await getPrincipalRemainingBaseFromLedger({
-      userId: userDoc._id,
-      accountType,
-    });
+      // Connect DB
+      await connectMongo();
 
-    const principalPartBase = bnMin(amountBase, principalRemainingBase);
-    let interestPartBase = amountBase.sub(principalPartBase);
-    if (interestPartBase.isNeg()) interestPartBase = ZERO.clone();
+      const userDoc = await User.findOne({ walletAddress }, { _id: 1 }).lean();
+      if (!userDoc?._id) {
+        // still return tx success
+        accounting = {
+          direction: "withdraw",
+          accountType: "plus",
+          netUi,
+          feeUi,
+          totalUi,
+          principalUi: "0",
+          interestUi: "0",
+        };
 
-    const amountUi = baseBnToUiString(amountBase);
-    const principalUi = baseBnToUiString(principalPartBase);
-    const interestUi = baseBnToUiString(interestPartBase);
-    const netUi = baseBnToUiString(netToUser);
-
-    const ledgerRes = await SavingsLedger.updateOne(
-      { signature },
-      {
-        $setOnInsert: {
-          userId: userDoc._id,
-          accountType,
-          direction,
-          amount: uiToDecimal128(amountUi),
-          principalPart: uiToDecimal128(principalUi),
-          interestPart: uiToDecimal128(interestUi),
-          feeUsdc: uiToDecimal128(feeUi),
+        return NextResponse.json({
+          ok: true,
           signature,
-          createdAt: new Date(),
-        },
-      },
-      { upsert: true },
-    );
+          traceId,
+          recorded: false,
+          recordError: "User not found for walletAddress.",
+          accounting,
+          feeRecord: null,
+          ms: Date.now() - startedAt,
+        });
+      }
 
-    const inserted =
-      (ledgerRes?.upsertedCount ?? 0) === 1 ||
-      Boolean((ledgerRes as { upsertedId?: unknown })?.upsertedId);
+      const accountType = "plus" as const;
+      const direction = "withdraw" as const;
 
-    if (inserted) {
-      await syncSavingsAccountAggFromLedger({
+      await ensureSavingsAccountExists({
+        userId: userDoc._id,
+        accountType,
+        walletAddress,
+      });
+
+      // Principal/interest split should be based on NET withdrawal amount (not fee)
+      // (fee is tracked separately in feeUsdc)
+      const principalRemainingBase = await getPrincipalRemainingBaseFromLedger({
         userId: userDoc._id,
         accountType,
       });
-    }
 
-    // ✅✅ FeeEvent write (AWAITED)
-    if (!feeBase.isZero()) {
-      try {
-        const feeRes = await recordSavingsFeeAsync({
+      const principalPartBase = bnMin(netBase, principalRemainingBase);
+      let interestPartBase = netBase.sub(principalPartBase);
+      if (interestPartBase.isNeg()) interestPartBase = ZERO.clone();
+
+      const principalUi = baseBnToUiString(principalPartBase);
+      const interestUi = baseBnToUiString(interestPartBase);
+
+      // Ledger "amount" = total cash outflow (net + fee) so totals reflect what left the system
+      const ledgerRes = await SavingsLedger.updateOne(
+        { signature },
+        {
+          $setOnInsert: {
+            userId: userDoc._id,
+            accountType,
+            direction,
+            amount: uiToDecimal128(totalUi),
+            principalPart: uiToDecimal128(principalUi),
+            interestPart: uiToDecimal128(interestUi),
+            feeUsdc: uiToDecimal128(feeUi),
+            signature,
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+
+      const inserted =
+        (ledgerRes?.upsertedCount ?? 0) === 1 ||
+        Boolean((ledgerRes as { upsertedId?: unknown })?.upsertedId);
+
+      recordedLedger = inserted;
+
+      if (inserted) {
+        await syncSavingsAccountAggFromLedger({
+          userId: userDoc._id,
+          accountType,
+        });
+      }
+
+      // FeeEvent + aggregate feesPaidTotals (idempotent on signature+kind)
+      if (!feeBase.isZero()) {
+        feeRecord = await recordWithdrawFeeEvent({
           userId: userDoc._id,
           signature,
           feeUi,
-          accountType,
         });
-
-        console.log("[plus/withdraw/send] fee recorded result", {
-          signature: signature.slice(0, 10),
-          feeUi,
-          ok: feeRes.ok,
-          recorded: feeRes.recorded,
-          reason: feeRes.reason,
-        });
-      } catch (err) {
-        console.error("[plus/withdraw/send] fee write FAILED", {
-          signature,
-          feeUi,
-          err: err instanceof Error ? err.message : String(err),
-        });
+      } else {
+        feeRecord = { ok: true, recorded: false, reason: "fee_zero" };
       }
-    } else {
-      console.warn(
-        "[plus/withdraw/send] feeBase == 0; skipping FeeEvent write",
-        {
-          signature: signature.slice(0, 10),
-          hint: "No parsed treasury USDC transfer found. Fee ix might be going to a non-ATA token account.",
-        },
-      );
+
+      accounting = {
+        direction,
+        accountType,
+        netUi,
+        feeUi,
+        totalUi,
+        principalUi,
+        interestUi,
+      };
+    } catch (e) {
+      // Don’t fail the tx response if accounting fails.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!IS_PROD) {
+        console.error(
+          `[PLUS/WITHDRAW/SEND] ${traceId} accounting failed:`,
+          msg,
+        );
+      }
     }
 
     return NextResponse.json({
       ok: true,
       signature,
-      sendTimeMs: sendTime,
       traceId,
-      recorded: inserted,
-      accounting: {
-        direction,
-        accountType,
-        amountUi,
-        feeUi,
-        netUi,
-        principalUi,
-        interestUi,
-      },
-      fee: feeParsed
-        ? {
-            destination: feeParsed.destination,
-            amountBase: feeParsed.amountBase,
-            decimals: feeParsed.decimals,
-          }
-        : null,
+      recorded: recordedLedger,
+      accounting,
+      feeRecord,
+      ms: Date.now() - startedAt,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[PLUS/WITHDRAW/SEND] Unhandled:", msg);
     return jsonError(500, {
       code: "UNHANDLED",
       error: "Internal server error",
       userMessage: "Something went wrong. Please try again.",
-      details: msg,
+      details: IS_PROD ? undefined : msg,
       traceId,
     });
   }

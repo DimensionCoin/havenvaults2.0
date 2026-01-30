@@ -30,7 +30,7 @@ const PRIVY_AUTH_PK = required("PRIVY_AUTH_PRIVATE_KEY_B64");
 const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 
 const HAVEN_PUBKEY = new PublicKey(
-  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
+  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS"),
 );
 
 /* ───────── Singletons ───────── */
@@ -68,7 +68,8 @@ function jsonError(
     details?: string;
     logs?: string[];
     traceId?: string;
-  }
+    signature?: string;
+  },
 ) {
   return NextResponse.json(payload, { status });
 }
@@ -91,7 +92,7 @@ type SignResp =
   | SignedTransactionContainer;
 
 function isSignedTransactionContainer(
-  x: unknown
+  x: unknown,
 ): x is SignedTransactionContainer {
   return !!x && typeof x === "object" && "signedTransaction" in x;
 }
@@ -140,6 +141,10 @@ function isLikelySlippageError(msg: string) {
   );
 }
 
+function hasNonZeroSig(sig: Uint8Array) {
+  return sig.some((b) => b !== 0);
+}
+
 /* ───────── Route ───────── */
 
 export async function POST(req: NextRequest) {
@@ -161,6 +166,9 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json().catch(() => null)) as {
       transaction?: string;
+      expectedUserBase58?: string;
+      recentBlockhash?: string;
+      lastValidBlockHeight?: number;
     } | null;
 
     if (!body?.transaction || typeof body.transaction !== "string") {
@@ -198,7 +206,10 @@ export async function POST(req: NextRequest) {
 
     /* ───── Validation ───── */
 
-    const feePayer = userSignedTx.message.staticAccountKeys[0];
+    const msg = userSignedTx.message;
+
+    // Fee payer check
+    const feePayer = msg.staticAccountKeys[0];
     if (!feePayer.equals(HAVEN_PUBKEY)) {
       return jsonError(400, {
         code: "INVALID_FEE_PAYER",
@@ -208,7 +219,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const blockhash = userSignedTx.message.recentBlockhash;
+    // Blockhash check (sanity)
+    const blockhash = msg.recentBlockhash;
     if (!blockhash || blockhash === "11111111111111111111111111111111") {
       return jsonError(400, {
         code: "INVALID_BLOCKHASH",
@@ -218,16 +230,70 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const anyUserSig = userSignedTx.signatures.some((sig) =>
-      sig.some((b) => b !== 0)
-    );
-    if (!anyUserSig) {
+    // Required signer set (v0): first numRequiredSignatures keys are signers
+    const numSigners = msg.header.numRequiredSignatures;
+    const signerKeys = msg.staticAccountKeys.slice(0, numSigners);
+
+    // Haven MUST be a required signer (payer)
+    if (!signerKeys[0]?.equals(HAVEN_PUBKEY)) {
       return jsonError(400, {
-        code: "MISSING_USER_SIGNATURE",
-        error: "Transaction is not signed by the user",
-        userMessage: "Please approve the transaction in your wallet.",
+        code: "MISSING_HAVEN_SIGNER",
+        error: "Haven is not a required signer",
+        userMessage: "Security check failed. Please try again.",
         traceId,
       });
+    }
+
+    // Optional (recommended): verify expected user signer is present + signed
+    const expectedUserBase58 =
+      typeof body.expectedUserBase58 === "string"
+        ? body.expectedUserBase58
+        : "";
+    if (expectedUserBase58) {
+      let expectedPk: PublicKey;
+      try {
+        expectedPk = new PublicKey(expectedUserBase58);
+      } catch {
+        return jsonError(400, {
+          code: "BAD_EXPECTED_USER",
+          error: "Invalid expectedUserBase58",
+          userMessage: "Security check failed. Please try again.",
+          traceId,
+        });
+      }
+
+      const signerIndex = signerKeys.findIndex((k) => k.equals(expectedPk));
+      if (signerIndex === -1) {
+        return jsonError(400, {
+          code: "MISSING_USER_SIGNER",
+          error: "Expected user is not a required signer",
+          userMessage: "Please approve the deposit again.",
+          traceId,
+        });
+      }
+
+      const sig = userSignedTx.signatures[signerIndex];
+      if (!sig || !hasNonZeroSig(sig)) {
+        return jsonError(400, {
+          code: "MISSING_USER_SIGNATURE",
+          error: "Transaction is not signed by the user",
+          userMessage: "Please approve the transaction in your wallet.",
+          traceId,
+        });
+      }
+    } else {
+      // Fallback: at least one non-zero signature (keeps compat)
+      const anyUserSig = userSignedTx.signatures.some((sig) =>
+        hasNonZeroSig(sig),
+      );
+      if (!anyUserSig) {
+        return jsonError(400, {
+          code: "MISSING_USER_SIGNATURE",
+          error: "Transaction is not signed by the user",
+          userMessage: "Please approve the transaction in your wallet.",
+          traceId,
+        });
+      }
     }
 
     const conn = getConnection();
@@ -243,40 +309,42 @@ export async function POST(req: NextRequest) {
       });
       coSignedBytes = toSignedBytes(resp);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[PLUS/DEPOSIT/SEND] Privy sign failed:", msg);
+      const m = err instanceof Error ? err.message : String(err);
+      console.error("[PLUS/DEPOSIT/SEND] Privy sign failed:", m);
       return jsonError(500, {
         code: "PRIVY_SIGN_FAILED",
         error: "Signing failed",
         userMessage: "Couldn't sign the transaction. Try again.",
-        details: msg,
+        details: m,
         traceId,
       });
     }
 
-    /* ───── Simulate ───── */
+    /* ───── Simulate (sigVerify TRUE for safety) ───── */
+
+    const coSignedTx = VersionedTransaction.deserialize(coSignedBytes);
 
     const sim = await conn
-      .simulateTransaction(VersionedTransaction.deserialize(coSignedBytes), {
+      .simulateTransaction(coSignedTx, {
         commitment: "confirmed",
-        sigVerify: false,
+        sigVerify: true, // ✅ catches signature mismatch / missing signer early
       })
       .catch(() => null);
 
     if (sim?.value?.err) {
       const logs = sim.value.logs ?? [];
       const joined = logs.join("\n");
-      const msg =
+      const errMsg =
         typeof sim.value.err === "string"
           ? sim.value.err
           : JSON.stringify(sim.value.err);
 
-      if (isLikelySlippageError(joined) || isLikelySlippageError(msg)) {
+      if (isLikelySlippageError(joined) || isLikelySlippageError(errMsg)) {
         return jsonError(400, {
           code: "SLIPPAGE_EXCEEDED",
           error: "Simulation failed (slippage)",
-          userMessage: "Price moved too much. Try again with higher slippage.",
-          logs: logs.slice(0, 20),
+          userMessage: "Price moved too much. Try again.",
+          logs: logs.slice(0, 30),
           traceId,
         });
       }
@@ -289,17 +357,17 @@ export async function POST(req: NextRequest) {
           code: "INSUFFICIENT_BALANCE",
           error: "Simulation failed (insufficient balance)",
           userMessage: "You don't have enough balance for this deposit.",
-          logs: logs.slice(0, 20),
+          logs: logs.slice(0, 30),
           traceId,
         });
       }
 
-      if (isLikelyBlockhashError(joined) || isLikelyBlockhashError(msg)) {
+      if (isLikelyBlockhashError(joined) || isLikelyBlockhashError(errMsg)) {
         return jsonError(400, {
           code: "BLOCKHASH_EXPIRED",
           error: "Simulation failed (blockhash expired)",
           userMessage: "Transaction expired. Please try again.",
-          logs: logs.slice(0, 20),
+          logs: logs.slice(0, 30),
           traceId,
         });
       }
@@ -308,8 +376,8 @@ export async function POST(req: NextRequest) {
         code: "SIMULATION_FAILED",
         error: "Simulation failed",
         userMessage: "Transaction failed to simulate. Please try again.",
-        details: msg,
-        logs: logs.slice(0, 30),
+        details: errMsg,
+        logs: logs.slice(0, 40),
         traceId,
       });
     }
@@ -325,46 +393,45 @@ export async function POST(req: NextRequest) {
       });
     } catch (err) {
       const ste = err as SendTransactionError;
-      const steWithLogs: {
-        getLogs?: (c: Connection) => Promise<string[]>;
-      } = ste;
+      const steWithLogs: { getLogs?: (c: Connection) => Promise<string[]> } =
+        ste;
 
       const logs =
         typeof steWithLogs.getLogs === "function"
           ? await steWithLogs.getLogs(conn).catch(() => [])
           : [];
 
-      const msg = err instanceof Error ? err.message : String(err);
+      const m = err instanceof Error ? err.message : String(err);
 
-      if (isLikelySlippageError(msg)) {
+      if (isLikelySlippageError(m)) {
         return jsonError(400, {
           code: "SLIPPAGE_EXCEEDED",
           error: "Broadcast failed (slippage)",
-          userMessage: "Price moved too much. Try again with higher slippage.",
-          logs: logs.slice(0, 20),
-          details: msg,
+          userMessage: "Price moved too much. Try again.",
+          logs: logs.slice(0, 30),
+          details: m,
           traceId,
         });
       }
 
-      if (msg.toLowerCase().includes("insufficient")) {
+      if (m.toLowerCase().includes("insufficient")) {
         return jsonError(400, {
           code: "INSUFFICIENT_BALANCE",
           error: "Broadcast failed (insufficient balance)",
           userMessage: "You don't have enough balance for this deposit.",
-          logs: logs.slice(0, 20),
-          details: msg,
+          logs: logs.slice(0, 30),
+          details: m,
           traceId,
         });
       }
 
-      if (isLikelyBlockhashError(msg)) {
+      if (isLikelyBlockhashError(m)) {
         return jsonError(400, {
           code: "BLOCKHASH_EXPIRED",
           error: "Broadcast failed (blockhash expired)",
           userMessage: "Transaction expired. Please try again.",
-          logs: logs.slice(0, 20),
-          details: msg,
+          logs: logs.slice(0, 30),
+          details: m,
           traceId,
         });
       }
@@ -373,26 +440,81 @@ export async function POST(req: NextRequest) {
         code: "BROADCAST_FAILED",
         error: "Broadcast failed",
         userMessage: "Couldn't send transaction. Please try again.",
-        logs: logs.slice(0, 20),
-        details: msg,
+        logs: logs.slice(0, 30),
+        details: m,
         traceId,
+      });
+    }
+
+    /* ───── Confirm on server (best landing rate) ───── */
+
+    const providedBh =
+      typeof body.recentBlockhash === "string" ? body.recentBlockhash : null;
+    const providedLvb =
+      typeof body.lastValidBlockHeight === "number"
+        ? body.lastValidBlockHeight
+        : null;
+
+    try {
+      if (providedBh && providedLvb && providedBh === blockhash) {
+        const conf = await conn.confirmTransaction(
+          {
+            signature,
+            blockhash: providedBh,
+            lastValidBlockHeight: providedLvb,
+          },
+          "confirmed",
+        );
+        if (conf.value.err) {
+          return jsonError(400, {
+            code: "CONFIRM_FAILED",
+            error: "Confirm failed",
+            userMessage:
+              "Deposit submitted but could not be confirmed. Please check again.",
+            traceId,
+            signature,
+          });
+        }
+      } else {
+        // fallback confirmation (still useful)
+        const conf = await conn.confirmTransaction(signature, "confirmed");
+        if (conf.value.err) {
+          return jsonError(400, {
+            code: "CONFIRM_FAILED",
+            error: "Confirm failed",
+            userMessage:
+              "Deposit submitted but could not be confirmed. Please check again.",
+            traceId,
+            signature,
+          });
+        }
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      // Don’t mark it as failed if broadcast succeeded — return signature for UI polling.
+      console.warn("[PLUS/DEPOSIT/SEND] confirm warning:", m);
+      return NextResponse.json({
+        signature,
+        sendTimeMs: Date.now() - startTime,
+        traceId,
+        warning: "CONFIRMATION_TIMEOUT",
       });
     }
 
     const sendTime = Date.now() - startTime;
     console.log(
-      `[PLUS/DEPOSIT/SEND] ${traceId} ${signature.slice(0, 8)}... ${sendTime}ms`
+      `[PLUS/DEPOSIT/SEND] ${traceId} ${signature.slice(0, 8)}... ${sendTime}ms`,
     );
 
     return NextResponse.json({ signature, sendTimeMs: sendTime, traceId });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error("[PLUS/DEPOSIT/SEND] Unhandled:", msg);
+    const m = e instanceof Error ? e.message : String(e);
+    console.error("[PLUS/DEPOSIT/SEND] Unhandled:", m);
     return jsonError(500, {
       code: "UNHANDLED",
       error: "Internal server error",
       userMessage: "Something went wrong. Please try again.",
-      details: msg,
+      details: m,
       traceId,
     });
   }

@@ -65,12 +65,6 @@ type BalanceContextValue = {
   plusReady: boolean; // Plus request resolved
   plusError?: string | null;
 
-  // ✅ Plus fallback (jlJupUSD share token)
-  plusFallbackUsd: number; // display currency
-  plusFallbackAmount: number; // jlJupUSD token amount (UI)
-  plusFallbackReady: boolean;
-  plusFallbackError?: string | null;
-
   nativeSol: number;
 
   displayCurrency: string;
@@ -116,15 +110,6 @@ type ApiBalanceResponse = {
     usdChange24h?: number;
   }[];
   nativeSol?: number;
-
-  // ✅ NEW (from your updated wallet/balance route)
-  plusFallback?: {
-    mint: string;
-    uiAmount: number;
-    decimals: number;
-    price?: number;
-    usdValue?: number;
-  } | null;
 };
 
 type FxResponse = {
@@ -162,13 +147,13 @@ function safeStr(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function clampNonNeg(n: number): number {
-  return Number.isFinite(n) && n > 0 ? n : 0;
+function usdFrom6Str(x?: string | null): number {
+  const n = typeof x === "string" ? Number(x) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n / 1e6 : 0;
 }
 
-/** Treat "we timed out / gateway" as slow upstream (eligible for fallback). */
-function isPlusSlowStatus(status: number): boolean {
-  return status === 504 || status === 502 || status === 503 || status === 429;
+function clampNonNeg(n: number): number {
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /* ───────── PROVIDER ───────── */
@@ -182,10 +167,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const ownerReady = Boolean(ownerAddress?.trim());
 
   // ✅ Booster hook is now the ONLY thing that fetches booster positions
+  // (BalanceProvider no longer calls /api/booster/positions)
   const booster = useBoosterPositions({
     ownerBase58: ownerReady ? ownerAddress : undefined,
     enabled: ownerReady,
-    refreshKey: undefined,
+    refreshKey: undefined, // optional: pass lastUpdated if you want
   });
 
   /* ───────── State ───────── */
@@ -201,19 +187,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [savingsFlexUsd, setSavingsFlexUsd] = useState(0);
   const [savingsFlexAmount, setSavingsFlexAmount] = useState(0);
 
-  // ✅ Plus (primary: Earn API)
+  // ✅ Plus
   const [savingsPlusUsd, setSavingsPlusUsd] = useState(0);
   const [savingsPlusAmount, setSavingsPlusAmount] = useState(0);
   const [plusReady, setPlusReady] = useState(false);
   const [plusError, setPlusError] = useState<string | null>(null);
-
-  // ✅ Plus fallback (from wallet/balance -> plusFallback)
-  const [plusFallbackUsd, setPlusFallbackUsd] = useState(0);
-  const [plusFallbackAmount, setPlusFallbackAmount] = useState(0);
-  const [plusFallbackReady, setPlusFallbackReady] = useState(false);
-  const [plusFallbackError, setPlusFallbackError] = useState<string | null>(
-    null,
-  );
 
   const [displayCurrency, setDisplayCurrency] = useState<string>("USD");
   const [fxRateState, setFxRateState] = useState<number>(1);
@@ -244,6 +222,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!owner?.trim()) return;
       if (!Number.isFinite(combinedBaseUsd) || combinedBaseUsd < 0) return;
 
+      // Dedupe: owner + daily + cents (prevents spam on repeated refreshes)
       const day = new Date().toISOString().slice(0, 10); // UTC day
       const cents = Math.round(combinedBaseUsd * 100) / 100;
       const key = `${owner}:${day}:${cents}`;
@@ -271,9 +250,10 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  /* ───────── Booster derived from hook ───────── */
+  /* ───────── Booster derived from hook (computed already) ───────── */
 
   const boosterPositions = useMemo<BoosterStaticPosition[]>(() => {
+    // hook rows are in USD-base numbers
     return booster.rows.map((r) => ({
       id: r.id,
       publicKey: r.publicKey,
@@ -288,12 +268,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       sizeTokens: r.sizeTokens,
       pnlUsd: r.pnlUsd,
       spotValueUsd: r.spotValueUsd,
-      takeHomeUsd: r.netUsd,
+      takeHomeUsd: r.netUsd, // ✅ use netUsd as take-home
     }));
   }, [booster.rows]);
 
   const boosterPositionsCount = boosterPositions.length;
 
+  // display currency
   const boosterTakeHomeUsd = useMemo(() => {
     const baseSum = booster.rows.reduce(
       (sum, r) => sum + (Number.isFinite(r.netUsd) ? r.netUsd : 0),
@@ -303,20 +284,21 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [booster.rows, fxRateState]);
 
   const boosterReady = useMemo(() => {
+    // when owner isn't ready, treat as resolved (no infinite spinners)
     if (!ownerReady) return true;
     return !booster.loading && booster.pricesLoading === false;
   }, [ownerReady, booster.loading, booster.pricesLoading]);
 
   const boosterError = booster.error ?? null;
 
-  /* ───────── Total (wallet+flex+plus) + booster ───────── */
+  /* ───────── Total (wallet+flex+plus) + booster (multiplied) ───────── */
 
   const totalUsd = useMemo(
     () => baseTotalUsdDisplay + boosterTakeHomeUsd,
     [baseTotalUsdDisplay, boosterTakeHomeUsd],
   );
 
-  /* ───────── Refresh ───────── */
+  /* ───────── Refresh (wallet/fx/flex/plus only) ───────── */
 
   const runRefresh = useCallback(
     async (opts?: { bypassUserLoading?: boolean }) => {
@@ -325,6 +307,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       const p = (async () => {
         if (!opts?.bypassUserLoading && userLoading) return;
 
+        // Abort any previous in-flight refresh so stale responses can't "win"
         abortRef.current?.abort();
         const ac = new AbortController();
         abortRef.current = ac;
@@ -361,11 +344,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setPlusReady(false);
           setPlusError(null);
 
-          setPlusFallbackUsd(0);
-          setPlusFallbackAmount(0);
-          setPlusFallbackReady(false);
-          setPlusFallbackError(null);
-
           setBaseTotalUsdDisplay(0);
           setTotalChange24hUsd(0);
           setTotalChange24hPct(0);
@@ -381,10 +359,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
         setPlusReady(false);
         setPlusError(null);
 
-        // Reset fallback state each refresh (we will set it from walletJson)
-        setPlusFallbackReady(false);
-        setPlusFallbackError(null);
-
         try {
           // Start requests (parallel)
           const walletP = fetch(
@@ -392,6 +366,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             { method: "GET", cache: "no-store", signal: ac.signal },
           );
 
+          // FX cache (5 min)
           const now = Date.now();
           const fxCached = fxCacheRef.current;
           const fxIsFresh = fxCached && now - fxCached.ts < 5 * 60 * 1000;
@@ -421,7 +396,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
             signal: ac.signal,
           });
 
-          // 1) WALLET first (this is where plusFallback comes from)
+          // 1) WALLET first
           const walletRes = await walletP;
           if (ac.signal.aborted) return;
 
@@ -432,15 +407,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
           const walletJson = (await walletRes.json()) as ApiBalanceResponse;
           setNativeSol(safeNumber(walletJson.nativeSol, 0));
-
-          // ✅ Extract plusFallback from wallet response (base USD)
-          const pf = walletJson.plusFallback ?? null;
-          const pfAmt = pf ? safeNumber(pf.uiAmount, 0) : 0;
-          const pfUsdBase = pf ? safeNumber(pf.usdValue, 0) : 0;
-
-          // We'll convert to display currency after FX resolves
-          // (but mark it as "ready" once wallet returns)
-          setPlusFallbackAmount(pfAmt);
 
           const mappedUsd: WalletToken[] = (walletJson.tokens ?? []).map(
             (t) => ({
@@ -532,10 +498,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
           setUsdcUsd(usdcUsdWalletBase * fxRate);
           setUsdcAmount(usdcAmtWallet);
 
-          // ✅ Now finalize fallback USD in display currency
-          setPlusFallbackUsd(pfUsdBase * fxRate);
-          setPlusFallbackReady(true);
-
           setBaseTotalUsdDisplay(walletTotalUsdBase * fxRate);
           setTotalChange24hUsd(walletChangeUsdBase * fxRate);
 
@@ -575,7 +537,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                 }
               }
 
-              // Plus (Earn) — primary
+              // Plus
               let plusBaseUi = 0;
 
               if (plusRes.ok) {
@@ -598,50 +560,27 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
                   plusBaseUi = clampNonNeg(plusBaseUi);
                 }
 
-                // ✅ Earn wins when it returns
                 setSavingsPlusAmount(plusBaseUi);
                 setSavingsPlusUsd(plusBaseUi * fxRate);
                 setPlusReady(true);
               } else {
-                // ✅ If Earn is slow/down, keep UI usable:
-                // - plusReady true so we don't spinner forever
-                // - plusError explains it's fallback
-                // - keep savingsPlus showing the fallback value if we have it
-                const status = plusRes.status;
-
-                if (isPlusSlowStatus(status) && pfUsdBase > 0) {
-                  // show fallback as the "Plus" number
-                  setSavingsPlusAmount(pfUsdBase); // base USD-like amount
-                  setSavingsPlusUsd(pfUsdBase * fxRate);
-                  setPlusError(`Earn is slow (${status}) — showing fallback`);
-                } else {
-                  setSavingsPlusAmount(0);
-                  setSavingsPlusUsd(0);
-                  setPlusError(`Plus balance fetch failed: ${status}`);
-                }
-
+                setSavingsPlusAmount(0);
+                setSavingsPlusUsd(0);
+                setPlusError(`Plus balance fetch failed: ${plusRes.status}`);
                 setPlusReady(true);
               }
 
               // Totals recompute (wallet + flex + plus) — booster stays separate via hook
-              // IMPORTANT:
-              // - If Earn failed and we used fallback, plusBaseUi should be pfUsdBase
-              const effectivePlusBaseUi = plusRes.ok
-                ? plusBaseUi
-                : isPlusSlowStatus(plusRes.status)
-                  ? pfUsdBase
-                  : 0;
-
               const combinedBaseUsd =
                 walletTotalUsdBase +
                 (hasLinkedFlexAccount ? flexUsdBase : 0) +
-                effectivePlusBaseUi;
+                plusBaseUi;
 
               const prevBaseUsd =
                 walletTotalUsdBase -
                 walletChangeUsdBase +
                 (hasLinkedFlexAccount ? flexUsdBase : 0) +
-                effectivePlusBaseUi;
+                plusBaseUi;
 
               const combinedChangePct =
                 prevBaseUsd > 0 ? walletChangeUsdBase / prevBaseUsd : 0;
@@ -658,39 +597,22 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
               // snapshot AFTER full totals (wallet+flex+plus) are known
               callBalanceSnapshot(owner, combinedBaseUsd);
-            } catch (e) {
+            } catch {
               if (ac.signal.aborted) return;
               setLastUpdated(Date.now());
-
-              // If Earn extras crashed, prefer fallback if we have it
-              if (pfUsdBase > 0) {
-                setSavingsPlusAmount(pfUsdBase);
-                setSavingsPlusUsd(pfUsdBase * fxRate);
-                setPlusError("Earn refresh error — showing fallback");
-              } else {
-                setSavingsPlusAmount(0);
-                setSavingsPlusUsd(0);
-                setPlusError("Plus refresh error");
-              }
-
+              setSavingsPlusAmount(0);
+              setSavingsPlusUsd(0);
+              setPlusError("Plus refresh error");
               setPlusReady(true);
             }
           })();
-        } catch (e) {
+        } catch {
           if (ac.signal.aborted) return;
-
           setLastUpdated(Date.now());
-
-          // wallet failed => no fallback, just mark resolved
           setSavingsPlusAmount(0);
           setSavingsPlusUsd(0);
           setPlusError("Plus refresh error");
           setPlusReady(true);
-
-          setPlusFallbackAmount(0);
-          setPlusFallbackUsd(0);
-          setPlusFallbackReady(true);
-          setPlusFallbackError("Wallet fallback unavailable");
         } finally {
           if (!ac.signal.aborted) setLoading(false);
         }
@@ -742,16 +664,12 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       plusReady,
       plusError,
 
-      plusFallbackUsd,
-      plusFallbackAmount,
-      plusFallbackReady,
-      plusFallbackError,
-
       nativeSol,
 
       displayCurrency,
       fxRate: fxRateState,
 
+      // ✅ Booster from hook
       boosterTakeHomeUsd,
       boosterPositionsCount,
       boosterPositions,
@@ -777,10 +695,6 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       savingsPlusAmount,
       plusReady,
       plusError,
-      plusFallbackUsd,
-      plusFallbackAmount,
-      plusFallbackReady,
-      plusFallbackError,
       nativeSol,
       displayCurrency,
       fxRateState,

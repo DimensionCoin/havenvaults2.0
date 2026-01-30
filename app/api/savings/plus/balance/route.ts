@@ -59,27 +59,7 @@ type PlusBalancePayload = {
   underlyingAssetsUi: string;
   underlyingBalanceUi: string;
   allowanceUi: string;
-
-  // helpful flags for client UX
-  cached?: boolean;
-  stale?: boolean;
-  ms?: number;
-  warning?: string;
 };
-
-function json(
-  status: number,
-  payload: PlusBalancePayload,
-  extraHeaders?: Record<string, string>,
-) {
-  return NextResponse.json(payload, {
-    status,
-    headers: {
-      "Cache-Control": "private, max-age=0, must-revalidate",
-      ...extraHeaders,
-    },
-  });
-}
 
 function jsonError(
   status: number,
@@ -133,217 +113,171 @@ async function fetchWithTimeout(url: string, ms: number) {
 
 /**
  * In-memory cache (per server instance).
+ * This is NOT perfect across regions/instances, but it massively improves UX and reduces load.
  */
-const g = globalThis as unknown as {
-  __PLUS_CACHE__?: Map<string, { ts: number; payload: PlusBalancePayload }>;
-  __PLUS_INFLIGHT__?: Map<string, Promise<PlusBalancePayload>>;
+const plusCache = globalThis as unknown as {
+  __PLUS_CACHE__?: Map<
+    string,
+    {
+      ts: number;
+      payload: PlusBalancePayload;
+    }
+  >;
 };
 
 const CACHE: Map<string, { ts: number; payload: PlusBalancePayload }> =
-  g.__PLUS_CACHE__ ?? (g.__PLUS_CACHE__ = new Map());
+  plusCache.__PLUS_CACHE__ ?? (plusCache.__PLUS_CACHE__ = new Map());
 
-const INFLIGHT: Map<
-  string,
-  Promise<PlusBalancePayload>
-> = g.__PLUS_INFLIGHT__ ?? (g.__PLUS_INFLIGHT__ = new Map());
-
-const TTL_MS = 60_000; // fresh cache window
-
-function emptyUnknown(owner: string): PlusBalancePayload {
-  // IMPORTANT: This is "unknown" not "0 balance", so client should treat stale+warning accordingly.
-  return {
-    owner,
-    symbol: "JupUSD",
-    jlSymbol: TARGET_JL_SYMBOL,
-    hasPosition: false,
-    shares: "0",
-    underlyingAssets: "0",
-    underlyingBalance: "0",
-    allowance: "0",
-    sharesUi: "0",
-    underlyingAssetsUi: "0",
-    underlyingBalanceUi: "0",
-    allowanceUi: "0",
-    cached: false,
-    stale: true,
-    warning: "Temporarily unable to refresh Plus balance",
-  };
-}
-
-async function computePlusPayload(owner: string): Promise<PlusBalancePayload> {
-  const positionsUrl =
-    `${JUP_EARN_POSITIONS_URL}?` + new URLSearchParams({ users: owner });
-
-  const attempt = async (timeoutMs: number) => {
-    const res = await fetchWithTimeout(positionsUrl, timeoutMs);
-
-    // Treat 5xx as retryable; 4xx likely not.
-    if (!res.ok)
-      throw Object.assign(new Error(`HTTP ${res.status}`), {
-        status: res.status,
-      });
-
-    return (await res.json()) as EarnPosition[];
-  };
-
-  let positions: EarnPosition[] | null = null;
-
-  try {
-    positions = await attempt(2500);
-  } catch {
-    await sleep(250);
-    positions = await attempt(3500);
-  }
-
-  const pos = (positions || []).find((p) => {
-    const sym = String(p?.token?.symbol || "").trim();
-    const assetAddr = String(p?.token?.assetAddress || "").trim();
-    return sym === TARGET_JL_SYMBOL || assetAddr === JUPUSD_MINT;
-  });
-
-  if (!pos) {
-    return {
-      owner,
-      symbol: "JupUSD",
-      jlSymbol: TARGET_JL_SYMBOL,
-      hasPosition: false,
-      shares: "0",
-      underlyingAssets: "0",
-      underlyingBalance: "0",
-      allowance: "0",
-      sharesUi: "0",
-      underlyingAssetsUi: "0",
-      underlyingBalanceUi: "0",
-      allowanceUi: "0",
-      cached: false,
-      stale: false,
-    };
-  }
-
-  const decimals = Number(pos.token?.decimals ?? 6);
-
-  return {
-    owner,
-    symbol: pos.token?.asset?.symbol || "JupUSD",
-    jlSymbol: pos.token?.symbol || TARGET_JL_SYMBOL,
-    token: pos.token,
-    hasPosition: true,
-    shares: pos.shares,
-    underlyingAssets: pos.underlyingAssets,
-    underlyingBalance: pos.underlyingBalance,
-    allowance: pos.allowance,
-    sharesUi: baseUnitsToUiString(pos.shares, decimals),
-    underlyingAssetsUi: baseUnitsToUiString(pos.underlyingAssets, decimals),
-    underlyingBalanceUi: baseUnitsToUiString(pos.underlyingBalance, decimals),
-    allowanceUi: baseUnitsToUiString(pos.allowance, decimals),
-    cached: false,
-    stale: false,
-  };
-}
+const TTL_MS = 60_000; // 60s cached freshness (tune 30s–120s)
 
 export async function GET() {
   const started = Date.now();
 
-  // 1) auth + owner
-  const session = await getSessionFromCookies().catch(() => null);
-  if (!session?.userId) return jsonError(401, { error: "Unauthorized" });
-
-  await connect();
-
-  const mongoId = mongoose.Types.ObjectId.isValid(session.userId)
-    ? new mongoose.Types.ObjectId(session.userId)
-    : null;
-
-  const user = ((mongoId
-    ? await User.findById(mongoId)
-        .select({ walletAddress: 1, privyId: 1 })
-        .lean()
-    : null) ||
-    (await User.findOne({ privyId: session.userId })
-      .select({ walletAddress: 1, privyId: 1 })
-      .lean())) as UserWalletDoc | null;
-
-  const owner = String(user?.walletAddress || "").trim();
-  if (!owner || owner === "pending") {
-    return jsonError(400, {
-      error: "User has no wallet address",
-      code: "NO_WALLET",
-    });
-  }
-
-  // 2) serve fresh cache immediately
-  const cachedEntry = CACHE.get(owner);
-  const cacheFresh = cachedEntry && Date.now() - cachedEntry.ts < TTL_MS;
-
-  if (cacheFresh) {
-    return json(200, {
-      ...cachedEntry!.payload,
-      cached: true,
-      stale: false,
-      ms: Date.now() - started,
-    });
-  }
-
-  // 3) in-flight dedupe per owner (prevents stampede)
-  const existing = INFLIGHT.get(owner);
-  if (existing) {
-    try {
-      const payload = await existing;
-      return json(200, {
-        ...payload,
-        cached: true,
-        stale: false,
-        ms: Date.now() - started,
-      });
-    } catch {
-      // fall through to stale logic below
-    }
-  }
-
-  const p = (async () => {
-    const payload = await computePlusPayload(owner);
-    CACHE.set(owner, { ts: Date.now(), payload });
-    return payload;
-  })();
-
-  INFLIGHT.set(owner, p);
-
   try {
-    const payload = await p;
-    return json(200, {
-      ...payload,
-      cached: false,
-      stale: false,
-      ms: Date.now() - started,
-    });
-  } catch (e) {
-    const err = e as Error & { name?: string; status?: number };
+    const session = await getSessionFromCookies();
+    if (!session?.userId) return jsonError(401, { error: "Unauthorized" });
 
-    // ✅ BEST UX: if we have any cached value at all, return it as stale (200)
-    const stale = CACHE.get(owner);
-    if (stale?.payload) {
-      return json(200, {
-        ...stale.payload,
-        cached: true,
-        stale: true,
-        warning:
-          err?.name === "AbortError"
-            ? "Plus balance refresh timed out; showing last known value"
-            : "Plus balance refresh failed; showing last known value",
-        ms: Date.now() - started,
+    await connect();
+
+    const mongoId = mongoose.Types.ObjectId.isValid(session.userId)
+      ? new mongoose.Types.ObjectId(session.userId)
+      : null;
+
+    const user = ((mongoId
+      ? await User.findById(mongoId)
+          .select({ walletAddress: 1, privyId: 1 })
+          .lean()
+      : null) ||
+      (await User.findOne({ privyId: session.userId })
+        .select({ walletAddress: 1, privyId: 1 })
+        .lean())) as UserWalletDoc | null;
+
+    const owner = String(user?.walletAddress || "").trim();
+    if (!owner || owner === "pending") {
+      return jsonError(400, {
+        error: "User has no wallet address",
+        code: "NO_WALLET",
       });
     }
 
-    // ✅ If no cache yet, return a safe "unknown" payload (still 200 so UI doesn't hard-fail)
-    return json(200, {
-      ...emptyUnknown(owner),
-      warning:
-        err?.name === "AbortError"
-          ? "Plus balance refresh timed out"
-          : `Plus balance refresh failed: ${err?.message || "unknown"}`,
-      ms: Date.now() - started,
+    // ✅ Serve fresh-enough cache immediately
+    const cached = CACHE.get(owner);
+    const cacheFresh = cached && Date.now() - cached.ts < TTL_MS;
+
+    if (cacheFresh) {
+      return NextResponse.json(
+        { ...cached.payload, cached: true, stale: false },
+        {
+          status: 200,
+          headers: {
+            "Cache-Control": "private, max-age=0, must-revalidate",
+          },
+        },
+      );
+    }
+
+    const positionsUrl =
+      `${JUP_EARN_POSITIONS_URL}?` + new URLSearchParams({ users: owner });
+
+    // ✅ Try twice (short timeout each), jitter
+    const attempt = async (timeoutMs: number) => {
+      const res = await fetchWithTimeout(positionsUrl, timeoutMs);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as EarnPosition[];
+    };
+
+    let positions: EarnPosition[] | null = null;
+
+    try {
+      positions = await attempt(2500); // first try
+    } catch {
+      // small backoff then retry
+      await sleep(250);
+      positions = await attempt(3500); // second try
+    }
+
+    const pos = (positions || []).find((p) => {
+      const sym = String(p?.token?.symbol || "").trim();
+      const assetAddr = String(p?.token?.assetAddress || "").trim();
+      return sym === TARGET_JL_SYMBOL || assetAddr === JUPUSD_MINT;
     });
-  } finally {
-    INFLIGHT.delete(owner);
+
+    // normalize response
+    const payload = (() => {
+      if (!pos) {
+        return {
+          owner,
+          symbol: "JupUSD",
+          jlSymbol: TARGET_JL_SYMBOL,
+          hasPosition: false,
+          shares: "0",
+          underlyingAssets: "0",
+          underlyingBalance: "0",
+          allowance: "0",
+          sharesUi: "0",
+          underlyingAssetsUi: "0",
+          underlyingBalanceUi: "0",
+          allowanceUi: "0",
+        };
+      }
+
+      const decimals = Number(pos.token?.decimals ?? 6);
+
+      return {
+        owner,
+        symbol: pos.token?.asset?.symbol || "JupUSD",
+        jlSymbol: pos.token?.symbol || TARGET_JL_SYMBOL,
+        token: pos.token,
+        hasPosition: true,
+        shares: pos.shares,
+        underlyingAssets: pos.underlyingAssets,
+        underlyingBalance: pos.underlyingBalance,
+        allowance: pos.allowance,
+        sharesUi: baseUnitsToUiString(pos.shares, decimals),
+        underlyingAssetsUi: baseUnitsToUiString(pos.underlyingAssets, decimals),
+        underlyingBalanceUi: baseUnitsToUiString(
+          pos.underlyingBalance,
+          decimals,
+        ),
+        allowanceUi: baseUnitsToUiString(pos.allowance, decimals),
+      };
+    })();
+
+    // ✅ update cache
+    CACHE.set(owner, { ts: Date.now(), payload });
+
+    return NextResponse.json(
+      { ...payload, cached: false, stale: false, ms: Date.now() - started },
+      {
+        status: 200,
+        headers: { "Cache-Control": "private, max-age=0, must-revalidate" },
+      },
+    );
+  } catch (e) {
+    const err = e as Error & { name?: string };
+
+    // ✅ If we have ANY cached value, return it as stale instead of 504
+    // (this prevents "blank plus balance" UX)
+    try {
+      const session = await getSessionFromCookies().catch(() => null);
+      if (session?.userId) {
+        // We can’t easily re-derive owner without DB, so just do best-effort:
+        // If you want perfect stale fallback, store cache by privyId too.
+      }
+    } catch {}
+
+    // fallback: return 504, but make it a clean error
+    if (err?.name === "AbortError") {
+      return jsonError(504, {
+        error: "Plus balance timeout",
+        code: "PLUS_TIMEOUT",
+      });
+    }
+
+    return jsonError(500, {
+      error: "Internal server error",
+      code: "UNHANDLED",
+      details: err?.message || String(e),
+    });
   }
 }

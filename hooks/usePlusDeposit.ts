@@ -11,9 +11,7 @@ declare global {
     Buffer?: typeof Buffer;
   }
 }
-if (typeof window !== "undefined") {
-  window.Buffer = window.Buffer || Buffer;
-}
+if (typeof window !== "undefined") window.Buffer = window.Buffer || Buffer;
 
 /* ───────── EXPORTED TYPES ───────── */
 
@@ -27,11 +25,8 @@ export type PlusDepositStatus =
   | "error";
 
 export type PlusDepositParams = {
-  /** Amount user enters in UI, in USD terms (USDC). */
-  amountDisplay: number;
-  /** Optional: enforce the connected wallet matches this owner58. */
+  amountDisplay: number; // USDC terms
   owner58?: string;
-  /** Optional slippage for the USDC→JupUSD swap (bps). Default 50. */
   slippageBps?: number;
 };
 
@@ -59,6 +54,7 @@ export type PlusDepositError = {
   retryable?: boolean;
   traceId?: string;
   logs?: string[];
+  raw?: unknown;
 };
 
 /* ───────── INTERNAL TYPES ───────── */
@@ -82,7 +78,6 @@ type BuildResponse = {
   jupUsdDepositUnits?: string;
   slippageBps?: number;
 
-  // optional debug
   payer?: string;
   quote?: {
     inAmount?: string;
@@ -96,6 +91,7 @@ type SendResponse = {
   signature: string;
   sendTimeMs?: number;
   traceId?: string;
+  warning?: string;
 };
 
 type ApiErrorShape = {
@@ -108,8 +104,6 @@ type ApiErrorShape = {
   logs?: string[];
   details?: string;
 };
-
-/* ───────── CONSTANTS ───────── */
 
 const BUILD_URL = "/api/savings/plus/deposit/build";
 const SEND_URL = "/api/savings/plus/deposit/send";
@@ -141,7 +135,6 @@ function isBlockhashError(e: unknown): boolean {
   return msg.includes("blockhash") || msg.includes("expired");
 }
 
-/** Prefer userMessage/code/traceId/logs if backend returns them. */
 function pickApiError(raw: unknown): ApiErrorShape | null {
   if (!raw) return null;
   if (isJsonObject(raw)) return raw as ApiErrorShape;
@@ -149,31 +142,27 @@ function pickApiError(raw: unknown): ApiErrorShape | null {
 }
 
 function pickErrorMessage(e: unknown): string {
-  const err = e as any;
+  const err = e as { message?: unknown; raw?: unknown };
 
-  // Error.message
   if (typeof err?.message === "string" && err.message.trim())
     return err.message;
 
-  // Attached raw string
   if (typeof err?.raw === "string" && err.raw.trim()) return err.raw;
 
-  // Attached raw json
   if (isJsonObject(err?.raw)) {
-    const r = err.raw as any;
-    if (typeof r?.userMessage === "string" && r.userMessage.trim())
+    const r = err.raw as ApiErrorShape;
+    if (typeof r.userMessage === "string" && r.userMessage.trim())
       return r.userMessage;
-    if (typeof r?.error === "string" && r.error.trim()) return r.error;
-    if (typeof r?.message === "string" && r.message.trim()) return r.message;
+    if (typeof r.error === "string" && r.error.trim()) return r.error;
+    if (typeof r.message === "string" && r.message.trim()) return r.message;
   }
 
-  // Plain object
   if (isJsonObject(err)) {
-    const o = err as any;
-    if (typeof o?.userMessage === "string" && o.userMessage.trim())
+    const o = err as ApiErrorShape;
+    if (typeof o.userMessage === "string" && o.userMessage.trim())
       return o.userMessage;
-    if (typeof o?.error === "string" && o.error.trim()) return o.error;
-    if (typeof o?.message === "string" && o.message.trim()) return o.message;
+    if (typeof o.error === "string" && o.error.trim()) return o.error;
+    if (typeof o.message === "string" && o.message.trim()) return o.message;
   }
 
   return "Deposit failed";
@@ -182,7 +171,7 @@ function pickErrorMessage(e: unknown): string {
 async function postJSON<T>(
   url: string,
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
@@ -230,9 +219,8 @@ async function postJSON<T>(
     e.code = d?.code;
     e.stage = d?.stage;
     e.traceId = d?.traceId;
-    e.logs = Array.isArray(d?.logs) ? d!.logs : undefined;
+    e.logs = Array.isArray(d?.logs) ? d.logs : undefined;
 
-    // heuristic
     e.retryable =
       Boolean(d?.code && String(d.code).toLowerCase().includes("blockhash")) ||
       String(msg).toLowerCase().includes("blockhash");
@@ -290,7 +278,6 @@ export function usePlusDeposit() {
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // FX cache (5 min TTL) — only for metadata; deposits treat amountDisplay as USD/USDC.
   const fxCacheRef = useRef<{
     rate: number;
     target: string;
@@ -304,8 +291,6 @@ export function usePlusDeposit() {
     return typeof addr === "string" && addr.trim() ? addr.trim() : null;
   }, [selectedWallet]);
 
-  // ───────── FX (optional metadata) ─────────
-
   const getFx = useCallback(async (signal?: AbortSignal) => {
     const cached = fxCacheRef.current;
     const now = Date.now();
@@ -317,7 +302,6 @@ export function usePlusDeposit() {
       const target = String(raw.target || "USD")
         .toUpperCase()
         .trim();
-
       if (!Number.isFinite(rate) || rate <= 0)
         throw new Error("Invalid FX rate");
       const next = { rate, target, at: now };
@@ -330,26 +314,19 @@ export function usePlusDeposit() {
     }
   }, []);
 
-  // ───────── Sign ─────────
-
   const signWithWallet = useCallback(
     async (txBytes: Uint8Array): Promise<Uint8Array> => {
       if (!selectedWallet) throw new Error("No wallet connected");
-
-      // Privy expects tx bytes; returns signed bytes
       const { signedTransaction } = await signTransaction({
         wallet: selectedWallet as Parameters<
           typeof signTransaction
         >[0]["wallet"],
         transaction: txBytes,
       });
-
       return signedTransaction;
     },
-    [selectedWallet, signTransaction]
+    [selectedWallet, signTransaction],
   );
-
-  // ───────── Main deposit ─────────
 
   const deposit = useCallback(
     async (params: PlusDepositParams): Promise<PlusDepositResult> => {
@@ -379,7 +356,6 @@ export function usePlusDeposit() {
         throw new Error(err.message);
       }
 
-      // Optional owner validation
       if (params.owner58) {
         const expected = new PublicKey(params.owner58).toBase58();
         if (connectedWallet58 !== expected) {
@@ -397,16 +373,13 @@ export function usePlusDeposit() {
       abortRef.current = new AbortController();
       const signal = abortRef.current.signal;
 
-      // reset per run
       setStatus("idle");
       setError(null);
       setSignature(null);
 
       try {
-        /* ══════════ PHASE 1: BUILD ══════════ */
         setStatus("building");
 
-        // Treat amountDisplay as USD/USDC UI amount. Keep 6dp.
         const amountBase = floor6(amountDisplay);
         if (!Number.isFinite(amountBase) || amountBase <= 0) {
           throw new Error("Amount too small. Increase the deposit amount.");
@@ -420,18 +393,16 @@ export function usePlusDeposit() {
 
         let buildResp!: BuildResponse;
 
-        // retry once on blockhash-ish failures (rare on build, but safe)
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             buildResp = await postJSON<BuildResponse>(
               BUILD_URL,
               {
                 fromOwnerBase58: connectedWallet58,
-                // send as string to avoid any float serialization surprises
                 amountUi: amountBase.toFixed(6),
                 slippageBps,
               },
-              signal
+              signal,
             );
             break;
           } catch (e) {
@@ -443,11 +414,10 @@ export function usePlusDeposit() {
         if (!buildResp?.transaction)
           throw new Error("Failed to build deposit transaction");
 
-        /* ══════════ PHASE 2: SIGN ══════════ */
         setStatus("signing");
 
         const unsignedBytes = new Uint8Array(
-          Buffer.from(buildResp.transaction, "base64")
+          Buffer.from(buildResp.transaction, "base64"),
         );
 
         let signedBytes: Uint8Array;
@@ -458,24 +428,34 @@ export function usePlusDeposit() {
           throw e;
         }
 
-        /* ══════════ PHASE 3: SEND ══════════ */
         setStatus("sending");
 
         const signedTxB64 = Buffer.from(signedBytes).toString("base64");
 
         const sendResp = await postJSON<SendResponse>(
           SEND_URL,
-          { transaction: signedTxB64 },
-          signal
+          {
+            transaction: signedTxB64,
+            expectedUserBase58: connectedWallet58, // ✅ server verifies required signer + signature
+            recentBlockhash: buildResp.recentBlockhash,
+            lastValidBlockHeight: buildResp.lastValidBlockHeight,
+          },
+          signal,
         );
 
         if (!sendResp?.signature)
           throw new Error("No signature returned from send");
         setSignature(sendResp.signature);
 
-        /* ══════════ PHASE 4: CONFIRM (UI-only) ══════════ */
         setStatus("confirming");
-        await new Promise((r) => setTimeout(r, 800));
+
+        // If server broadcasted but confirm timed out, treat as success and let UI poll/explorer.
+        if (sendResp.warning === "CONFIRMATION_TIMEOUT") {
+          await new Promise((r) => setTimeout(r, 300));
+        } else {
+          await new Promise((r) => setTimeout(r, 600));
+        }
+
         setStatus("done");
 
         const totalTime = Date.now() - startTime;
@@ -507,24 +487,28 @@ export function usePlusDeposit() {
         };
 
         const api = pickApiError(err.raw);
-
         const plusErr: PlusDepositError = {
           message: api?.userMessage || pickErrorMessage(e),
           code: api?.code || err.code,
           stage: api?.stage || err.stage,
           traceId: api?.traceId || err.traceId,
-          logs: api?.logs || err.logs,
+          logs: (api?.logs || err.logs) as string[] | undefined,
           retryable: Boolean(err.retryable || isBlockhashError(e)),
+          raw: err.raw,
         };
 
         setError(plusErr);
         setStatus("error");
 
         console.error("[PlusDeposit] Failed:", {
-          plusErr,
-          status: err.status,
+          code: plusErr.code,
+          stage: plusErr.stage,
+          traceId: plusErr.traceId,
           url: err.url,
+          status: err.status,
+          message: plusErr.message,
           raw: err.raw,
+          logsPreview: (plusErr.logs ?? []).slice(-25),
         });
 
         throw e;
@@ -533,10 +517,8 @@ export function usePlusDeposit() {
         abortRef.current = null;
       }
     },
-    [connectedWallet58, getFx, selectedWallet, signWithWallet]
+    [connectedWallet58, getFx, selectedWallet, signWithWallet],
   );
-
-  // ───────── Reset ─────────
 
   const reset = useCallback(() => {
     if (abortRef.current) {
@@ -549,8 +531,6 @@ export function usePlusDeposit() {
     setSignature(null);
   }, []);
 
-  // ───────── Return ─────────
-
   return useMemo(
     () => ({
       deposit,
@@ -559,14 +539,12 @@ export function usePlusDeposit() {
       error,
       signature,
       connectedWallet58,
-
-      // convenience
       isBusy:
         inFlightRef.current || !["idle", "done", "error"].includes(status),
       isIdle: status === "idle",
       isDone: status === "done",
       isError: status === "error",
     }),
-    [deposit, reset, status, error, signature, connectedWallet58]
+    [deposit, reset, status, error, signature, connectedWallet58],
   );
 }

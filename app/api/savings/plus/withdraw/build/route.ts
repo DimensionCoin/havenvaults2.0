@@ -21,7 +21,9 @@ import BN from "bn.js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ───────── Types ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TYPES
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 interface RequestBody {
   fromOwnerBase58?: string;
@@ -31,6 +33,7 @@ interface RequestBody {
   amountUsd?: string | number;
   amountDisplay?: string | number;
   slippageBps?: number;
+  withdrawAll?: boolean;
 }
 
 interface JupiterQuoteResponse {
@@ -92,7 +95,18 @@ interface EarnPosition {
   underlyingAssets: string;
 }
 
-/* ───────── ENV ───────── */
+interface EarnToken {
+  address: string;
+  asset: string;
+  decimals: string | number;
+  totalAssets: string;
+  totalSupply: string;
+  supplyRate: string;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ENV
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function required(name: string): string {
   const v = process.env[name];
@@ -102,41 +116,54 @@ function required(name: string): string {
 
 const RPC = required("NEXT_PUBLIC_SOLANA_RPC");
 const JUP_API_KEY = required("JUP_API_KEY");
+
 const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
 
-// Treasury for fees (same as flex)
 const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");
 const TREASURY_OWNER = new PublicKey(TREASURY_OWNER_STR);
 
-/* ───────── Jupiter endpoints ───────── */
+const IS_PROD = process.env.NODE_ENV === "production";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   JUPITER ENDPOINTS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const JUP_QUOTE = "https://api.jup.ag/swap/v1/quote";
 const JUP_SWAP_IXS = "https://api.jup.ag/swap/v1/swap-instructions";
+
 const JUP_EARN_WITHDRAW_IX =
   "https://api.jup.ag/lend/v1/earn/withdraw-instructions";
+const JUP_EARN_REDEEM_IX =
+  "https://api.jup.ag/lend/v1/earn/redeem-instructions";
+
 const JUP_EARN_POSITIONS = "https://api.jup.ag/lend/v1/earn/positions";
+const JUP_EARN_TOKENS = "https://api.jup.ag/lend/v1/earn/tokens";
 
-/* ───────── Constants ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-// Mainnet USDC - output token
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-// JupUSD mint - what we withdraw from the vault
 const JUPUSD_MINT = new PublicKey(
   "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",
 );
 
-// USDC decimals
 const USDC_DECIMALS = 6;
-
-// v0 raw tx size limit
 const MAX_TX_RAW_BYTES = 1232;
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
 
-/* ───────── Connection + caches ───────── */
+// API timeouts and retry config
+const API_TIMEOUT_MS = 8000;
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF_BASE_MS = 150;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONNECTION + CACHES
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 let _conn: Connection | null = null;
 function getConnection(): Connection {
@@ -157,20 +184,15 @@ const altCache = new Map<
 >();
 const ALT_CACHE_TTL = 5 * 60 * 1000;
 
-/* ───────── Fee Helpers (matching flex) ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   FEE HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-/**
- * Get withdraw fee rate from env (same env var as flex for consistency)
- * Returns fee as a decimal (e.g., 0.001 = 0.1%)
- */
 function getWithdrawFeeRate(): number {
   const raw = Number(process.env.NEXT_PUBLIC_FLEX_WITHDRAW_FEE_UI ?? "0");
   return Number.isFinite(raw) && raw >= 0 ? raw : 0;
 }
 
-/**
- * Calculate fee from amount using parts-per-million for precision
- */
 function feeFromAmountBase(amountBase: BN, feeRate: number): BN {
   if (!feeRate) return new BN(0);
   const ppm = Math.max(0, Math.round(feeRate * 1_000_000));
@@ -178,9 +200,6 @@ function feeFromAmountBase(amountBase: BN, feeRate: number): BN {
   return amountBase.muln(ppm).divn(1_000_000);
 }
 
-/**
- * Convert BN to UI string with decimals
- */
 function bnToUiString(amountBn: BN, decimals: number): string {
   const raw = amountBn.toString(10);
   if (decimals === 0) return raw;
@@ -192,9 +211,6 @@ function bnToUiString(amountBn: BN, decimals: number): string {
   return frac.length ? `${whole}.${frac}` : whole;
 }
 
-/**
- * Build TransferChecked instruction for fee transfer (no BigInt, uses BN)
- */
 function makeTransferCheckedIx(opts: {
   tokenProgramId: PublicKey;
   source: PublicKey;
@@ -214,9 +230,8 @@ function makeTransferCheckedIx(opts: {
     decimals,
   } = opts;
 
-  // SPL Token instruction enum: TransferChecked = 12
   const data = Buffer.concat([
-    Buffer.from([12]),
+    Buffer.from([12]), // TransferChecked = 12
     amountBase.toArrayLike(Buffer, "le", 8),
     Buffer.from([decimals & 0xff]),
   ]);
@@ -233,7 +248,26 @@ function makeTransferCheckedIx(opts: {
   });
 }
 
-/* ───────── Errors ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   DYNAMIC SLIPPAGE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function calculateSlippage(amountUnits: bigint, userSlippage?: number): number {
+  if (userSlippage !== undefined && Number.isFinite(userSlippage)) {
+    return Math.max(10, Math.min(10_000, userSlippage));
+  }
+
+  const amountUsd = Number(amountUnits) / 1e6;
+  if (amountUsd < 100) return 50;
+  if (amountUsd < 1_000) return 75;
+  if (amountUsd < 10_000) return 100;
+  if (amountUsd < 100_000) return 150;
+  return 200;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ERROR HELPER
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function jsonError(
   status: number,
@@ -252,12 +286,16 @@ function jsonError(
     status,
     payload.code,
     payload.error,
-    payload.debug ? { debug: payload.debug } : "",
+    !IS_PROD && payload.debug ? { debug: payload.debug } : "",
   );
-  return NextResponse.json(payload, { status });
+
+  const responsePayload = IS_PROD ? { ...payload, debug: undefined } : payload;
+  return NextResponse.json(responsePayload, { status });
 }
 
-/* ───────── Token helpers ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOKEN HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 async function getTokenProgramId(
   conn: Connection,
@@ -292,7 +330,9 @@ async function getDecimals(conn: Connection, mint: PublicKey): Promise<number> {
   return decimals;
 }
 
-/* ───────── ALT helper ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ALT HELPER
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 async function getAltCached(
   conn: Connection,
@@ -308,20 +348,71 @@ async function getAltCached(
   return value;
 }
 
-/* ───────── Jupiter fetch ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   JUPITER FETCH WITH TIMEOUT AND RETRY
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-async function jupFetch(url: string, init?: RequestInit) {
-  return fetch(url, {
-    cache: "no-store",
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      "x-api-key": JUP_API_KEY,
-    },
-  });
+async function jupFetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  maxRetries = MAX_RETRIES,
+  timeoutMs = API_TIMEOUT_MS,
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        cache: "no-store",
+        ...init,
+        signal: controller.signal,
+        headers: {
+          ...(init?.headers || {}),
+          "x-api-key": JUP_API_KEY,
+        },
+      });
+
+      clearTimeout(timeout);
+
+      if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+        if (attempt === maxRetries) return res;
+
+        const backoff = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+        console.warn(
+          `[jupFetch] ${res.status} on attempt ${attempt}/${maxRetries}, retrying in ${backoff}ms...`,
+        );
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+
+      return res;
+    } catch (e) {
+      clearTimeout(timeout);
+      lastError = e as Error;
+
+      if ((e as Error).name === "AbortError") {
+        throw new Error(`Jupiter API timeout after ${timeoutMs}ms`);
+      }
+
+      if (attempt === maxRetries) throw lastError;
+
+      const backoff = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(
+        `[jupFetch] Error on attempt ${attempt}/${maxRetries}: ${(e as Error).message}, retrying in ${backoff}ms...`,
+      );
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+
+  throw lastError ?? new Error("Jupiter fetch failed");
 }
 
-/* ───────── Amount parsing ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   AMOUNT PARSING
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function parseUiAmountToUnits(amountUi: string, decimals: number): bigint {
   const s = (amountUi ?? "").trim().replace(/,/g, "");
@@ -351,7 +442,9 @@ function readAmountUi(body: RequestBody | null): string {
   return "";
 }
 
-/* ───────── Instruction decoding ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   INSTRUCTION DECODING
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function safePreview(v: unknown) {
   try {
@@ -430,8 +523,9 @@ function toIx(obj: unknown): TransactionInstruction {
                 ? k.key
                 : null;
 
-    if (!pubkey)
+    if (!pubkey) {
       throw new Error("Invalid instruction object (account missing pubkey)");
+    }
 
     const isSigner =
       typeof k === "string"
@@ -476,15 +570,19 @@ function safeToIx(
     console.error(
       `[PLUS/WITHDRAW/BUILD] ${traceId} bad ix in ${label}[${index}]: ${msg}`,
     );
-    console.error(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} ${label}[${index}] preview:`,
-      safePreview(obj),
-    );
+    if (!IS_PROD) {
+      console.error(
+        `[PLUS/WITHDRAW/BUILD] ${traceId} ${label}[${index}] preview:`,
+        safePreview(obj),
+      );
+    }
     throw e;
   }
 }
 
-/* ───────── Sponsored ATA rewrite ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   SPONSORED ATA REWRITE
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 function collectAndSponsorAtas(
   allIxs: TransactionInstruction[],
@@ -520,12 +618,7 @@ function collectAndSponsorAtas(
     }
 
     const dedupeKey = ata.toBase58();
-    if (seenAtas.has(dedupeKey)) {
-      console.log(
-        `[PLUS/WITHDRAW/BUILD] ${traceId} skipping duplicate ATA: ${dedupeKey.slice(0, 8)}...`,
-      );
-      continue;
-    }
+    if (seenAtas.has(dedupeKey)) continue;
     seenAtas.add(dedupeKey);
 
     sponsored.push(
@@ -540,28 +633,124 @@ function collectAndSponsorAtas(
   }
 
   console.log(
-    `[PLUS/WITHDRAW/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other instructions`,
+    `[PLUS/WITHDRAW/BUILD] ${traceId} ATA summary: ${sponsored.length} sponsored, ${other.length} other`,
   );
 
   return { sponsoredAtaIxs: sponsored, otherIxs: other };
 }
 
-/* ───────── ROUTE ───────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   QUOTE WITH FALLBACK
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function buildQuoteUrl(opts: {
+  amount: string;
+  slippageBps: number;
+  maxAccounts?: number;
+  onlyDirectRoutes?: boolean;
+}) {
+  const params = new URLSearchParams({
+    inputMint: JUPUSD_MINT.toBase58(),
+    outputMint: USDC_MINT.toBase58(),
+    amount: opts.amount,
+    slippageBps: String(opts.slippageBps),
+  });
+
+  // Only set when provided (avoids brittle 400s if API changes)
+  if (typeof opts.maxAccounts === "number") {
+    params.set("maxAccounts", String(opts.maxAccounts));
+  }
+  if (typeof opts.onlyDirectRoutes === "boolean") {
+    params.set("onlyDirectRoutes", String(opts.onlyDirectRoutes));
+  }
+
+  return `${JUP_QUOTE}?${params.toString()}`;
+}
+
+async function getQuoteWithFallback(opts: {
+  traceId: string;
+  amount: string;
+  slippageBps: number;
+}) {
+  const { traceId, amount, slippageBps } = opts;
+
+  const attempts = [
+    { maxAccounts: 8, onlyDirectRoutes: true },
+    { maxAccounts: 12, onlyDirectRoutes: true },
+    { maxAccounts: 16, onlyDirectRoutes: false },
+    { maxAccounts: 24, onlyDirectRoutes: false },
+  ] as const;
+
+  let lastStatus = 0;
+  let lastBody = "";
+
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    const url = buildQuoteUrl({
+      amount,
+      slippageBps,
+      maxAccounts: a.maxAccounts,
+      onlyDirectRoutes: a.onlyDirectRoutes,
+    });
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} quote attempt ${i + 1}/${attempts.length}: maxAccounts=${a.maxAccounts} onlyDirectRoutes=${a.onlyDirectRoutes}`,
+    );
+
+    const res = await jupFetchWithRetry(url);
+
+    if (res.ok) return res;
+
+    lastStatus = res.status;
+    lastBody = await res.text().catch(() => "");
+
+    // If it's not a route/param type failure, stop falling back.
+    if (res.status !== 400 && res.status !== 404) {
+      return res;
+    }
+
+    console.warn(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} quote attempt ${i + 1} failed: ${res.status} body=${lastBody.slice(0, 200)}`,
+    );
+  }
+
+  // Throw so caller can respond with a useful error.
+  const err = new Error(
+    `Jupiter quote failed after fallbacks (lastStatus=${lastStatus})`,
+  ) as Error & { status?: number; body?: string };
+  err.status = lastStatus || 400;
+  err.body = lastBody;
+  throw err;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ROUTE HANDLER
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export async function POST(req: Request) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
 
+  const metrics = {
+    parseMs: 0,
+    positionCheckMs: 0,
+    withdrawIxMs: 0,
+    quoteMs: 0,
+    swapIxMs: 0,
+    compileMs: 0,
+    totalMs: 0,
+  };
+
   try {
+    /* ───────── Parse body ───────── */
     stage = "parseBody";
+    const parseStart = Date.now();
 
     const body = (await req.json().catch(() => null)) as RequestBody | null;
 
     const fromOwnerBase58 = body?.fromOwnerBase58?.trim() ?? "";
-    const slippageBps = Number.isFinite(body?.slippageBps)
-      ? Math.max(1, Math.min(10_000, Number(body?.slippageBps)))
-      : 50;
+    const withdrawAll = body?.withdrawAll === true;
 
     if (!fromOwnerBase58) {
       return jsonError(400, {
@@ -577,11 +766,14 @@ export async function POST(req: Request) {
     const userOwner = new PublicKey(fromOwnerBase58);
     const conn = getConnection();
 
-    // JupUSD has 6 decimals (same as USDC)
+    metrics.parseMs = Date.now() - parseStart;
+
+    /* ───────── Token info ───────── */
     stage = "tokenInfo";
     const jupUsdDecimals = await getDecimals(conn, JUPUSD_MINT);
     const usdcProgId = await getTokenProgramId(conn, USDC_MINT);
 
+    /* ───────── Parse amount ───────── */
     stage = "amount";
     const amountUiRaw = readAmountUi(body);
     let withdrawAmountUnits = BigInt(0);
@@ -595,15 +787,7 @@ export async function POST(req: Request) {
         : BigInt(0);
     }
 
-    console.log("[PLUS/WITHDRAW/BUILD] payload", {
-      traceId,
-      fromOwnerBase58,
-      amountUiRaw,
-      withdrawAmountUnits: withdrawAmountUnits.toString(),
-      slippageBps,
-    });
-
-    if (withdrawAmountUnits <= BigInt(0)) {
+    if (!withdrawAll && withdrawAmountUnits <= BigInt(0)) {
       return jsonError(400, {
         code: "INVALID_AMOUNT",
         error: "Amount must be > 0",
@@ -611,47 +795,37 @@ export async function POST(req: Request) {
         tip: "Try again.",
         stage,
         traceId,
-        debug: {
-          amountUiRaw,
-          withdrawAmountUnits: withdrawAmountUnits.toString(),
-          keysPresent: body ? Object.keys(body) : [],
-        },
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // FEE CALCULATION (same logic as flex)
-    // ═══════════════════════════════════════════════════════════════════════════
+    /* ───────── Phase 1: positions + tokens + blockhash ───────── */
+    stage = "parallelFetch1";
+    const fetch1Start = Date.now();
 
-    stage = "feeCalculation";
-    const feeRate = getWithdrawFeeRate();
-
-    // We calculate fee based on expected USDC output (will be refined after quote)
-    // For now, use withdrawAmountUnits as estimate since JupUSD ≈ USDC
-    const estimatedUsdcOut = new BN(withdrawAmountUnits.toString());
-    const feeBase = feeFromAmountBase(estimatedUsdcOut, feeRate);
-    const hasFee = !feeBase.isZero();
-
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} fee: rate=${feeRate}, estimated=${bnToUiString(feeBase, USDC_DECIMALS)} USDC`,
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 1: Check user's position in JupUSD vault
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    stage = "positionCheck";
     const positionsUrl =
       `${JUP_EARN_POSITIONS}?` +
       new URLSearchParams({ users: userOwner.toBase58() });
 
-    const posRes = await jupFetch(positionsUrl);
+    const [posRes, tokensRes, blockhashData] = await Promise.all([
+      jupFetchWithRetry(positionsUrl),
+      jupFetchWithRetry(JUP_EARN_TOKENS),
+      conn.getLatestBlockhash("confirmed"),
+    ]);
+
+    metrics.positionCheckMs = Date.now() - fetch1Start;
+
+    /* ───────── Validate position ───────── */
+    stage = "positionCheck";
+
     if (!posRes.ok) {
       return jsonError(posRes.status, {
         code: "POSITION_CHECK_FAILED",
         error: `Failed to fetch positions: ${posRes.status}`,
         userMessage: "Couldn't verify your vault balance.",
-        tip: "Try again in a moment.",
+        tip:
+          posRes.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
       });
@@ -674,35 +848,141 @@ export async function POST(req: Request) {
     }
 
     const availableUnits = BigInt(jupUsdPosition.underlyingAssets || "0");
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} position: available=${availableUnits.toString()}, requested=${withdrawAmountUnits.toString()}`,
-    );
+    const userShares = jupUsdPosition.shares;
 
-    if (availableUnits < withdrawAmountUnits) {
+    const availableWithBuffer = availableUnits + availableUnits / BigInt(10000);
+
+    if (withdrawAll) {
+      withdrawAmountUnits = availableUnits;
+    }
+
+    console.log(`[PLUS/WITHDRAW/BUILD] ${traceId} position:`, {
+      available: availableUnits.toString(),
+      availableWithBuffer: availableWithBuffer.toString(),
+      shares: userShares,
+      requested: withdrawAmountUnits.toString(),
+      withdrawAll,
+    });
+
+    if (availableWithBuffer < withdrawAmountUnits) {
+      const availableUsd = (Number(availableUnits) / 1e6).toFixed(2);
       return jsonError(400, {
         code: "INSUFFICIENT_BALANCE",
-        error: `need=${withdrawAmountUnits.toString()}, have=${availableUnits.toString()}`,
-        userMessage: "You don't have enough funds in the vault.",
-        tip: "Try a smaller amount.",
+        error: `need=${withdrawAmountUnits.toString()}, have≈${availableUnits.toString()}`,
+        userMessage: `You only have ~$${availableUsd} in the vault.`,
+        tip: "Try a smaller amount or withdraw all.",
         stage,
         traceId,
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 2: Get withdraw instructions from JupUSD vault
-    // ═══════════════════════════════════════════════════════════════════════════
+    const safeWithdrawAmount =
+      withdrawAmountUnits > availableUnits
+        ? availableUnits
+        : withdrawAmountUnits;
 
-    stage = "withdrawInstruction";
-    const withdrawIxRes = await jupFetch(JUP_EARN_WITHDRAW_IX, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        asset: JUPUSD_MINT.toBase58(),
-        signer: userOwner.toBase58(),
-        amount: withdrawAmountUnits.toString(),
+    /* ───────── Liquidity check (best-effort) ───────── */
+    stage = "liquidityCheck";
+
+    if (tokensRes.ok) {
+      try {
+        const tokens = (await tokensRes.json()) as EarnToken[];
+        const jupUsdVault = tokens.find(
+          (t) => t.asset === JUPUSD_MINT.toBase58(),
+        );
+        if (jupUsdVault) {
+          const totalAssets = BigInt(jupUsdVault.totalAssets || "0");
+
+          if (safeWithdrawAmount > totalAssets / BigInt(2)) {
+            console.warn(
+              `[PLUS/WITHDRAW/BUILD] ${traceId} Large withdrawal: ${safeWithdrawAmount} vs total ${totalAssets}`,
+            );
+          }
+
+          if (safeWithdrawAmount > totalAssets) {
+            const availableLiqUsd = (Number(totalAssets) / 1e6).toFixed(2);
+            return jsonError(400, {
+              code: "INSUFFICIENT_LIQUIDITY",
+              error: `Requested ${safeWithdrawAmount}, total vault has ${totalAssets}`,
+              userMessage: `Only $${availableLiqUsd} is available for withdrawal right now.`,
+              tip: "Liquidity fluctuates based on borrowing demand. Try a smaller amount.",
+              stage,
+              traceId,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(
+          `[PLUS/WITHDRAW/BUILD] ${traceId} liquidity check failed:`,
+          e,
+        );
+      }
+    }
+
+    /* ───────── Fee + slippage ───────── */
+    stage = "feeCalculation";
+    const feeRate = getWithdrawFeeRate();
+    console.log(`[PLUS/WITHDRAW/BUILD] ${traceId} fee: rate=${feeRate}`);
+
+    const slippageBps = calculateSlippage(
+      safeWithdrawAmount,
+      body?.slippageBps,
+    );
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} slippage: ${slippageBps} bps for ${safeWithdrawAmount.toString()} units`,
+    );
+
+    /* ───────── Phase 2: withdraw ix + quote (with fallback) ───────── */
+    stage = "parallelFetch2";
+    const fetch2Start = Date.now();
+
+    const isFullWithdraw = withdrawAll || safeWithdrawAmount >= availableUnits;
+    const withdrawEndpoint = isFullWithdraw
+      ? JUP_EARN_REDEEM_IX
+      : JUP_EARN_WITHDRAW_IX;
+
+    const withdrawPayload = isFullWithdraw
+      ? {
+          asset: JUPUSD_MINT.toBase58(),
+          signer: userOwner.toBase58(),
+          shares: userShares,
+        }
+      : {
+          asset: JUPUSD_MINT.toBase58(),
+          signer: userOwner.toBase58(),
+          amount: safeWithdrawAmount.toString(),
+        };
+
+    console.log(
+      `[PLUS/WITHDRAW/BUILD] ${traceId} using ${isFullWithdraw ? "redeem" : "withdraw"} endpoint`,
+    );
+
+    let quoteRes: Response;
+    const [withdrawIxRes] = await Promise.all([
+      jupFetchWithRetry(withdrawEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(withdrawPayload),
       }),
-    });
+      (async () => {
+        const qs = Date.now();
+        try {
+          quoteRes = await getQuoteWithFallback({
+            traceId,
+            amount: safeWithdrawAmount.toString(),
+            slippageBps,
+          });
+        } finally {
+          metrics.quoteMs = Date.now() - qs;
+        }
+      })(),
+    ]);
+
+    metrics.withdrawIxMs = Date.now() - fetch2Start;
+
+    /* ───────── Validate withdraw ix ───────── */
+    stage = "withdrawInstruction";
 
     if (!withdrawIxRes.ok) {
       const t = await withdrawIxRes.text().catch(() => "");
@@ -710,23 +990,20 @@ export async function POST(req: Request) {
         code: "WITHDRAW_IX_FAILED",
         error: `withdraw-instructions failed: ${withdrawIxRes.status}`,
         userMessage: "Couldn't prepare the vault withdrawal.",
-        tip: "Try again in a moment.",
+        tip:
+          withdrawIxRes.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
-        debug: { body: t.slice(0, 500) },
+        debug: IS_PROD ? undefined : { body: t.slice(0, 500) },
       });
     }
 
     const withdrawJson =
       (await withdrawIxRes.json()) as JupiterEarnResponse | null;
-
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} withdrawJson keys:`,
-      withdrawJson ? Object.keys(withdrawJson) : [],
-    );
-
     const withdrawList: unknown[] = Array.isArray(withdrawJson?.instructions)
-      ? withdrawJson.instructions
+      ? withdrawJson!.instructions!
       : withdrawJson
         ? [withdrawJson]
         : [];
@@ -739,44 +1016,30 @@ export async function POST(req: Request) {
         tip: "Try again in a moment.",
         stage,
         traceId,
-        debug: {
-          withdrawJsonKeys: withdrawJson ? Object.keys(withdrawJson) : [],
-        },
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 3: Get quote for JupUSD → USDC swap
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Validate quote ───────── */
     stage = "quote";
-    const quoteUrl =
-      `${JUP_QUOTE}?` +
-      new URLSearchParams({
-        inputMint: JUPUSD_MINT.toBase58(),
-        outputMint: USDC_MINT.toBase58(),
-        amount: withdrawAmountUnits.toString(),
-        slippageBps: String(slippageBps),
-      });
 
-    const [quoteRes, blockhashData] = await Promise.all([
-      jupFetch(quoteUrl),
-      conn.getLatestBlockhash("confirmed"),
-    ]);
-
-    if (!quoteRes.ok) {
-      return jsonError(quoteRes.status, {
+    if (!quoteRes!.ok) {
+      const t = await quoteRes!.text().catch(() => "");
+      return jsonError(quoteRes!.status, {
         code: "JUP_QUOTE_FAILED",
-        error: `Quote failed: ${quoteRes.status}`,
+        error: `Quote failed: ${quoteRes!.status}`,
         userMessage: "Couldn't price this withdrawal right now.",
-        tip: "Try again in a moment.",
+        tip:
+          quoteRes!.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
+        debug: IS_PROD ? undefined : { body: t.slice(0, 500) },
       });
     }
 
     const quoteResponse =
-      (await quoteRes.json()) as JupiterQuoteResponse | null;
+      (await quoteRes!.json()) as JupiterQuoteResponse | null;
     const usdcOutAmount = String(quoteResponse?.outAmount ?? "");
 
     if (!usdcOutAmount || !/^\d+$/.test(usdcOutAmount)) {
@@ -787,33 +1050,34 @@ export async function POST(req: Request) {
         tip: "Try again in a moment.",
         stage,
         traceId,
-        debug: { outAmount: quoteResponse?.outAmount },
       });
     }
 
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} quote: ${withdrawAmountUnits.toString()} JupUSD -> ${usdcOutAmount} USDC`,
+      `[PLUS/WITHDRAW/BUILD] ${traceId} quote: ${safeWithdrawAmount.toString()} JupUSD -> ${usdcOutAmount} USDC`,
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // RECALCULATE FEE based on actual USDC output from quote
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Fee based on quote ───────── */
     const actualUsdcOutBn = new BN(usdcOutAmount);
     const actualFeeBase = feeFromAmountBase(actualUsdcOutBn, feeRate);
     const netBase = BN.max(new BN(0), actualUsdcOutBn.sub(actualFeeBase));
     const actualHasFee = !actualFeeBase.isZero();
 
     console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} final fee: gross=${bnToUiString(actualUsdcOutBn, USDC_DECIMALS)}, fee=${bnToUiString(actualFeeBase, USDC_DECIMALS)}, net=${bnToUiString(netBase, USDC_DECIMALS)}`,
+      `[PLUS/WITHDRAW/BUILD] ${traceId} final: gross=${bnToUiString(
+        actualUsdcOutBn,
+        USDC_DECIMALS,
+      )}, fee=${bnToUiString(actualFeeBase, USDC_DECIMALS)}, net=${bnToUiString(
+        netBase,
+        USDC_DECIMALS,
+      )}`,
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 4: Get swap instructions (JupUSD → USDC)
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Swap instructions ───────── */
     stage = "swapInstructions";
-    const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
+    const swapStart = Date.now();
+
+    const swapIxRes = await jupFetchWithRetry(JUP_SWAP_IXS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -825,16 +1089,21 @@ export async function POST(req: Request) {
       }),
     });
 
+    metrics.swapIxMs = Date.now() - swapStart;
+
     if (!swapIxRes.ok) {
       const t = await swapIxRes.text().catch(() => "");
       return jsonError(swapIxRes.status, {
         code: "JUP_SWAP_IX_FAILED",
         error: `swap-instructions failed: ${swapIxRes.status}`,
         userMessage: "Couldn't prepare this withdrawal.",
-        tip: "Try again in a moment.",
+        tip:
+          swapIxRes.status === 429
+            ? "Too many requests. Wait a moment."
+            : "Try again in a moment.",
         stage,
         traceId,
-        debug: { body: t.slice(0, 500) },
+        debug: IS_PROD ? undefined : { body: t.slice(0, 500) },
       });
     }
 
@@ -849,48 +1118,31 @@ export async function POST(req: Request) {
         tip: "Try a different amount.",
         stage,
         traceId,
-        debug: { swapDataKeys: swapData ? Object.keys(swapData) : [] },
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 5: Load ALTs for swap
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Load ALTs ───────── */
     stage = "loadALTs";
     const altKeys = (swapData.addressLookupTableAddresses ?? []).slice(0, 16);
     const altAccounts = (
       await Promise.all(altKeys.map((k: string) => getAltCached(conn, k)))
     ).filter((a): a is AddressLookupTableAccount => a !== null);
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 6: Decode all instructions
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Build instructions ───────── */
     stage = "buildInstructions";
+    const compileStart = Date.now();
 
-    // Decode withdraw instructions (these come FIRST - withdraw from vault)
     const withdrawIxs = withdrawList.map((x, i) =>
       safeToIx(x, "withdraw", i, traceId),
     );
 
-    // Decode swap instructions (swap JupUSD → USDC)
-    const swapSetupIxs = (swapData.setupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapSetup", i, traceId),
+    const swapSetupIxs = (swapData.setupInstructions ?? []).map((x, i) =>
+      safeToIx(x, "swapSetup", i, traceId),
     );
     const swapIx = safeToIx(swapData.swapInstruction, "swap", 0, traceId);
-    const swapCleanupIxs = (swapData.cleanupInstructions ?? []).map(
-      (x: InstructionJson, i: number) => safeToIx(x, "swapCleanup", i, traceId),
+    const swapCleanupIxs = (swapData.cleanupInstructions ?? []).map((x, i) =>
+      safeToIx(x, "swapCleanup", i, traceId),
     );
-
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} raw ix counts: withdraw=${withdrawIxs.length}, swapSetup=${swapSetupIxs.length}, swap=1, swapCleanup=${swapCleanupIxs.length}`,
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 7: Collect ALL instructions, extract and sponsor ATAs
-    // Order: withdraw from vault FIRST, then swap
-    // ═══════════════════════════════════════════════════════════════════════════
 
     const allInstructionsInOrder: TransactionInstruction[] = [
       ...withdrawIxs,
@@ -904,21 +1156,15 @@ export async function POST(req: Request) {
       traceId,
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 8: Derive ATAs and build fee instruction
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Fee instruction ───────── */
     stage = "feeInstruction";
 
-    // User's USDC ATA (where they receive USDC from swap)
     const userUsdcAta = getAssociatedTokenAddressSync(
       USDC_MINT,
       userOwner,
       false,
       usdcProgId,
     );
-
-    // Treasury's USDC ATA (where fee goes)
     const treasuryUsdcAta = getAssociatedTokenAddressSync(
       USDC_MINT,
       TREASURY_OWNER,
@@ -926,20 +1172,26 @@ export async function POST(req: Request) {
       usdcProgId,
     );
 
-    // Build final instruction list
     const ixs: TransactionInstruction[] = [];
 
-    // 1. Compute budget (add extra CU if fee transfer is included)
-    const computeUnits = actualHasFee ? 350_000 : 300_000;
+    // Compute budget
+    const baseComputeUnits = 300_000;
+    const extraForFee = actualHasFee ? 50_000 : 0;
+    const extraForAtas = sponsoredAtaIxs.length * 20_000;
+    const computeUnits = Math.min(
+      1_400_000,
+      baseComputeUnits + extraForFee + extraForAtas,
+    );
+
     ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
     ixs.push(
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
     );
 
-    // 2. All sponsored ATA creates (Haven pays rent, deduplicated)
+    // Sponsored ATA creates
     ixs.push(...sponsoredAtaIxs);
 
-    // 3. Ensure treasury ATA exists if we have a fee
+    // Treasury ATA (if fee)
     if (actualHasFee) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
@@ -952,10 +1204,10 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4. All other instructions in original order (withdraw -> swap)
+    // Main ixs (withdraw -> swap)
     ixs.push(...otherIxs);
 
-    // 5. Fee transfer instruction (AFTER swap completes, user has USDC)
+    // Fee transfer after swap
     if (actualHasFee) {
       ixs.push(
         makeTransferCheckedIx({
@@ -970,14 +1222,20 @@ export async function POST(req: Request) {
       );
     }
 
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} final ix count: ${ixs.length} (${sponsoredAtaIxs.length} ATAs + ${otherIxs.length} other + ${actualHasFee ? 1 : 0} fee transfer)`,
-    );
+    /* ───────── Estimate tx size ───────── */
+    const estimatedAccounts = new Set<string>();
+    for (const ix of ixs) {
+      estimatedAccounts.add(ix.programId.toBase58());
+      for (const key of ix.keys) estimatedAccounts.add(key.pubkey.toBase58());
+    }
+    const estimatedSize = 200 + estimatedAccounts.size * 32 + ixs.length * 50;
+    if (estimatedSize > 1100) {
+      console.warn(
+        `[PLUS/WITHDRAW/BUILD] ${traceId} tx may be large: ~${estimatedSize} bytes estimated`,
+      );
+    }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 9: Compile transaction
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    /* ───────── Compile transaction ───────── */
     stage = "compile";
     const { blockhash, lastValidBlockHeight } = blockhashData;
 
@@ -990,24 +1248,50 @@ export async function POST(req: Request) {
     );
 
     const rawLen = tx.serialize().length;
+    metrics.compileMs = Date.now() - compileStart;
+
     if (rawLen > MAX_TX_RAW_BYTES) {
+      console.error(`[PLUS/WITHDRAW/BUILD] ${traceId} TX TOO LARGE`, {
+        rawLen,
+        estimatedSize,
+        ixCount: ixs.length,
+        altCount: altAccounts.length,
+        altKeys,
+      });
+
       return jsonError(413, {
         code: "TX_TOO_LARGE",
         error: `Raw size ${rawLen} > ${MAX_TX_RAW_BYTES}`,
-        userMessage: "This route is too large. Try a smaller amount.",
-        tip: "If this happens often, you can pre-create common ATAs.",
+        userMessage:
+          "This withdrawal route is too complex. Please try a smaller amount or contact support.",
+        tip: "Splitting into smaller withdrawals may help.",
         stage,
         traceId,
-        debug: { rawLen },
+        debug: IS_PROD
+          ? undefined
+          : {
+              rawLen,
+              estimatedSize,
+              ixCount: ixs.length,
+              altCount: altAccounts.length,
+            },
       });
     }
 
     const b64 = Buffer.from(tx.serialize()).toString("base64");
-    const buildTime = Date.now() - startTime;
+    metrics.totalMs = Date.now() - startTime;
 
-    console.log(
-      `[PLUS/WITHDRAW/BUILD] ${traceId} ${buildTime}ms jupUsdWithdraw=${withdrawAmountUnits.toString()} usdcOut=${usdcOutAmount} fee=${bnToUiString(actualFeeBase, USDC_DECIMALS)} net=${bnToUiString(netBase, USDC_DECIMALS)}`,
-    );
+    console.log(`[PLUS/WITHDRAW/BUILD] ${traceId} SUCCESS`, {
+      buildTimeMs: metrics.totalMs,
+      jupUsdWithdraw: safeWithdrawAmount.toString(),
+      usdcOut: usdcOutAmount,
+      fee: bnToUiString(actualFeeBase, USDC_DECIMALS),
+      net: bnToUiString(netBase, USDC_DECIMALS),
+      txSize: rawLen,
+      slippageBps,
+      isFullWithdraw,
+      metrics,
+    });
 
     return NextResponse.json({
       transaction: b64,
@@ -1015,11 +1299,11 @@ export async function POST(req: Request) {
       lastValidBlockHeight,
       traceId,
 
-      jupUsdWithdrawUnits: withdrawAmountUnits.toString(),
+      jupUsdWithdrawUnits: safeWithdrawAmount.toString(),
       usdcOutUnits: usdcOutAmount,
       slippageBps,
+      isFullWithdraw,
 
-      // Fee info (matching flex response structure)
       decimals: USDC_DECIMALS,
       amountUi: bnToUiString(actualUsdcOutBn, USDC_DECIMALS),
       feeUi: bnToUiString(actualFeeBase, USDC_DECIMALS),
@@ -1039,11 +1323,32 @@ export async function POST(req: Request) {
       },
 
       computeUnits,
-      buildTimeMs: buildTime,
+      txSize: rawLen,
+      buildTimeMs: metrics.totalMs,
+      metrics: IS_PROD ? undefined : metrics,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const err = e as Error & { status?: number; body?: unknown };
+    const msg = err instanceof Error ? err.message : String(e);
+
+    // If quote fallback threw, return a nice 400/500 with body in dev
+    if (err?.body !== undefined) {
+      const status = Number(err.status ?? 400);
+      return jsonError(status, {
+        code: "JUP_QUOTE_FAILED",
+        error: msg,
+        userMessage: "Couldn't price this withdrawal right now.",
+        tip: "Try again in a moment.",
+        stage: "quote",
+        traceId,
+        debug: IS_PROD
+          ? undefined
+          : { body: String(err.body).slice(0, 500) },
+      });
+    }
+
     console.error(`[PLUS/WITHDRAW/BUILD] ${traceId} error at ${stage}:`, msg);
+
     return jsonError(500, {
       code: "UNHANDLED_BUILD_ERROR",
       error: msg,
