@@ -6,6 +6,10 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { BN } from "@coral-xyz/anchor";
 
+/* ─────────────────────────────────────────────────────────────
+   TYPES
+───────────────────────────────────────────────────────────── */
+
 type EmptyObj = Record<string, never>;
 type ApiSide = { long?: EmptyObj; short?: EmptyObj; none?: EmptyObj };
 
@@ -16,10 +20,10 @@ type RawApiPosition = {
   account: {
     custody: string;
     openTime?: string;
-    price: string;
-    collateralUsd: string;
-    sizeUsd: string;
-    side?: ApiSide;
+    price: string; // 6-dec fixed (micro-USD) string from program
+    collateralUsd: string; // 6-dec fixed string
+    sizeUsd: string; // 6-dec fixed string
+    side?: ApiSide; // optional; present in some decoded payloads
   };
 };
 
@@ -27,7 +31,6 @@ export type BoosterRow = {
   id: string;
   symbol: "SOL" | "ETH" | "BTC";
   isLong: boolean;
-
   createdAt: string;
 
   entryUsd: number;
@@ -45,7 +48,17 @@ export type BoosterRow = {
   publicKey: string;
 };
 
-/* ───────── HELPERS ───────── */
+type UseBoosterPositionsArgs = {
+  ownerBase58?: string;
+  refreshKey?: number;
+  enabled?: boolean;
+};
+
+type ApiResponse = { positions?: RawApiPosition[] };
+
+/* ─────────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────────── */
 
 function usdFrom6Str(x: string | BN | undefined | null): number {
   try {
@@ -58,10 +71,6 @@ function usdFrom6Str(x: string | BN | undefined | null): number {
   } catch {
     return 0;
   }
-}
-
-function safeBool(v: unknown): boolean {
-  return v === true;
 }
 
 function safeStr(v: unknown): string {
@@ -84,46 +93,48 @@ function estimateLiqPrice(
     !Number.isFinite(entry) ||
     !Number.isFinite(collateral) ||
     !Number.isFinite(sizeUsd)
-  )
+  ) {
     return null;
+  }
   if (sizeUsd <= 0 || entry <= 0) return null;
 
   const ratio = collateral / sizeUsd;
   if (!Number.isFinite(ratio)) return null;
 
+  // simple approximation (you already know it’s an estimate)
   return isLong ? entry * (1 - ratio) : entry * (1 + ratio);
 }
 
-/* ───────── HOOK ───────── */
+/* ─────────────────────────────────────────────────────────────
+   HOOK
+───────────────────────────────────────────────────────────── */
 
-export function useBoosterPositions(args: {
-  ownerBase58?: string;
-  refreshKey?: number;
-  enabled?: boolean;
-}) {
+export function useBoosterPositions(args: UseBoosterPositionsArgs) {
   const { ownerBase58, refreshKey, enabled = true } = args;
 
   const [loading, setLoading] = useState(false);
   const [positions, setPositions] = useState<RawApiPosition[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const aliveRef = useRef(true);
-  const reqIdRef = useRef(0);
+  // keep last good result on transient network errors
+  const lastGoodRef = useRef<RawApiPosition[] | null>(null);
 
-  // ✅ this is the missing piece: store the controller so cleanup can abort it
+  // stale request protection + aborts
+  const reqIdRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
 
+  // mounted guard
+  const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      // ✅ abort any in-flight request on unmount
       controllerRef.current?.abort();
       controllerRef.current = null;
     };
   }, []);
 
-  /* ───────── Convex price subscriptions (real-time updates!) ───────── */
+  /* ───────── Convex prices (real-time updates) ───────── */
 
   const convexPrices = useQuery(api.prices.getLatest);
 
@@ -142,16 +153,14 @@ export function useBoosterPositions(args: {
         map[sym] = row.lastPrice;
       }
     }
-
     return map;
   }, [convexPrices]);
 
   /* ───────── Fetch positions from backend ───────── */
 
   const fetchPositions = useCallback(async () => {
-    // If disabled, reset
+    // disabled: hard reset
     if (!enabled) {
-      // ✅ abort any in-flight request when disabling
       controllerRef.current?.abort();
       controllerRef.current = null;
 
@@ -159,30 +168,32 @@ export function useBoosterPositions(args: {
         setLoading(false);
         setError(null);
         setPositions([]);
+        lastGoodRef.current = null;
       }
       return;
     }
 
     const owner = safeStr(ownerBase58).trim();
     if (!owner) {
-      // ✅ abort any in-flight request when owner disappears
+      // owner missing: treat as "no data" without error
       controllerRef.current?.abort();
       controllerRef.current = null;
 
       if (aliveRef.current) {
-        setPositions([]);
-        setError(null);
         setLoading(false);
+        setError(null);
+        setPositions([]);
+        lastGoodRef.current = null;
       }
       return;
     }
 
-    // ✅ abort previous request before starting a new one
+    // abort previous request and start a new one
     controllerRef.current?.abort();
-
-    const myReqId = ++reqIdRef.current;
     const controller = new AbortController();
     controllerRef.current = controller;
+
+    const myReqId = ++reqIdRef.current;
 
     if (aliveRef.current) {
       setLoading(true);
@@ -198,7 +209,7 @@ export function useBoosterPositions(args: {
         signal: controller.signal,
       });
 
-      // If aborted or stale, ignore
+      // ignore if stale/unmounted
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
 
       if (!res.ok) {
@@ -206,9 +217,7 @@ export function useBoosterPositions(args: {
         throw new Error(txt || `HTTP ${res.status}`);
       }
 
-      const data = (await res.json().catch(() => null)) as {
-        positions?: RawApiPosition[];
-      } | null;
+      const data = (await res.json().catch(() => null)) as ApiResponse | null;
 
       const positionsRaw = Array.isArray(data?.positions)
         ? data!.positions!
@@ -225,6 +234,7 @@ export function useBoosterPositions(args: {
           return {
             publicKey: pk,
             symbol,
+            // normalize to a strict union; default long if malformed
             side: p?.side === "short" ? "short" : "long",
             account: {
               custody: safeStr(acct.custody),
@@ -232,32 +242,40 @@ export function useBoosterPositions(args: {
               price: safeStr(acct.price),
               collateralUsd: safeStr(acct.collateralUsd),
               sizeUsd: safeStr(acct.sizeUsd),
-              side: acct.side ?? {},
+              side: (acct.side ?? {}) as ApiSide,
             },
-          } as RawApiPosition;
+          };
         })
         .filter(Boolean) as RawApiPosition[];
 
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
+
+      lastGoodRef.current = sanitized;
       setPositions(sanitized);
     } catch (e: unknown) {
       const err = e as Error & { name?: string };
       const isAbort = err?.name === "AbortError";
 
-      // Ignore aborts + stale requests
+      // ignore abort/stale
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
       if (isAbort) return;
 
       const msg = safeStr(err?.message);
+
+      // keep last good data on transient network issues
+      if (lastGoodRef.current) {
+        setPositions(lastGoodRef.current);
+      } else {
+        setPositions([]);
+      }
+
       setError(msg || "Failed to fetch positions.");
-      setPositions([]);
     } finally {
-      // Only clear loading if this is still the latest request
       if (!aliveRef.current || myReqId !== reqIdRef.current) return;
 
       setLoading(false);
 
-      // ✅ clear controller ref if we're still pointing at this request
+      // clear controller if it’s still ours
       if (controllerRef.current === controller) {
         controllerRef.current = null;
       }
@@ -274,13 +292,8 @@ export function useBoosterPositions(args: {
       const sizeUsd = usdFrom6Str(p.account.sizeUsd);
       const collateralUsd = usdFrom6Str(p.account.collateralUsd);
 
-      const accountSide = p.account.side ?? {};
-      const isLong =
-        p.side === "long"
-          ? true
-          : p.side === "short"
-            ? false
-            : safeBool(accountSide.long);
+      // ✅ clean + build-safe: side is always "long" | "short" after sanitize
+      const isLong = p.side === "long";
 
       const convexPrice = priceMap[p.symbol];
       const markUsd =
@@ -326,20 +339,21 @@ export function useBoosterPositions(args: {
     });
   }, [positions, priceMap]);
 
-  /* ───────── Fetch positions on mount and refresh ───────── */
+  /* ───────── Fetch on mount / owner change / refreshKey ───────── */
 
   useEffect(() => {
     if (!enabled || !ownerBase58?.trim()) return;
+
     void fetchPositions();
 
-    // ✅ also abort if owner/enabled changes while request is running
+    // abort in-flight if deps change mid-request
     return () => {
       controllerRef.current?.abort();
       controllerRef.current = null;
     };
   }, [enabled, ownerBase58, refreshKey, fetchPositions]);
 
-  /* ───────── Poll positions every 30 seconds ───────── */
+  /* ───────── Poll every 30s (pause in background) ───────── */
 
   useEffect(() => {
     if (!enabled || !ownerBase58?.trim()) return;
@@ -357,8 +371,9 @@ export function useBoosterPositions(args: {
     };
 
     const onVisibility = () => {
-      if (document.hidden) stop();
-      else {
+      if (document.hidden) {
+        stop();
+      } else {
         void fetchPositions();
         start();
       }

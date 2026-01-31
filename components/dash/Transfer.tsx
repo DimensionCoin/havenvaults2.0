@@ -794,7 +794,7 @@ export default function TransferDash({
                       setWalletError(null);
                     }}
                     placeholder="wallet address or name.sol"
-                    className="haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground"
+                    className="haven-input pl-10 font-mono text-[13px] text-black"
                   />
                   {walletResolving && (
                     <div className="absolute right-3 top-1/2 -translate-y-1/2">

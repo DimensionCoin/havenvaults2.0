@@ -122,7 +122,17 @@ function decodePositionAccount(data: Buffer): {
 
 export async function POST(req: Request) {
   try {
-    const { ownerBase58 } = (await req.json()) as { ownerBase58?: string };
+    let body: { ownerBase58?: string };
+    try {
+      body = (await req.json()) as { ownerBase58?: string };
+    } catch {
+      return NextResponse.json(
+        { error: "ownerBase58 is required" },
+        { status: 400 }
+      );
+    }
+
+    const { ownerBase58 } = body;
     if (!ownerBase58) {
       return NextResponse.json(
         { error: "ownerBase58 is required" },

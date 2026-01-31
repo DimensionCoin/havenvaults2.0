@@ -417,14 +417,14 @@ export default function Withdraw({
                   Destination wallet or .sol domain
                 </label>
                 <div className="relative">
-                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
                   <input
                     type="text"
                     value={addressInput}
                     onChange={(e) => setAddressInput(e.target.value)}
                     placeholder="Address or name.sol"
                     className={[
-                      "haven-input pl-10 font-mono text-[13px] text-black dark:text-foreground",
+                      "haven-input pl-10 font-mono text-[13px] text-black ",
                       addressError
                         ? "border-destructive/50"
                         : addressResolved
