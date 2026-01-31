@@ -16,10 +16,16 @@ import {
   type TokenBalance,
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
-import { getSessionFromCookies } from "@/lib/auth";
 import { connect as connectMongo } from "@/lib/db";
 import { recordUserFees, type FeeToken } from "@/lib/fees";
 import mongoose from "mongoose";
+
+import {
+  requireServerUser,
+  getUserWalletPubkey,
+  assertUserSigned,
+} from "@/lib/getServerUser";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 /* ───────── Next.js route config ───────── */
 
@@ -42,29 +48,34 @@ const PRIVY_AUTH_PK = required("PRIVY_AUTH_PRIVATE_KEY_B64");
 const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 
 const HAVEN_PUBKEY = new PublicKey(
-  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
+  required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS"),
 );
 const TREASURY_OWNER = new PublicKey(
-  required("NEXT_PUBLIC_APP_TREASURY_OWNER")
+  required("NEXT_PUBLIC_APP_TREASURY_OWNER"),
 );
 
 // USDC mint is blocked for this route (use /transfer instead)
 const USDC_MINT = new PublicKey(required("NEXT_PUBLIC_USDC_MINT"));
 
+const IS_PROD = process.env.NODE_ENV === "production";
+
 /* ───────── Types ───────── */
 
-type Body = { transaction: string };
+type Body = {
+  transaction?: string;
 
-type ErrorLike = {
-  message?: unknown;
-  body?: unknown;
-  bodyAsString?: unknown;
-};
+  /**
+   * ✅ Client binds request to the authenticated wallet.
+   * Prevents replaying somebody else's signed tx from another session.
+   */
+  expectedUserBase58?: string;
 
-type MessageV0Subset = {
-  staticAccountKeys: PublicKey[];
+  // Optional: confirm optimization
   recentBlockhash?: string;
+  lastValidBlockHeight?: number;
 };
+
+type ErrorLike = { message?: unknown; body?: unknown; bodyAsString?: unknown };
 
 type SignResp =
   | string
@@ -94,9 +105,37 @@ type TxSubset = TransactionResponse & { meta?: MetaSubset | null };
 function jsonError(
   status: number,
   message: string,
-  extra?: JsonErrorExtra
+  extra?: JsonErrorExtra,
 ): NextResponse {
-  return NextResponse.json({ error: message, ...(extra || {}) }, { status });
+  const safeExtra = IS_PROD ? undefined : extra;
+  return NextResponse.json(
+    { error: message, ...(safeExtra || {}) },
+    { status },
+  );
+}
+
+/* ───────── Singletons ───────── */
+
+let _conn: Connection | null = null;
+function getConnection(): Connection {
+  if (!_conn) {
+    _conn = new Connection(SOLANA_RPC, {
+      commitment: "confirmed",
+      confirmTransactionInitialTimeout: 60_000,
+      disableRetryOnRateLimit: false,
+    });
+  }
+  return _conn;
+}
+
+let _privy: PrivyClient | null = null;
+function getPrivyClient(): PrivyClient {
+  if (!_privy) {
+    _privy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
+      walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
+    });
+  }
+  return _privy;
 }
 
 /* ───────── Privy signing normalize ───────── */
@@ -124,7 +163,7 @@ function toSignedBytes(resp: unknown): Uint8Array {
     typeof (payload as { serialize: unknown }).serialize === "function"
   ) {
     return new Uint8Array(
-      (payload as { serialize: () => Uint8Array }).serialize()
+      (payload as { serialize: () => Uint8Array }).serialize(),
     );
   }
 
@@ -133,19 +172,39 @@ function toSignedBytes(resp: unknown): Uint8Array {
 
 /* ───────── Tx confirmation ───────── */
 
-async function confirmSig(conn: Connection, signature: string) {
+async function confirmSig(params: {
+  conn: Connection;
+  signature: string;
+  providedBlockhash?: string | null;
+  providedLastValidBlockHeight?: number | null;
+}) {
+  const { conn, signature, providedBlockhash, providedLastValidBlockHeight } =
+    params;
+
   const commitment: Commitment = "confirmed";
+
+  if (providedBlockhash && typeof providedLastValidBlockHeight === "number") {
+    const res: RpcResponseAndContext<SignatureResult> =
+      await conn.confirmTransaction(
+        {
+          signature,
+          blockhash: providedBlockhash,
+          lastValidBlockHeight: providedLastValidBlockHeight,
+        },
+        commitment,
+      );
+    if (res.value.err) throw new Error(JSON.stringify(res.value.err));
+    return;
+  }
 
   try {
     const bh = await conn.getLatestBlockhash(commitment);
     const res: RpcResponseAndContext<SignatureResult> =
       await conn.confirmTransaction({ signature, ...bh }, commitment);
-
     if (res.value.err) throw new Error(JSON.stringify(res.value.err));
   } catch {
     const res2: RpcResponseAndContext<SignatureResult> =
       await conn.confirmTransaction(signature, commitment);
-
     if (res2.value.err) throw new Error(JSON.stringify(res2.value.err));
   }
 }
@@ -161,8 +220,9 @@ function summarizeLogs(logs?: string[] | null): string[] {
       (l) =>
         /error|fail|insufficient|custom program error/i.test(l) ||
         l.startsWith("Program ") ||
-        l.startsWith("Instruction ")
-    );
+        l.startsWith("Instruction "),
+    )
+    .slice(0, 40);
 }
 
 /* ───────── BigInt helpers (NO BigInt literals) ───────── */
@@ -183,7 +243,6 @@ function clampDecimals(decimals: number) {
   return Math.max(0, Math.min(18, d));
 }
 
-// 10^d without bigint exponentiation / literals
 function pow10BigInt(decimals: number): bigint {
   const d = clampDecimals(decimals);
   let out = BigInt("1");
@@ -194,18 +253,6 @@ function pow10BigInt(decimals: number): bigint {
 
 /* ───────── Fee detection (reliable: uses confirmed meta) ───────── */
 
-/**
- * Detect all token deltas RECEIVED by treasury owner by reading tx meta:
- * - Supports SPL + Token-2022
- * - Supports ALTs (loaded addresses)
- * - Supports inner instructions
- * - Supports Transfer + TransferChecked
- *
- * Mechanism:
- *   For each token account owned by TREASURY_OWNER:
- *     delta = postTokenBalance.amount - preTokenBalance.amount  (base units)
- *   Aggregate deltas by mint.
- */
 async function detectTreasuryFeeTokensFromMeta(params: {
   conn: Connection;
   signature: string;
@@ -244,8 +291,6 @@ async function detectTreasuryFeeTokensFromMeta(params: {
     const idx = pb.accountIndex;
     if (typeof idx !== "number") continue;
 
-    // Only token accounts owned by the treasury owner
-    // `TokenBalance.owner` is optional in some RPCs, so guard it.
     const owner = typeof pb.owner === "string" ? pb.owner : "";
     if (owner !== ownerStr) continue;
 
@@ -255,7 +300,6 @@ async function detectTreasuryFeeTokensFromMeta(params: {
     const decimalsRaw = Number(pb.uiTokenAmount?.decimals ?? 0);
     const decimals = clampDecimals(decimalsRaw);
 
-    // `uiTokenAmount.amount` is base-units string (best source)
     const postBaseStr = pb.uiTokenAmount?.amount ?? "0";
     const preBal = preByIdx.get(idx);
     const preBaseStr = preBal?.uiTokenAmount?.amount ?? "0";
@@ -264,7 +308,7 @@ async function detectTreasuryFeeTokensFromMeta(params: {
     const preBase = bigIntFromString(preBaseStr);
 
     const delta = postBase - preBase;
-    if (delta <= bi0()) continue; // only received amounts
+    if (delta <= bi0()) continue;
 
     const prev = deltas.get(mint);
     if (!prev) {
@@ -288,11 +332,7 @@ async function detectTreasuryFeeTokensFromMeta(params: {
   const out: FeeToken[] = [];
   for (const v of deltas.values()) {
     const denom = pow10BigInt(v.decimals);
-
-    // Fees are expected to be small -> converting is safe for your use case.
-    // If you ever allow very large fee transfers, switch FeeToken.amountUi to string.
     const ui = Number(v.baseDelta) / Number(denom);
-
     if (Number.isFinite(ui) && ui > 0) {
       out.push({
         mint: v.mint,
@@ -306,10 +346,6 @@ async function detectTreasuryFeeTokensFromMeta(params: {
   return out;
 }
 
-/**
- * RPCs can briefly return null meta right after confirm.
- * This retries to avoid missing fee records.
- */
 async function detectTreasuryFeeTokensWithRetry(params: {
   conn: Connection;
   signature: string;
@@ -332,7 +368,6 @@ async function detectTreasuryFeeTokensWithRetry(params: {
     });
 
     if (tokens.length > 0 || i === attempts - 1) return tokens;
-
     await new Promise((r) => setTimeout(r, delayMs));
   }
 
@@ -346,42 +381,143 @@ export async function POST(req: NextRequest) {
     return jsonError(415, "Content-Type must be application/json");
   }
 
+  // ✅ Rate limit FIRST (money-moving route)
+  const blocked = await rateLimitServer(req, {
+    api: "user:wallet:crypto-transfer",
+    requireAuth: true,
+    allowIpFallback: false,
+    failMode: "closed",
+    tiers: [
+      { limit: 2, windowMs: 10_000, suffix: "burst" },
+      { limit: 8, windowMs: 60_000, suffix: "minute" },
+      { limit: 60, windowMs: 60 * 60_000, suffix: "hour" },
+    ],
+    globalTiers: [
+      { limit: 25, windowMs: 10_000, suffix: "burst" },
+      { limit: 180, windowMs: 60_000, suffix: "minute" },
+    ],
+  });
+  if (blocked) return blocked;
+
   try {
-    const session = await getSessionFromCookies();
-    if (!session?.userId) return jsonError(401, "Unauthorized");
+    // ✅ Strong auth (DB-backed) + wallet pubkey
+    const user = await requireServerUser();
+    const authedUserPk = getUserWalletPubkey(user);
+    const userIdStr = String((user as { _id?: unknown })._id ?? "");
 
     const body = (await req.json().catch(() => null)) as Body | null;
     if (!body?.transaction || typeof body.transaction !== "string") {
-      return jsonError(400, "Missing 'transaction' in body");
+      return jsonError(400, "Missing 'transaction' in body", {
+        code: "MISSING_TRANSACTION",
+      });
+    }
+
+    // ✅ Bind the request to the authed wallet (client must send it)
+    const expectedUserBase58 =
+      typeof body.expectedUserBase58 === "string"
+        ? body.expectedUserBase58.trim()
+        : "";
+    if (!expectedUserBase58) {
+      return jsonError(400, "Missing expectedUserBase58", {
+        code: "MISSING_EXPECTED_USER",
+      });
+    }
+
+    let expectedPk: PublicKey;
+    try {
+      expectedPk = new PublicKey(expectedUserBase58);
+    } catch {
+      return jsonError(400, "Invalid expectedUserBase58", {
+        code: "BAD_EXPECTED_USER",
+      });
+    }
+
+    if (!expectedPk.equals(authedUserPk)) {
+      return jsonError(403, "Wallet mismatch", {
+        code: "WALLET_MISMATCH",
+        ...(IS_PROD
+          ? {}
+          : {
+              debug: {
+                authed: authedUserPk.toBase58(),
+                provided: expectedPk.toBase58(),
+              },
+            }),
+      });
     }
 
     const raw = Buffer.from(body.transaction, "base64");
-    if (!raw.length) return jsonError(400, "Invalid transaction encoding");
+    if (!raw.length)
+      return jsonError(400, "Invalid transaction encoding", {
+        code: "BAD_ENCODING",
+      });
 
     let userSignedTx: VersionedTransaction;
     try {
       userSignedTx = VersionedTransaction.deserialize(raw);
     } catch {
-      return jsonError(400, "Invalid VersionedTransaction");
+      return jsonError(400, "Invalid VersionedTransaction", { code: "BAD_TX" });
     }
 
-    // Fee payer must be Haven sponsor wallet (index 0 in v0 message)
+    // ✅ Fee payer must be Haven sponsor wallet
     const payer = userSignedTx.message.staticAccountKeys[0];
     if (!payer.equals(HAVEN_PUBKEY)) {
-      return jsonError(400, "Invalid fee payer (must be Haven sponsor wallet)");
+      return jsonError(
+        400,
+        "Invalid fee payer (must be Haven sponsor wallet)",
+        {
+          code: "INVALID_FEE_PAYER",
+        },
+      );
     }
 
-    // Reject dummy/empty blockhash
-    const recentBlockhash = (userSignedTx.message as unknown as MessageV0Subset)
-      .recentBlockhash;
+    // ✅ Reject dummy/empty blockhash
+    const recentBlockhash = userSignedTx.message.recentBlockhash;
     if (
       !recentBlockhash ||
       recentBlockhash === "11111111111111111111111111111111"
     ) {
-      return jsonError(400, "Transaction has invalid or dummy recentBlockhash");
+      return jsonError(
+        400,
+        "Transaction has invalid or dummy recentBlockhash",
+        {
+          code: "INVALID_BLOCKHASH",
+        },
+      );
     }
 
-    const conn = new Connection(SOLANA_RPC, "confirmed");
+    // ✅ Ensure authed user is a required signer AND they actually signed
+    try {
+      assertUserSigned(userSignedTx, authedUserPk);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Missing user signature";
+      return jsonError(400, m, { code: "MISSING_USER_SIGNATURE" });
+    }
+
+    // ✅ Ensure Haven is signer 0
+    const numSigners = userSignedTx.message.header.numRequiredSignatures;
+    const signerKeys = userSignedTx.message.staticAccountKeys.slice(
+      0,
+      numSigners,
+    );
+    if (!signerKeys[0]?.equals(HAVEN_PUBKEY)) {
+      return jsonError(400, "Haven is not a required signer", {
+        code: "MISSING_HAVEN_SIGNER",
+      });
+    }
+
+    // ✅ Optional: USDC is blocked here (must use /transfer)
+    // Quick, safe check: if ANY static account key equals USDC mint, reject.
+    // (Not perfect, but catches accidental misuse.)
+    if (
+      userSignedTx.message.staticAccountKeys.some((k) => k.equals(USDC_MINT))
+    ) {
+      return jsonError(400, "USDC transfers are not allowed on this route", {
+        code: "USDC_BLOCKED",
+      });
+    }
+
+    const conn = getConnection();
 
     // Pre-flight: ensure fee payer has SOL to sponsor fees
     try {
@@ -390,38 +526,28 @@ export async function POST(req: NextRequest) {
       const MIN_FEE_WALLET_SOL = 0.005;
 
       if (balanceSol < MIN_FEE_WALLET_SOL) {
-        console.error(
-          "[/api/user/wallet/crypto-transfer] Haven fee payer underfunded",
-          { balanceSol }
-        );
         return jsonError(
           503,
           "Haven fee wallet is temporarily underfunded. Please try again shortly.",
-          { code: "FEEPAYER_UNDERFUNDED" }
+          { code: "FEEPAYER_UNDERFUNDED", ...(IS_PROD ? {} : { balanceSol }) },
         );
       }
-    } catch (err) {
-      console.error(
-        "[/api/user/wallet/crypto-transfer] Failed to read fee payer balance:",
-        err
-      );
+    } catch {
+      // don't hard fail on read errors
     }
 
     // Co-sign with Privy (Haven fee payer)
-    const appPrivy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
-      walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
-    });
+    const privy = getPrivyClient();
 
     let coSignedBytes: Uint8Array;
     try {
-      const resp: unknown = await appPrivy.walletApi.solana.signTransaction({
+      const resp: unknown = await privy.walletApi.solana.signTransaction({
         walletId: HAVEN_WALLET_ID,
         transaction: userSignedTx,
       });
       coSignedBytes = toSignedBytes(resp as SignResp);
     } catch (err: unknown) {
       const e = err as ErrorLike;
-
       const bodyStr =
         typeof e.bodyAsString === "function"
           ? String(e.bodyAsString())
@@ -439,31 +565,28 @@ export async function POST(req: NextRequest) {
         });
       }
       if (low.includes("signature verification failure")) {
-        return jsonError(
-          400,
-          "Signature verification failed (message mutated or signer order incorrect).",
-          { code: "SIGNATURE_VERIFICATION_FAILED" }
-        );
+        return jsonError(400, "Signature verification failed.", {
+          code: "SIGNATURE_VERIFICATION_FAILED",
+          ...(IS_PROD ? {} : { details: msgStr }),
+        });
       }
 
-      console.error(
-        "[/api/user/wallet/crypto-transfer] Privy signTransaction failed",
-        { message: msgStr }
-      );
       return jsonError(500, "Privy signTransaction failed.", {
         code: "PRIVY_SIGN_FAILED",
+        ...(IS_PROD ? {} : { details: msgStr }),
       });
     }
 
+    // Send
     const sendOpts: SendOptions = { skipPreflight: false, maxRetries: 3 };
 
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, sendOpts);
     } catch (err: unknown) {
-      const msg = String((err as { message?: unknown })?.message ?? err)
-        .toLowerCase()
-        .trim();
+      const msg = String(
+        (err as { message?: unknown })?.message ?? err,
+      ).toLowerCase();
 
       if (msg.includes("blockhash not found") || msg.includes("expired")) {
         return jsonError(409, "Blockhash not found or expired", {
@@ -475,46 +598,63 @@ export async function POST(req: NextRequest) {
         msg.includes("insufficient funds") ||
         msg.includes("insufficient lamports")
       ) {
-        console.error(
-          "[/api/user/wallet/crypto-transfer] Insufficient funds for fee or transfer:",
-          err
-        );
         return jsonError(
           400,
           "Not enough SOL to pay network fees. Check the fee wallet and sender balance.",
-          { code: "INSUFFICIENT_FUNDS" }
+          { code: "INSUFFICIENT_FUNDS" },
         );
       }
 
       if (typeof (err as SendTransactionError)?.getLogs === "function") {
-        try {
-          const logs = await (err as SendTransactionError).getLogs(conn);
-          console.error(
-            "[/api/user/wallet/crypto-transfer] Simulation failed. Full logs:",
-            logs
-          );
-
-          return jsonError(400, "Simulation failed.", {
-            code: "SIMULATION_FAILED",
-            logs: summarizeLogs(logs),
-          });
-        } catch {
-          // ignore getLogs failures
-        }
+        const logs = await (err as SendTransactionError)
+          .getLogs(conn)
+          .catch(() => []);
+        return jsonError(400, "Simulation failed.", {
+          code: "SIMULATION_FAILED",
+          logs: summarizeLogs(logs),
+          ...(IS_PROD
+            ? {}
+            : {
+                details: String((err as { message?: unknown })?.message ?? err),
+              }),
+        });
       }
 
-      console.error(
-        "[/api/user/wallet/crypto-transfer] sendRawTransaction error:",
-        err
-      );
       return jsonError(500, "Broadcast failed.", {
         code: "BROADCAST_FAILED",
-        details: String((err as { message?: unknown })?.message ?? err),
+        ...(IS_PROD
+          ? {}
+          : {
+              details: String((err as { message?: unknown })?.message ?? err),
+            }),
       });
     }
 
-    // Confirm
-    await confirmSig(conn, signature);
+    // Confirm (prefer provided bh if client provided)
+    const providedBh =
+      typeof body.recentBlockhash === "string" ? body.recentBlockhash : null;
+    const providedLvb =
+      typeof body.lastValidBlockHeight === "number"
+        ? body.lastValidBlockHeight
+        : null;
+
+    try {
+      await confirmSig({
+        conn,
+        signature,
+        providedBlockhash:
+          providedBh && providedBh === recentBlockhash ? providedBh : null,
+        providedLastValidBlockHeight:
+          providedBh && providedBh === recentBlockhash ? providedLvb : null,
+      });
+    } catch (err) {
+      const details = err instanceof Error ? err.message : String(err);
+      return jsonError(400, "Confirm failed.", {
+        code: "CONFIRM_FAILED",
+        signature,
+        ...(IS_PROD ? {} : { details }),
+      });
+    }
 
     // Detect + record fees paid to treasury owner (ALL mints)
     let feeTokensDetected: FeeToken[] = [];
@@ -530,9 +670,10 @@ export async function POST(req: NextRequest) {
       if (feeTokensDetected.length > 0) {
         await connectMongo();
 
-        const userId = mongoose.Types.ObjectId.isValid(session.userId)
-          ? new mongoose.Types.ObjectId(session.userId)
-          : null;
+        const userId =
+          mongoose.Types.ObjectId.isValid(userIdStr) && userIdStr
+            ? new mongoose.Types.ObjectId(userIdStr)
+            : null;
 
         if (userId) {
           await recordUserFees({
@@ -543,12 +684,8 @@ export async function POST(req: NextRequest) {
           });
         }
       }
-    } catch (e) {
-      // Never fail the transfer response if analytics write fails
-      console.error(
-        "[/api/user/wallet/crypto-transfer] Fee tracking failed:",
-        e
-      );
+    } catch {
+      // analytics failures should not fail transfer
     }
 
     return NextResponse.json({
@@ -558,10 +695,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[/api/user/wallet/crypto-transfer] Unhandled error:", msg);
     return jsonError(500, "Internal server error.", {
       code: "UNHANDLED",
-      details: msg,
+      ...(IS_PROD ? {} : { details: msg }),
     });
   }
 }

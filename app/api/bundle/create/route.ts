@@ -1,4 +1,6 @@
 // app/api/bundle/create/route.ts
+import "server-only";
+
 import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import Bundle, {
@@ -6,8 +8,10 @@ import Bundle, {
   type BundleKind,
   type BundleVisibility,
 } from "@/models/Bundle";
-import { getServerUser } from "@/lib/getServerUser";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
+
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { requireServerUser } from "@/lib/getServerUser";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +26,25 @@ type CreateBundleBody = {
   allocations: AllocationInput[];
   risk?: BundleRiskLevel;
   visibility?: BundleVisibility;
+
+  /**
+   * ✅ Optional: if your client sends a userId, we enforce it matches session user.
+   * If you don't send this from client, we still safely force userId = session user.
+   */
+  userId?: string;
 };
+
+type ErrorPayload = {
+  error: string;
+  code: string;
+  userMessage?: string;
+  details?: string;
+  traceId?: string;
+};
+
+function jsonError(status: number, payload: ErrorPayload) {
+  return NextResponse.json(payload, { status });
+}
 
 /**
  * Determine bundle kind based on allocations
@@ -99,62 +121,123 @@ function validateAllocations(allocations: AllocationInput[]): string | null {
  * Create a new user bundle
  */
 export async function POST(req: NextRequest) {
-  try {
-    const user = await getServerUser();
+  const traceId = Math.random().toString(36).slice(2, 10);
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    // ✅ Rate limit early (protect DB / avoid spam bundle creation)
+    const blocked = await rateLimitServer(req, {
+      api: "bundle:create",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 2, windowMs: 10_000, suffix: "burst" }, // double-click protection
+        { limit: 8, windowMs: 60_000, suffix: "minute" }, // normal usage
+        { limit: 60, windowMs: 60 * 60_000, suffix: "hour" }, // spam cap
+      ],
+      globalTiers: [
+        { limit: 40, windowMs: 10_000, suffix: "burst" },
+        { limit: 300, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
+    // ✅ Auth (hard fail)
+    const user = await requireServerUser();
+
+    const body = (await req
+      .json()
+      .catch(() => null)) as CreateBundleBody | null;
+    if (!body) {
+      return jsonError(400, {
+        code: "INVALID_JSON",
+        error: "Invalid JSON body",
+        userMessage: "Invalid request.",
+        traceId,
+      });
     }
 
-    const body = (await req.json()) as CreateBundleBody;
+    // ✅ Security: if client tries to specify userId, enforce it matches session user.
+    // Otherwise we ignore client userId completely and always create for session user.
+    const clientUserId =
+      typeof body.userId === "string" ? body.userId.trim() : "";
+    if (clientUserId && String(clientUserId) !== String(user._id)) {
+      return jsonError(403, {
+        code: "USER_MISMATCH",
+        error: "Body userId does not match authenticated user",
+        userMessage: "This request doesn't match your account.",
+        traceId,
+      });
+    }
 
     // Validate name
     if (!body.name || typeof body.name !== "string") {
-      return NextResponse.json(
-        { error: "Bundle name is required" },
-        { status: 400 },
-      );
+      return jsonError(400, {
+        code: "MISSING_NAME",
+        error: "Bundle name is required",
+        userMessage: "Bundle name is required.",
+        traceId,
+      });
     }
 
     const name = body.name.trim();
     if (name.length < 1 || name.length > 50) {
-      return NextResponse.json(
-        { error: "Bundle name must be between 1 and 50 characters" },
-        { status: 400 },
-      );
+      return jsonError(400, {
+        code: "BAD_NAME",
+        error: "Bundle name must be between 1 and 50 characters",
+        userMessage: "Bundle name must be between 1 and 50 characters.",
+        traceId,
+      });
     }
 
     // Validate subtitle if provided
-    const subtitle = body.subtitle?.trim();
+    const subtitle =
+      typeof body.subtitle === "string" ? body.subtitle.trim() : undefined;
     if (subtitle && subtitle.length > 100) {
-      return NextResponse.json(
-        { error: "Subtitle cannot exceed 100 characters" },
-        { status: 400 },
-      );
+      return jsonError(400, {
+        code: "BAD_SUBTITLE",
+        error: "Subtitle cannot exceed 100 characters",
+        userMessage: "Subtitle cannot exceed 100 characters.",
+        traceId,
+      });
     }
 
     // Validate allocations
+    if (!body.allocations) {
+      return jsonError(400, {
+        code: "MISSING_ALLOCATIONS",
+        error: "Allocations are required",
+        userMessage: "Please choose your bundle assets.",
+        traceId,
+      });
+    }
+
     const allocationsError = validateAllocations(body.allocations);
     if (allocationsError) {
-      return NextResponse.json({ error: allocationsError }, { status: 400 });
+      return jsonError(400, {
+        code: "BAD_ALLOCATIONS",
+        error: allocationsError,
+        userMessage: allocationsError,
+        traceId,
+      });
     }
 
     // Normalize allocations
     const allocations = body.allocations.map((a) => ({
       symbol: a.symbol.trim().toUpperCase(),
-      weight: Math.round(a.weight * 100) / 100, // Round to 2 decimal places
+      weight: Math.round(a.weight * 100) / 100, // 2dp
     }));
 
-    // Determine kind based on assets
+    // Determine kind
     const kind = determineBundleKind(allocations);
 
-    // Validate risk level
+    // Risk
     const validRisks: BundleRiskLevel[] = ["low", "medium", "high", "degen"];
     const risk = validRisks.includes(body.risk as BundleRiskLevel)
       ? (body.risk as BundleRiskLevel)
       : "medium";
 
-    // Validate visibility
+    // Visibility
     const validVisibility: BundleVisibility[] = ["public", "private"];
     const visibility = validVisibility.includes(
       body.visibility as BundleVisibility,
@@ -172,13 +255,15 @@ export async function POST(req: NextRequest) {
     });
 
     if (existing) {
-      return NextResponse.json(
-        { error: "You already have a bundle with this name" },
-        { status: 400 },
-      );
+      return jsonError(400, {
+        code: "DUPLICATE_NAME",
+        error: "You already have a bundle with this name",
+        userMessage: "You already have a bundle with this name.",
+        traceId,
+      });
     }
 
-    // Create the bundle
+    // ✅ Always force ownership to authed user (ignore anything client might try)
     const bundle = await Bundle.create({
       userId: user._id,
       name,
@@ -195,19 +280,38 @@ export async function POST(req: NextRequest) {
         ...bundle.toObject(),
         _id: bundle._id.toString(),
         userId: bundle.userId.toString(),
-        totalVolume: bundle.totalVolume?.toString() ?? "0",
+        totalVolume: bundle.totalVolume?.toString?.() ?? "0",
       },
+      traceId,
     });
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.error("[POST /api/bundle/create] Error:", error);
 
-    if (error instanceof Error && error.name === "ValidationError") {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: "Unauthorized",
+        userMessage: "Please sign in again.",
+        traceId,
+      });
     }
 
-    return NextResponse.json(
-      { error: "Failed to create bundle" },
-      { status: 500 },
-    );
+    if (error instanceof Error && error.name === "ValidationError") {
+      return jsonError(400, {
+        code: "VALIDATION_ERROR",
+        error: error.message,
+        userMessage: error.message,
+        traceId,
+      });
+    }
+
+    return jsonError(500, {
+      code: "CREATE_FAILED",
+      error: "Failed to create bundle",
+      userMessage: "Failed to create bundle.",
+      details: error instanceof Error ? error.message : String(error),
+      traceId,
+    });
   }
 }
