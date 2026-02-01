@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 
 const RPC = new Connection(
   process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com",
-  "confirmed"
+  "confirmed",
 );
 
 type PerpSide = "long" | "short";
@@ -40,7 +40,7 @@ function generatePositionPda(args: {
       args.collateralCustody.toBuffer(),
       sideSeed,
     ],
-    JUPITER_PERPETUALS_PROGRAM_ID
+    JUPITER_PERPETUALS_PROGRAM_ID,
   );
 
   return position;
@@ -126,17 +126,16 @@ export async function POST(req: Request) {
     try {
       body = (await req.json()) as { ownerBase58?: string };
     } catch {
-      return NextResponse.json(
-        { error: "ownerBase58 is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid or missing JSON body" }, {
+        status: 400,
+      });
     }
 
     const { ownerBase58 } = body;
     if (!ownerBase58) {
       return NextResponse.json(
         { error: "ownerBase58 is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -221,7 +220,7 @@ export async function POST(req: Request) {
         collateralCustody: c.collateralCustody,
         walletAddress: ownerPk,
         side: c.side,
-      })
+      }),
     );
 
     const infos = await RPC.getMultipleAccountsInfo(pdaList, "confirmed");
@@ -267,7 +266,7 @@ export async function POST(req: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
       { error: msg || "Failed to fetch positions" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

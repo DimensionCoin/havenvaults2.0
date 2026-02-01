@@ -1,22 +1,7 @@
 // hooks/useSponsoredExternalTransferV2.ts
 "use client";
 
-/**
- * Sponsored USDC Transfer to External Wallets
- *
- * This hook enables sending USDC to:
- * - Raw Solana wallet addresses
- * - .sol domains (SNS - Solana Name Service)
- *
- * Gas fees are sponsored by Haven. A USDC fee is charged on top of the transfer amount.
- *
- * Dependencies:
- * - @bonfida/spl-name-service (for .sol domain resolution)
- *
- * Install: npm install @bonfida/spl-name-service
- */
-
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Connection,
   PublicKey,
@@ -34,7 +19,9 @@ import {
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
 
-/* ─── Types ───────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Types
+───────────────────────────────────────────────────────────── */
 
 export type ExternalTransferParams = {
   fromOwnerBase58: string;
@@ -57,16 +44,11 @@ export type ResolvedAddress = {
   domain?: string;
 };
 
-/* ─── Config ──────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Config (NO throwing at module scope)
+───────────────────────────────────────────────────────────── */
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl("devnet");
-const USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT!);
-const HAVEN_FEEPAYER = new PublicKey(
-  process.env.NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS!,
-);
-const TREASURY_OWNER = new PublicKey(
-  process.env.NEXT_PUBLIC_APP_TREASURY_OWNER!,
-);
 const DECIMALS = 6;
 
 const FEE_USDC: number = (() => {
@@ -78,7 +60,10 @@ const FEE_USDC: number = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 1.5;
 })();
 
-/* ─── Lazy load SNS SDK ──────────────────────────────── */
+
+/* ─────────────────────────────────────────────────────────────
+   Lazy load SNS SDK
+───────────────────────────────────────────────────────────── */
 
 let snsModule: typeof import("@bonfida/spl-name-service") | null = null;
 
@@ -95,7 +80,9 @@ async function getSnsModule() {
   return snsModule;
 }
 
-/* ─── Domain Resolution ──────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Domain Resolution
+───────────────────────────────────────────────────────────── */
 
 async function resolveSolDomain(
   conn: Connection,
@@ -105,30 +92,22 @@ async function resolveSolDomain(
     const sns = await getSnsModule();
     const name = domain.toLowerCase().replace(/\.sol$/, "");
 
-    // Get the domain key
     const { pubkey } = await sns.getDomainKeySync(name);
-
-    // Get the name registry (contains the owner)
     const { registry } = await sns.NameRegistryState.retrieve(conn, pubkey);
 
-    if (!registry.owner || registry.owner.equals(PublicKey.default)) {
+    if (!registry.owner || registry.owner.equals(PublicKey.default))
       return null;
-    }
-
     return registry.owner.toBase58();
   } catch (err) {
+    // eslint-disable-next-line no-console
     console.warn(`[resolveSolDomain] Failed to resolve ${domain}:`, err);
     return null;
   }
 }
 
-/* ─── Fallback resolution using public API ───────────── */
-
 async function resolveSolDomainViaApi(domain: string): Promise<string | null> {
   try {
     const name = domain.toLowerCase().replace(/\.sol$/, "");
-
-    // Try Bonfida's public API
     const response = await fetch(
       `https://sns-sdk-proxy.bonfida.workers.dev/resolve/${name}`,
       {
@@ -137,20 +116,19 @@ async function resolveSolDomainViaApi(domain: string): Promise<string | null> {
       },
     );
 
-    if (response.ok) {
-      const data = await response.json();
-      if (data?.result) {
-        return data.result;
-      }
-    }
+    if (!response.ok) return null;
+
+    const data: unknown = await response.json().catch(() => null);
+    const result =
+      typeof (data as { result?: unknown } | null)?.result === "string"
+        ? (data as { result: string }).result
+        : null;
+
+    return result;
   } catch {
-    // Silently fail, caller will handle
+    return null;
   }
-
-  return null;
 }
-
-/* ─── Combined resolution with fallback ──────────────── */
 
 async function resolveAddressOrDomain(
   conn: Connection,
@@ -158,30 +136,20 @@ async function resolveAddressOrDomain(
 ): Promise<ResolvedAddress | null> {
   const trimmed = input.trim();
 
-  // Check if it's a valid Solana address
+  // Valid Solana address?
   try {
     new PublicKey(trimmed);
     return { address: trimmed, isDomain: false };
   } catch {
-    // Not a valid address, continue to domain resolution
+    // continue
   }
 
-  // Check if it's a .sol domain
-  if (!/^[a-zA-Z0-9_-]+\.sol$/i.test(trimmed)) {
-    return null;
-  }
+  // Valid .sol domain format?
+  if (!/^[a-zA-Z0-9_-]+\.sol$/i.test(trimmed)) return null;
 
-  // Try on-chain resolution first
   let resolved = await resolveSolDomain(conn, trimmed).catch(() => null);
-
-  // Fallback to API if on-chain fails
-  if (!resolved) {
-    resolved = await resolveSolDomainViaApi(trimmed);
-  }
-
-  if (!resolved) {
-    return null;
-  }
+  if (!resolved) resolved = await resolveSolDomainViaApi(trimmed);
+  if (!resolved) return null;
 
   return {
     address: resolved,
@@ -190,20 +158,36 @@ async function resolveAddressOrDomain(
   };
 }
 
-/* ─── Token program detection ────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Token program detection
+───────────────────────────────────────────────────────────── */
 
 async function detectTokenProgramId(
   conn: Connection,
   mint: PublicKey,
 ): Promise<PublicKey> {
   const info = await conn.getAccountInfo(mint, "confirmed");
-  if (!info) throw new Error("USDC mint not found");
+  if (!info) throw new Error("USDC mint not found on this network.");
   return info.owner.equals(TOKEN_2022_PROGRAM_ID)
     ? TOKEN_2022_PROGRAM_ID
     : TOKEN_PROGRAM_ID;
 }
 
-/* ─── Hook ─────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Hook
+───────────────────────────────────────────────────────────── */
+
+type TransferApiOk = { signature: string };
+type TransferApiErr = { error?: string; userMessage?: string; code?: string };
+type TransferApiResponse = TransferApiOk | TransferApiErr;
+
+function pickErrorMessage(payload: unknown, fallback: string): string {
+  const p = payload as TransferApiErr | null | undefined;
+  if (typeof p?.userMessage === "string" && p.userMessage.trim())
+    return p.userMessage;
+  if (typeof p?.error === "string" && p.error.trim()) return p.error;
+  return fallback;
+}
 
 export function useSponsoredExternalTransfer() {
   const { wallets } = useWallets();
@@ -216,10 +200,35 @@ export function useSponsoredExternalTransfer() {
   );
   const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Validate and resolve an address or domain without sending.
-   * Useful for real-time input validation in UI.
-   */
+  // Lazily construct these only when needed
+  // NOTE: Next.js only inlines NEXT_PUBLIC_ vars with static access
+  // (process.env.NEXT_PUBLIC_X), not dynamic access (process.env[name]).
+ const getConfig = useCallback(() => {
+   const usdcMintStr = process.env.NEXT_PUBLIC_USDC_MINT?.trim();
+   const feePayerStr = process.env.NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS?.trim();
+   const treasuryStr = process.env.NEXT_PUBLIC_APP_TREASURY_OWNER?.trim();
+
+   if (!usdcMintStr) {
+     throw new Error("Configuration error: Missing NEXT_PUBLIC_USDC_MINT.");
+   }
+   if (!feePayerStr) {
+     throw new Error(
+       "Configuration error: Missing NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS.",
+     );
+   }
+   if (!treasuryStr) {
+     throw new Error(
+       "Configuration error: Missing NEXT_PUBLIC_APP_TREASURY_OWNER.",
+     );
+   }
+
+   return {
+     USDC_MINT: new PublicKey(usdcMintStr),
+     HAVEN_FEEPAYER: new PublicKey(feePayerStr),
+     TREASURY_OWNER: new PublicKey(treasuryStr),
+   };
+ }, []);
+
   const validateAndResolve = useCallback(
     async (input: string): Promise<ResolvedAddress | null> => {
       if (!input.trim()) return null;
@@ -235,16 +244,10 @@ export function useSponsoredExternalTransfer() {
     [],
   );
 
-  /**
-   * Calculate the total amount needed (transfer + fee)
-   */
   const calculateTotal = useCallback((amountUi: number): number => {
     return amountUi + FEE_USDC;
   }, []);
 
-  /**
-   * Send USDC to an external wallet or .sol domain.
-   */
   const send = useCallback(
     async (params: ExternalTransferParams): Promise<ExternalTransferResult> => {
       const { fromOwnerBase58, toAddressOrDomain, amountUi } = params;
@@ -254,16 +257,25 @@ export function useSponsoredExternalTransfer() {
       setLastResult(null);
 
       try {
-        // Validate amount
+        // Config only needed here; if missing, user sees clean message
+        const { USDC_MINT, HAVEN_FEEPAYER, TREASURY_OWNER } = getConfig();
+
         if (!Number.isFinite(amountUi) || amountUi <= 0) {
           throw new Error("Amount must be greater than 0");
         }
-
         if (amountUi < 0.01) {
           throw new Error("Minimum transfer amount is 0.01 USDC");
         }
 
-        const fromOwner = new PublicKey(fromOwnerBase58);
+        const fromOwnerTrimmed = (fromOwnerBase58 || "").trim();
+
+        let fromOwner: PublicKey;
+        try {
+          fromOwner = new PublicKey(fromOwnerTrimmed);
+        } catch {
+          throw new Error("Invalid sender wallet address. Please reconnect.");
+        }
+
         const conn = new Connection(RPC, "confirmed");
 
         // Resolve destination
@@ -279,21 +291,16 @@ export function useSponsoredExternalTransfer() {
 
         const toOwner = new PublicKey(resolved.address);
 
-        // Prevent self-transfer
-        if (fromOwner.equals(toOwner)) {
+        if (fromOwner.equals(toOwner))
           throw new Error("Cannot send to yourself");
-        }
-
-        // Prevent sending to Haven system wallets
         if (toOwner.equals(HAVEN_FEEPAYER) || toOwner.equals(TREASURY_OWNER)) {
           throw new Error("Cannot send to Haven system wallets");
         }
 
-        // Get Privy wallet
-        const wallet = wallets.find((w) => w.address === fromOwnerBase58);
-        if (!wallet) {
-          throw new Error("Wallet not available. Please reconnect.");
-        }
+        const wallet = wallets.find(
+          (w) => (w.address || "").trim() === fromOwnerTrimmed,
+        );
+        if (!wallet) throw new Error("Wallet not available. Please reconnect.");
 
         // Detect token program
         const tokenProgramId = await detectTokenProgramId(conn, USDC_MINT);
@@ -318,20 +325,36 @@ export function useSponsoredExternalTransfer() {
           tokenProgramId,
         );
 
-        // Check sender balance
-        const fromAtaInfo = await conn
-          .getTokenAccountBalance(fromAta, "confirmed")
-          .catch(() => null);
-        const balance = fromAtaInfo?.value?.uiAmount ?? 0;
-        const totalNeeded = amountUi + FEE_USDC;
+        // Balance check (no silent swallowing; no string matching)
+        let balance = 0;
 
+        try {
+          const ataAccountInfo = await conn.getAccountInfo(
+            fromAta,
+            "confirmed",
+          );
+
+          // ATA doesn't exist => balance is 0 (expected)
+          if (!ataAccountInfo) {
+            balance = 0;
+          } else {
+            const fromAtaInfo = await conn.getTokenAccountBalance(
+              fromAta,
+              "confirmed",
+            );
+            balance = fromAtaInfo?.value?.uiAmount ?? 0;
+          }
+        } catch {
+          throw new Error("Failed to check USDC balance. Please try again.");
+        }
+
+        const totalNeeded = amountUi + FEE_USDC;
         if (balance < totalNeeded) {
           throw new Error(
             `Insufficient USDC balance. You need ${totalNeeded.toFixed(2)} USDC (${amountUi} + ${FEE_USDC} fee) but have ${balance.toFixed(2)} USDC.`,
           );
         }
 
-        // Build instructions
         const ixs = [
           createAssociatedTokenAccountIdempotentInstruction(
             HAVEN_FEEPAYER,
@@ -359,7 +382,6 @@ export function useSponsoredExternalTransfer() {
         const amountUnits = Math.round(amountUi * 10 ** DECIMALS);
         const feeUnits = Math.round(FEE_USDC * 10 ** DECIMALS);
 
-        // Transfer to recipient
         ixs.push(
           createTransferCheckedInstruction(
             fromAta,
@@ -373,7 +395,6 @@ export function useSponsoredExternalTransfer() {
           ),
         );
 
-        // Transfer fee to treasury
         ixs.push(
           createTransferCheckedInstruction(
             fromAta,
@@ -387,8 +408,9 @@ export function useSponsoredExternalTransfer() {
           ),
         );
 
-        // Build transaction
-        const { blockhash } = await conn.getLatestBlockhash("processed");
+        const { blockhash, lastValidBlockHeight } =
+          await conn.getLatestBlockhash("processed");
+
         const msg = new TransactionMessage({
           payerKey: HAVEN_FEEPAYER,
           recentBlockhash: blockhash,
@@ -397,14 +419,12 @@ export function useSponsoredExternalTransfer() {
 
         const tx = new VersionedTransaction(msg);
 
-        // Sign with user's wallet
         const { signedTransaction } = await signTransaction({
           transaction: tx.serialize(),
           wallet,
           options: { uiOptions: { showWalletUIs: false } },
         });
 
-        // Send to backend for co-signing
         const res = await fetch("/api/user/wallet/transfer", {
           method: "POST",
           credentials: "include",
@@ -412,26 +432,26 @@ export function useSponsoredExternalTransfer() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             transaction: Buffer.from(signedTransaction).toString("base64"),
+            expectedUserBase58: fromOwnerTrimmed,
+            recentBlockhash: blockhash,
+            lastValidBlockHeight,
           }),
         });
 
-        const json = await res.json().catch(() => ({}));
+        const json = (await res
+          .json()
+          .catch(() => ({}))) as TransferApiResponse;
 
-        if (!res.ok || !json?.signature) {
-          // Handle specific error codes
-          if (json?.code === "BLOCKHASH_EXPIRED") {
-            throw new Error("Transaction expired. Please try again.");
-          }
-          if (json?.code === "INSUFFICIENT_FUNDS") {
-            throw new Error(
-              "Haven fee wallet is low on SOL. Please try again shortly.",
-            );
-          }
-          throw new Error(json?.error || `Transfer failed (${res.status})`);
+        if (!res.ok || typeof (json as TransferApiOk).signature !== "string") {
+          throw new Error(
+            pickErrorMessage(json, `Transfer failed (${res.status})`),
+          );
         }
 
+        const signature = (json as TransferApiOk).signature;
+
         const result: ExternalTransferResult = {
-          signature: json.signature,
+          signature,
           resolvedAddress: resolved.address,
           inputAddress: toAddressOrDomain,
           amountUi,
@@ -449,18 +469,29 @@ export function useSponsoredExternalTransfer() {
         setResolving(false);
       }
     },
-    [wallets, signTransaction],
+    [wallets, signTransaction, getConfig],
   );
 
-  return {
-    send,
-    validateAndResolve,
-    calculateTotal,
-    loading,
-    resolving,
-    lastResult,
-    error,
-    feeUsdc: FEE_USDC,
-    clearError: useCallback(() => setError(null), []),
-  };
+  return useMemo(
+    () => ({
+      send,
+      validateAndResolve,
+      calculateTotal,
+      loading,
+      resolving,
+      lastResult,
+      error,
+      feeUsdc: FEE_USDC,
+      clearError: () => setError(null),
+    }),
+    [
+      send,
+      validateAndResolve,
+      calculateTotal,
+      loading,
+      resolving,
+      lastResult,
+      error,
+    ],
+  );
 }
