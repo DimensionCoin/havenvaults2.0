@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
+import { resolveRpcUrl } from "@/lib/resolveRpcUrl";
 
 import {
   Connection,
@@ -86,9 +87,11 @@ const MIN_NATIVE_SOL_BUFFER = 0.0035;
 
 /**
  * RPC endpoint – matches the rest of your app.
+ * resolveRpcUrl converts relative "/api/rpc" to absolute for @solana/web3.js.
  */
-const RPC =
-  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.devnet.solana.com";
+const RPC = resolveRpcUrl(
+  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.devnet.solana.com",
+);
 
 /* ------------------------------------------------------------------ */
 /*                        Provider component                          */

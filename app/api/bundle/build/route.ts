@@ -40,7 +40,7 @@ function required(name: string): string {
   return v;
 }
 
-const RPC = required("NEXT_PUBLIC_SOLANA_RPC");
+const RPC = required("SOLANA_RPC");
 const JUP_API_KEY = required("JUP_API_KEY");
 const HAVEN_FEEPAYER_STR = required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS");
 const TREASURY_OWNER_STR = required("NEXT_PUBLIC_APP_TREASURY_OWNER");

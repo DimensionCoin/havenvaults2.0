@@ -40,7 +40,7 @@ function required(name: string): string {
   return v;
 }
 
-const SOLANA_RPC = required("NEXT_PUBLIC_SOLANA_RPC");
+const SOLANA_RPC = required("SOLANA_RPC");
 
 const PRIVY_APP_ID = required("PRIVY_APP_ID");
 const PRIVY_SECRET = required("PRIVY_APP_SECRET");

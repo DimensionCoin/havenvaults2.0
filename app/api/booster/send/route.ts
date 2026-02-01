@@ -9,6 +9,8 @@ import {
 } from "@solana/web3.js";
 import { PrivyClient } from "@privy-io/server-auth";
 import { getSessionFromCookies } from "@/lib/auth";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 import { recordUserFees } from "@/lib/fees";
 import User from "@/models/User";
 import { connect } from "@/lib/db";
@@ -24,7 +26,7 @@ function required(name: string): string {
   return v;
 }
 
-const SOLANA_RPC = required("NEXT_PUBLIC_SOLANA_RPC");
+const SOLANA_RPC = required("SOLANA_RPC");
 const PRIVY_APP_ID = required("PRIVY_APP_ID");
 const PRIVY_SECRET = required("PRIVY_APP_SECRET");
 const PRIVY_AUTH_PK = required("PRIVY_AUTH_PRIVATE_KEY_B64");
@@ -295,6 +297,7 @@ export async function POST(req: NextRequest) {
   try {
     // ─────────── Auth ───────────
     stageRef.stage = "auth";
+    let authedUserPk: PublicKey;
     const session = await getSessionFromCookies();
     if (!session?.userId) {
       return jsonError(401, {
@@ -306,6 +309,38 @@ export async function POST(req: NextRequest) {
         stage: stageRef.stage,
       });
     }
+    try {
+      const user = await requireServerUser();
+      authedUserPk = getUserWalletPubkey(user);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unauthorized";
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: m,
+        userMessage: "Please sign in again.",
+        traceId,
+        stage: stageRef.stage,
+      });
+    }
+
+    // ─────────── Rate Limit ───────────
+    stageRef.stage = "rateLimit";
+    const blocked = await rateLimitServer(req, {
+      api: "booster:send",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 3, windowMs: 10_000, suffix: "burst" },
+        { limit: 8, windowMs: 60_000, suffix: "minute" },
+        { limit: 40, windowMs: 3_600_000, suffix: "hour" },
+      ],
+      globalTiers: [
+        { limit: 20, windowMs: 10_000, suffix: "burst" },
+        { limit: 100, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
 
     stageRef.stage = "parseBody";
     const parsed = (await req
@@ -419,6 +454,27 @@ export async function POST(req: NextRequest) {
       } catch {
         ownerPk = null;
       }
+    }
+
+    // ─────────── Wallet Binding ───────────
+    stageRef.stage = "walletBinding";
+    if (requiredSignatures >= 2 && !ownerPk) {
+      return jsonError(400, {
+        code: "MISSING_OWNER_PK",
+        error: "Missing owner public key",
+        userMessage: "This request is missing the owner public key.",
+        traceId,
+        stage: stageRef.stage,
+      });
+    }
+    if (ownerPk && !ownerPk.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "Transaction owner does not match authenticated user",
+        userMessage: "This request doesn't match your account.",
+        traceId,
+        stage: stageRef.stage,
+      });
     }
 
     /* ───────── PRIVY CO-SIGN ───────── */

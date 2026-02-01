@@ -8,6 +8,7 @@ import User, {
   type FinancialKnowledgeLevel,
 } from "@/models/User";
 import { getSessionFromCookies } from "@/lib/auth";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,9 @@ const KNOWLEDGE_LEVELS: FinancialKnowledgeLevel[] = [
 
 export async function PATCH(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     await connect();
 
     const session = await getSessionFromCookies();

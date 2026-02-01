@@ -6,7 +6,7 @@ import { PrivyProvider } from "@privy-io/react-auth";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 
 const SOLANA_RPC_HTTP =
-  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.devnet.solana.com";
+  process.env.NEXT_PUBLIC_PRIVY_RPC || "https://api.mainnet-beta.solana.com";
 
 const SOLANA_NETWORK =
   process.env.NEXT_PUBLIC_SOLANA_NETWORK === "mainnet" ? "mainnet" : "devnet";

@@ -37,10 +37,11 @@ import {
   getMintFor,
   type TokenMeta,
 } from "@/lib/tokenConfig";
+import { resolveRpcUrl } from "@/lib/resolveRpcUrl";
 
 const CLUSTER = getCluster();
 const ENV_USDC_MINT = process.env.NEXT_PUBLIC_USDC_MINT || "";
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || "";
+const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_SOLANA_RPC || "");
 
 // UI fee (preview only; server is source of truth)
 const FEE_RATE_RAW = process.env.NEXT_PUBLIC_CRYPTO_SWAP_FEE_UI ?? "0.01";

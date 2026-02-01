@@ -4,12 +4,41 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import User, { IBalanceSnapshot } from "@/models/User";
 import mongoose from "mongoose";
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    /* ── auth ── */
+    let authedWallet: string;
+    try {
+      const user = await requireServerUser();
+      authedWallet = getUserWalletPubkey(user).toBase58();
+    } catch (err) {
+      console.error("[/api/user/balance/snapshot] auth failed", err);
+      // Only treat explicit auth errors as 401; otherwise surface.
+      if (err instanceof Error && err.message === "Unauthorized") {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      throw err;
+    }
+
+    /* ── rate limit ── */
+    const rl = await rateLimitServer(req, {
+      api: "user:balance:snapshot",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "open",
+      tiers: [
+        { limit: 5, windowMs: 60_000, suffix: "minute" },
+        { limit: 30, windowMs: 3_600_000, suffix: "hour" },
+      ],
+    });
+    if (rl) return rl;
+
     const body = await req.json().catch(() => null);
 
     const owner = body?.owner as string | undefined;
@@ -19,6 +48,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "Missing owner (walletAddress)" },
         { status: 400 }
+      );
+    }
+
+    /* ── wallet binding ── */
+    if (owner !== authedWallet) {
+      return NextResponse.json(
+        { error: "Wallet mismatch" },
+        { status: 403 },
       );
     }
 

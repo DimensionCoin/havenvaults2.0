@@ -15,6 +15,8 @@ export const JWT_SECRET_BYTES = new TextEncoder().encode(rawSecret);
 
 export const SESSION_COOKIE_NAME =
   process.env.SESSION_COOKIE_NAME || "haven_session";
+export const CSRF_COOKIE_NAME =
+  process.env.CSRF_COOKIE_NAME || "haven_csrf";
 
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 const SESSION_TTL_SECONDS = Number(
@@ -89,11 +91,21 @@ export async function getSessionFromCookies(): Promise<SessionPayload | null> {
 export async function setSessionCookie(payload: SessionPayload): Promise<void> {
   const cookieStore = await cookies();
   const token = await signSessionToken(payload);
+  const csrfToken = crypto.randomUUID();
 
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "strict",
+    path: "/",
+    maxAge: SESSION_TTL_SECONDS,
+  });
+
+  // Double-submit token for CSRF protection (readable by client JS)
+  cookieStore.set(CSRF_COOKIE_NAME, csrfToken, {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
     path: "/",
     maxAge: SESSION_TTL_SECONDS,
   });
@@ -109,6 +121,14 @@ export async function clearSessionCookie(): Promise<void> {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
+
+  cookieStore.set(CSRF_COOKIE_NAME, "", {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
     path: "/",
     maxAge: 0,
   });

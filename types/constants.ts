@@ -5,7 +5,7 @@ import BN from "bn.js";
 /* ───────── RPC ───────── */
 
 export const RPC_CONNECTION = new Connection(
-  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com",
+  process.env.SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com",
   "confirmed"
 );
 

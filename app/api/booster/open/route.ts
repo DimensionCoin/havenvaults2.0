@@ -1,5 +1,6 @@
 // app/api/booster/open/route.ts - OPTIMIZED FOR SPEED & RELIABILITY
-import { NextResponse } from "next/server";
+import "server-only";
+import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import {
   ComputeBudgetProgram,
@@ -18,6 +19,9 @@ import {
   createTransferCheckedInstruction,
 } from "@solana/spl-token";
 import { BN } from "@coral-xyz/anchor";
+
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 import {
   RPC_CONNECTION,
@@ -238,11 +242,46 @@ function leverageToFraction(lev: 1.5 | 2): { num: number; den: number } {
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const startTime = Date.now(); // ✅ Performance tracking
   const stageRef: { stage: string } = { stage: "init" };
 
   try {
+    // ─────────── Auth ───────────
+    stageRef.stage = "auth";
+    let authedUserPk: PublicKey;
+    try {
+      const user = await requireServerUser();
+      authedUserPk = getUserWalletPubkey(user);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unauthorized";
+      return jsonError(401, {
+        code: "UNAUTHORIZED",
+        error: m,
+        userMessage: "Please sign in again.",
+        stage: stageRef.stage,
+      });
+    }
+
+    // ─────────── Rate Limit ───────────
+    stageRef.stage = "rateLimit";
+    const blocked = await rateLimitServer(req, {
+      api: "booster:open",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 3, windowMs: 10_000, suffix: "burst" },
+        { limit: 10, windowMs: 60_000, suffix: "minute" },
+        { limit: 60, windowMs: 3_600_000, suffix: "hour" },
+      ],
+      globalTiers: [
+        { limit: 30, windowMs: 10_000, suffix: "burst" },
+        { limit: 200, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
     stageRef.stage = "envCheck";
     if (!USDC_MINT || !HAVEN_FEEPAYER_STR || !TREASURY_OWNER_STR) {
       return jsonError(500, {
@@ -308,6 +347,18 @@ export async function POST(req: Request) {
     }
 
     const owner = new PublicKey(ownerBase58);
+
+    // ─────────── Wallet Binding ───────────
+    stageRef.stage = "walletBinding";
+    if (!owner.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "ownerBase58 does not match authenticated user wallet",
+        userMessage: "This request doesn't match your account.",
+        stage: stageRef.stage,
+      });
+    }
+
     const custody = UNDERLYING_BY_SYMBOL[symbol];
     const collateralCustody = side === "long" ? custody : USDC_CUSTODY;
 

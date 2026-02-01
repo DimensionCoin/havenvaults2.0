@@ -1,7 +1,7 @@
 // lib/solanaConfig.ts
 export type SolanaNetwork = "devnet" | "mainnet" | "localnet" | "other";
 
-const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+const rpcUrl = process.env.SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
 const networkEnv = process.env.NEXT_PUBLIC_SOLANA_NETWORK;
 
 // Fail fast if misconfigured (optional but recommended on server side)

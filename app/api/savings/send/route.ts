@@ -527,7 +527,7 @@ async function recordSavingsFeeAsync(params: {
 
 export async function POST(req: NextRequest) {
   try {
-    const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC;
+    const RPC = process.env.SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC;
     const HAVEN_ADDR = process.env.NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS;
     const MARGINFI_PROGRAM_ID_STR = process.env.MARGINFI_PROGRAM_ID;
 
@@ -540,7 +540,7 @@ export async function POST(req: NextRequest) {
     const HAVEN_WALLET_ID = process.env.HAVEN_AUTH_ADDRESS_ID;
 
     if (!RPC)
-      return json(500, { error: "Missing env: NEXT_PUBLIC_SOLANA_RPC" });
+      return json(500, { error: "Server configuration error" });
     if (!HAVEN_ADDR)
       return json(500, {
         error: "Missing env: NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS",

@@ -18,6 +18,7 @@ import {
 } from "@solana/spl-token";
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
+import { resolveRpcUrl } from "@/lib/resolveRpcUrl";
 
 /* ─────────────────────────────────────────────────────────────
    Types
@@ -48,7 +49,7 @@ export type ResolvedAddress = {
    Config (NO throwing at module scope)
 ───────────────────────────────────────────────────────────── */
 
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl("devnet");
+const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl("devnet"));
 const DECIMALS = 6;
 
 const FEE_USDC: number = (() => {

@@ -161,7 +161,7 @@ function getFlexMarginfiAccountPkStrict(userLean: UserLean): string | null {
 
 export async function GET() {
   try {
-    const RPC = requiredAny(["NEXT_PUBLIC_SOLANA_RPC", "SOLANA_RPC"]);
+    const RPC = requiredAny(["SOLANA_RPC", "NEXT_PUBLIC_SOLANA_RPC"]);
     const MARGINFI_PROGRAM_ID_STR = requiredAny(["MARGINFI_PROGRAM_ID"]);
     const MARGINFI_GROUP_STR = requiredAny(["MARGINFI_GROUP"]);
     const USDC_MINT_STR = requiredAny(["NEXT_PUBLIC_USDC_MINT"]);

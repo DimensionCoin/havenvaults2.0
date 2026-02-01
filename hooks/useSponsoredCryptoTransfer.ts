@@ -18,6 +18,7 @@ import {
 } from "@solana/spl-token";
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
+import { resolveRpcUrl } from "@/lib/resolveRpcUrl";
 
 /* ───────────────── Types ───────────────── */
 
@@ -38,7 +39,7 @@ export type SponsoredCryptoTransferParams = {
 
 /* ───────────────── Config ───────────────── */
 
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl("devnet");
+const RPC = resolveRpcUrl(process.env.NEXT_PUBLIC_SOLANA_RPC ?? clusterApiUrl("devnet"));
 
 // Haven fee payer – must match NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS on server
 const HAVEN_FEEPAYER = new PublicKey(

@@ -1,7 +1,10 @@
 // app/api/booster/positions/route.ts
-import { NextResponse } from "next/server";
+import "server-only";
+import { type NextRequest, NextResponse } from "next/server";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 import {
   JUPITER_PERPETUALS_PROGRAM_ID,
@@ -12,7 +15,7 @@ import {
 export const runtime = "nodejs";
 
 const RPC = new Connection(
-  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com",
+  process.env.SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com",
   "confirmed",
 );
 
@@ -120,8 +123,33 @@ function decodePositionAccount(data: Buffer): {
   };
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
+    /* ── auth ── */
+    let authedUserPk: PublicKey;
+    try {
+      const user = await requireServerUser();
+      authedUserPk = getUserWalletPubkey(user);
+    } catch {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 },
+      );
+    }
+
+    /* ── rate limit ── */
+    const rl = await rateLimitServer(req, {
+      api: "booster:positions",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 5, windowMs: 10_000, suffix: "burst" },
+        { limit: 30, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (rl) return rl;
+
     let body: { ownerBase58?: string };
     try {
       body = (await req.json()) as { ownerBase58?: string };
@@ -139,7 +167,20 @@ export async function POST(req: Request) {
       );
     }
 
-    const ownerPk = new PublicKey(ownerBase58);
+    let ownerPk: PublicKey;
+    try {
+      ownerPk = new PublicKey(ownerBase58);
+    } catch {
+      return NextResponse.json({ error: "Invalid public key" }, { status: 400 });
+    }
+
+    /* ── wallet binding ── */
+    if (!ownerPk.equals(authedUserPk)) {
+      return NextResponse.json(
+        { error: "Wallet mismatch" },
+        { status: 403 },
+      );
+    }
 
     const SOL_CUSTODY = new PublicKey(CUSTODY_PUBKEY.SOL);
     const ETH_CUSTODY = new PublicKey(CUSTODY_PUBKEY.ETH);
