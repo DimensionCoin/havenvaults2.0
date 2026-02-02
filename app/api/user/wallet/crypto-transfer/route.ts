@@ -28,6 +28,7 @@ import {
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { validateCsrf } from "@/lib/csrf";
+import { WSOL_MINT } from "@/lib/tokenConfig";
 
 /* ───────── Next.js route config ───────── */
 
@@ -98,6 +99,8 @@ type JsonErrorExtra = Record<string, unknown> | undefined;
 type MetaSubset = {
   preTokenBalances?: TokenBalance[];
   postTokenBalances?: TokenBalance[];
+  preBalances?: Array<number | bigint | string>;
+  postBalances?: Array<number | bigint | string>;
 };
 
 type TxSubset = TransactionResponse & { meta?: MetaSubset | null };
@@ -240,6 +243,20 @@ function bigIntFromString(x: unknown): bigint {
   return bi0();
 }
 
+function bigIntFromLamports(x: unknown): bigint {
+  if (typeof x === "bigint") return x >= bi0() ? x : bi0();
+  if (typeof x === "number" && Number.isFinite(x)) {
+    return BigInt(Math.max(0, Math.floor(x)));
+  }
+  if (typeof x === "string" && x.trim()) {
+    try {
+      const v = BigInt(x.trim());
+      return v >= bi0() ? v : bi0();
+    } catch {}
+  }
+  return bi0();
+}
+
 function clampDecimals(decimals: number) {
   const d = Number.isFinite(decimals) ? Math.floor(decimals) : 0;
   return Math.max(0, Math.min(18, d));
@@ -262,6 +279,58 @@ function bigintToUiString(base: bigint, decimals: number): string {
   const frac = base % denom;
   const fracStr = frac.toString().padStart(d, "0").replace(/0+$/, "");
   return fracStr ? `${whole}.${fracStr}` : whole.toString();
+}
+
+function normalizeAccountKey(key: unknown): string {
+  if (typeof key === "string") return key;
+  if (key && typeof key === "object") {
+    const maybe = key as { toBase58?: () => string; pubkey?: { toBase58?: () => string } };
+    if (typeof maybe.toBase58 === "function") return maybe.toBase58();
+    if (maybe.pubkey && typeof maybe.pubkey.toBase58 === "function") {
+      return maybe.pubkey.toBase58();
+    }
+  }
+  return "";
+}
+
+function getAccountKeysFromTx(tx: TxSubset | null): string[] {
+  const message = tx?.transaction?.message ?? null;
+  const keysRaw: unknown[] = Array.isArray(
+    (message as { staticAccountKeys?: unknown[] } | null)?.staticAccountKeys,
+  )
+    ? (message as { staticAccountKeys?: unknown[] }).staticAccountKeys ?? []
+    : Array.isArray((message as { accountKeys?: unknown[] } | null)?.accountKeys)
+      ? (message as { accountKeys?: unknown[] }).accountKeys ?? []
+      : [];
+  const out: string[] = [];
+  for (const k of keysRaw) {
+    const keyStr = normalizeAccountKey(k);
+    if (keyStr) out.push(keyStr);
+  }
+  return out;
+}
+
+function detectTreasurySolFeeLamports(
+  tx: TxSubset | null,
+  treasuryOwner: PublicKey,
+): bigint {
+  const meta = tx?.meta ?? null;
+  if (!meta) return bi0();
+
+  const pre = Array.isArray(meta.preBalances) ? meta.preBalances : [];
+  const post = Array.isArray(meta.postBalances) ? meta.postBalances : [];
+  if (!pre.length || !post.length) return bi0();
+
+  const keys = getAccountKeysFromTx(tx);
+  if (!keys.length) return bi0();
+
+  const idx = keys.indexOf(treasuryOwner.toBase58());
+  if (idx < 0 || idx >= pre.length || idx >= post.length) return bi0();
+
+  const preLamports = bigIntFromLamports(pre[idx]);
+  const postLamports = bigIntFromLamports(post[idx]);
+  const delta = postLamports - preLamports;
+  return delta > bi0() ? delta : bi0();
 }
 
 /* ───────── Fee detection (reliable: uses confirmed meta) ───────── */
@@ -350,6 +419,16 @@ async function detectTreasuryFeeTokensFromMeta(params: {
       decimals: v.decimals,
       amountUi: bigintToUiString(v.baseDelta, v.decimals),
       symbol: v.symbol,
+    });
+  }
+
+  const solLamports = detectTreasurySolFeeLamports(tx, treasuryOwner);
+  if (solLamports > bi0()) {
+    out.push({
+      mint: WSOL_MINT,
+      decimals: 9,
+      amountUi: bigintToUiString(solLamports, 9),
+      symbol: "SOL",
     });
   }
 

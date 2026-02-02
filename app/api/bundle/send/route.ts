@@ -21,6 +21,7 @@ import {
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { recordUserFees, type FeeToken } from "@/lib/fees";
 import { validateCsrf } from "@/lib/csrf";
+import { WSOL_MINT } from "@/lib/tokenConfig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -175,13 +176,23 @@ type TokenBalanceMetaLike = {
 
 type TxMetaLike = Pick<
   ParsedTransactionMeta,
-  "preTokenBalances" | "postTokenBalances"
+  "preTokenBalances" | "postTokenBalances" | "preBalances" | "postBalances"
 > & {
   preTokenBalances?: TokenBalanceMetaLike[];
   postTokenBalances?: TokenBalanceMetaLike[];
+  preBalances?: Array<number | bigint | string>;
+  postBalances?: Array<number | bigint | string>;
 };
 
-type TxWithMetaLike = { meta?: TxMetaLike | null } | null;
+type TxMessageLike = {
+  accountKeys?: unknown[];
+  staticAccountKeys?: unknown[];
+};
+
+type TxWithMetaLike = {
+  meta?: TxMetaLike | null;
+  transaction?: { message?: TxMessageLike | null } | null;
+} | null;
 
 function bi0(): bigint {
   return BigInt(0);
@@ -191,6 +202,20 @@ function bigIntFromString(x: unknown): bigint {
   try {
     if (typeof x === "string" && x.trim()) return BigInt(x.trim());
   } catch {}
+  return bi0();
+}
+
+function bigIntFromLamports(x: unknown): bigint {
+  if (typeof x === "bigint") return x >= bi0() ? x : bi0();
+  if (typeof x === "number" && Number.isFinite(x)) {
+    return BigInt(Math.max(0, Math.floor(x)));
+  }
+  if (typeof x === "string" && x.trim()) {
+    try {
+      const v = BigInt(x.trim());
+      return v >= bi0() ? v : bi0();
+    } catch {}
+  }
   return bi0();
 }
 
@@ -216,6 +241,56 @@ function bigintToUiString(base: bigint, decimals: number): string {
   const frac = base % denom;
   const fracStr = frac.toString().padStart(d, "0").replace(/0+$/, "");
   return fracStr ? `${whole}.${fracStr}` : whole.toString();
+}
+
+function normalizeAccountKey(key: unknown): string {
+  if (typeof key === "string") return key;
+  if (key && typeof key === "object") {
+    const maybe = key as { toBase58?: () => string; pubkey?: { toBase58?: () => string } };
+    if (typeof maybe.toBase58 === "function") return maybe.toBase58();
+    if (maybe.pubkey && typeof maybe.pubkey.toBase58 === "function") {
+      return maybe.pubkey.toBase58();
+    }
+  }
+  return "";
+}
+
+function getAccountKeysFromTx(tx: TxWithMetaLike): string[] {
+  const message = tx?.transaction?.message ?? null;
+  const keysRaw = Array.isArray(message?.staticAccountKeys)
+    ? message?.staticAccountKeys
+    : Array.isArray(message?.accountKeys)
+      ? message?.accountKeys
+      : [];
+  const out: string[] = [];
+  for (const k of keysRaw) {
+    const keyStr = normalizeAccountKey(k);
+    if (keyStr) out.push(keyStr);
+  }
+  return out;
+}
+
+function detectTreasurySolFeeLamports(
+  tx: TxWithMetaLike,
+  treasuryOwner: PublicKey,
+): bigint {
+  const meta = tx?.meta ?? null;
+  if (!meta) return bi0();
+
+  const pre = Array.isArray(meta.preBalances) ? meta.preBalances : [];
+  const post = Array.isArray(meta.postBalances) ? meta.postBalances : [];
+  if (!pre.length || !post.length) return bi0();
+
+  const keys = getAccountKeysFromTx(tx);
+  if (!keys.length) return bi0();
+
+  const idx = keys.indexOf(treasuryOwner.toBase58());
+  if (idx < 0 || idx >= pre.length || idx >= post.length) return bi0();
+
+  const preLamports = bigIntFromLamports(pre[idx]);
+  const postLamports = bigIntFromLamports(post[idx]);
+  const delta = postLamports - preLamports;
+  return delta > bi0() ? delta : bi0();
 }
 
 async function detectTreasuryFeeTokensFromMeta(params: {
@@ -310,6 +385,16 @@ async function detectTreasuryFeeTokensFromMeta(params: {
       decimals: v.decimals,
       amountUi: bigintToUiString(v.baseDelta, v.decimals),
       symbol: v.symbol,
+    });
+  }
+
+  const solLamports = detectTreasurySolFeeLamports(tx, treasuryOwner);
+  if (solLamports > bi0()) {
+    out.push({
+      mint: WSOL_MINT,
+      decimals: 9,
+      amountUi: bigintToUiString(solLamports, 9),
+      symbol: "SOL",
     });
   }
 

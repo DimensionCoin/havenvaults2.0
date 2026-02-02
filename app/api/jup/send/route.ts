@@ -22,7 +22,7 @@ import {
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { FeeEvent } from "@/models/FeeEvent";
-import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
+import { TOKENS, getCluster, getMintFor, WSOL_MINT } from "@/lib/tokenConfig";
 import {
   requireServerUser,
   getUserWalletPubkey,
@@ -458,6 +458,14 @@ function toD128FromUiString(amountUiStr: string): mongoose.Types.Decimal128 {
   return D128.fromString(s === "" ? "0" : s);
 }
 
+function bigIntFromString(v: string): bigint {
+  try {
+    return BigInt(String(v || "0"));
+  } catch {
+    return BigInt(0);
+  }
+}
+
 function addBase(a: string, b: string): string {
   const x = BigInt(a || "0");
   const y = BigInt(b || "0");
@@ -597,6 +605,122 @@ async function recordUserFeesExact(params: {
   return { ok: true, recorded: true };
 }
 
+type TokenBalanceLike = {
+  accountIndex?: number;
+  owner?: string;
+  mint?: string;
+  uiTokenAmount?: { amount?: string; decimals?: number };
+  amount?: string;
+  decimals?: number;
+};
+
+function detectTreasuryFeeTokensFromMeta(
+  tx: ParsedTransactionWithMeta,
+  treasuryOwner: PublicKey,
+): FeeToken[] {
+  const meta = tx?.meta;
+  if (!meta) return [];
+
+  const ownerStr = treasuryOwner.toBase58();
+  const pre: TokenBalanceLike[] = Array.isArray(meta.preTokenBalances)
+    ? (meta.preTokenBalances as TokenBalanceLike[])
+    : [];
+  const post: TokenBalanceLike[] = Array.isArray(meta.postTokenBalances)
+    ? (meta.postTokenBalances as TokenBalanceLike[])
+    : [];
+
+  const preByIdx = new Map<number, TokenBalanceLike>();
+  for (const b of pre) {
+    if (typeof b?.accountIndex === "number") preByIdx.set(b.accountIndex, b);
+  }
+
+  const deltas = new Map<
+    string,
+    { mint: string; decimals: number; amountBase: string; symbol?: string }
+  >();
+
+  for (const pb of post) {
+    const idx = pb?.accountIndex;
+    if (typeof idx !== "number") continue;
+    if (pb?.owner !== ownerStr) continue;
+
+    const mint = String(pb?.mint || "").trim();
+    if (!mint) continue;
+
+    const decimals = clampDecimals(
+      Number(pb?.uiTokenAmount?.decimals ?? pb?.decimals ?? 0),
+    );
+
+    const postBaseStr =
+      pb?.uiTokenAmount?.amount ??
+      (typeof pb?.amount === "string" ? pb.amount : "0");
+
+    const preBal = preByIdx.get(idx);
+    const preBaseStr =
+      preBal?.uiTokenAmount?.amount ??
+      (typeof preBal?.amount === "string" ? preBal.amount : "0");
+
+    const postBase = bigIntFromString(postBaseStr);
+    const preBase = bigIntFromString(preBaseStr);
+    const delta = postBase - preBase;
+    if (delta <= BigInt(0)) continue;
+
+    const prev = deltas.get(mint);
+    const baseStr = delta.toString();
+    if (!prev) {
+      deltas.set(mint, {
+        mint,
+        decimals,
+        amountBase: baseStr,
+        symbol: getSymbolForMint(mint),
+      });
+    } else {
+      deltas.set(mint, {
+        mint,
+        decimals: prev.decimals || decimals,
+        amountBase: addBase(prev.amountBase, baseStr),
+        symbol: prev.symbol ?? getSymbolForMint(mint),
+      });
+    }
+  }
+
+  return Array.from(deltas.values());
+}
+
+function detectTreasurySolFeesFromParsed(
+  instructions: ParsedInstruction[],
+  treasuryOwner: PublicKey,
+): string {
+  const ownerStr = treasuryOwner.toBase58();
+  let total = BigInt(0);
+
+  for (const ix of instructions) {
+    if ((ix as { program?: unknown }).program !== "system") continue;
+    const parsedIxUnknown = (ix as unknown as { parsed?: unknown }).parsed;
+    if (!parsedIxUnknown || typeof parsedIxUnknown !== "object") continue;
+
+    const parsedIx = parsedIxUnknown as {
+      type?: string;
+      info?: { destination?: string; lamports?: string | number };
+    };
+
+    if (parsedIx.type !== "transfer") continue;
+    const dest = String(parsedIx.info?.destination || "");
+    if (!dest || dest !== ownerStr) continue;
+
+    const lamportsRaw = parsedIx.info?.lamports;
+    const lamportsStr =
+      typeof lamportsRaw === "number"
+        ? String(Math.floor(lamportsRaw))
+        : String(lamportsRaw || "0");
+
+    const amt = bigIntFromString(lamportsStr);
+    if (amt > BigInt(0)) total += amt;
+  }
+
+  return total > BigInt(0) ? total.toString() : "0";
+}
+
 /* ───────── Parse fee transfer from confirmed tx ───────── */
 
 function isParsed(ix: unknown): ix is ParsedInstruction {
@@ -692,8 +816,45 @@ async function recordSwapFeeFromChainAsync(params: {
       return;
     }
 
-    const all = flattenParsedInstructions(parsed);
     const hintMint = feeMintHint ? feeMintHint.trim() : "";
+    const metaFeesAll = detectTreasuryFeeTokensFromMeta(parsed, TREASURY_OWNER);
+    const metaFees =
+      hintMint && metaFeesAll.length
+        ? metaFeesAll.filter((t) => t.mint === hintMint)
+        : metaFeesAll;
+    const metaFeesFallback = metaFees.length ? metaFees : metaFeesAll;
+
+    const all = flattenParsedInstructions(parsed);
+    const solFeeBase = detectTreasurySolFeesFromParsed(all, TREASURY_OWNER);
+    const tokensToRecord = [
+      ...metaFeesFallback,
+      ...(solFeeBase !== "0"
+        ? [
+            {
+              mint: WSOL_MINT,
+              amountBase: solFeeBase,
+              decimals: 9,
+              symbol: "SOL",
+            },
+          ]
+        : []),
+    ];
+
+    if (tokensToRecord.length > 0) {
+      const result = await recordUserFeesExact({
+        userId: user._id,
+        signature,
+        kind: "swap",
+        tokens: tokensToRecord,
+      });
+
+      if (result.ok && result.recorded) {
+        console.log(
+          `[JUP/SEND] Fee recorded (meta): ${signature.slice(0, 8)}`,
+        );
+      }
+      return;
+    }
 
     for (const ix of all) {
       const parsedIxUnknown = (ix as unknown as { parsed?: unknown }).parsed;
