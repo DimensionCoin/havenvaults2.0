@@ -252,6 +252,17 @@ function pow10BigInt(decimals: number): bigint {
   return out;
 }
 
+function bigintToUiString(base: bigint, decimals: number): string {
+  const d = clampDecimals(decimals);
+  if (base <= BigInt(0)) return "0";
+  if (d === 0) return base.toString();
+  const denom = pow10BigInt(d);
+  const whole = base / denom;
+  const frac = base % denom;
+  const fracStr = frac.toString().padStart(d, "0").replace(/0+$/, "");
+  return fracStr ? `${whole}.${fracStr}` : whole.toString();
+}
+
 /* ───────── Fee detection (reliable: uses confirmed meta) ───────── */
 
 async function detectTreasuryFeeTokensFromMeta(params: {
@@ -332,16 +343,13 @@ async function detectTreasuryFeeTokensFromMeta(params: {
 
   const out: FeeToken[] = [];
   for (const v of deltas.values()) {
-    const denom = pow10BigInt(v.decimals);
-    const ui = Number(v.baseDelta) / Number(denom);
-    if (Number.isFinite(ui) && ui > 0) {
-      out.push({
-        mint: v.mint,
-        decimals: v.decimals,
-        amountUi: ui,
-        symbol: v.symbol,
-      });
-    }
+    if (v.baseDelta <= bi0()) continue;
+    out.push({
+      mint: v.mint,
+      decimals: v.decimals,
+      amountUi: bigintToUiString(v.baseDelta, v.decimals),
+      symbol: v.symbol,
+    });
   }
 
   return out;

@@ -651,7 +651,8 @@ async function recordWithdrawFeeEvent(params: {
   signature: string;
   feeUi: string;
 }): Promise<{ ok: boolean; recorded?: boolean; reason?: string }> {
-  const feeUiNum = Number(params.feeUi);
+  const feeUiStr = String(params.feeUi || "0").trim();
+  const feeUiNum = Number(feeUiStr);
   if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) {
     return { ok: true, recorded: false, reason: "fee_ui_zero_or_invalid" };
   }
@@ -663,7 +664,7 @@ async function recordWithdrawFeeEvent(params: {
     tokens: [
       {
         mint: USDC_MINT_STR,
-        amountUi: feeUiNum,
+        amountUi: feeUiStr,
         decimals: DECIMALS,
         symbol: "USDC",
       },

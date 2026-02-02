@@ -5,7 +5,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 
-import { usePrivy } from "@privy-io/react-auth";
 import {
   useSignTransaction,
   useWallets,
@@ -73,6 +72,9 @@ type BuildResponse = {
   feeMint: string;
   feeDecimals: number;
   buildTimeMs?: number;
+  priorityFeeLamports?: number;
+  priorityFeeMicroLamports?: number;
+  computeUnits?: number;
 };
 
 type SendResponse = {
@@ -82,43 +84,87 @@ type SendResponse = {
 
 /* ───────── HELPERS ───────── */
 
-async function postJSON<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    cache: "no-store",
-    credentials: "include",
-  });
+async function postJSONWithOptions<T>(
+  url: string,
+  body: unknown,
+  options?: { timeout?: number; signal?: AbortSignal },
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = options?.timeout ?? 15_000;
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  const text = await res.text().catch(() => "");
-  let data: unknown = null;
+  const outer = options?.signal;
+  const onAbort = () => controller.abort();
+  if (outer) outer.addEventListener("abort", onAbort, { once: true });
+
   try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = null;
-  }
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+      keepalive: true,
+    });
 
-  if (!res.ok) {
-    const d = data as Record<string, unknown> | null;
-    const msg =
-      d?.userMessage ||
-      d?.error ||
-      d?.message ||
-      `Request failed: ${res.status}`;
-    const e = new Error(String(msg)) as Error & {
-      code?: string;
-      stage?: string;
-      retryable?: boolean;
-    };
-    e.code = d?.code as string | undefined;
-    e.stage = d?.stage as string | undefined;
-    e.retryable =
-      d?.code === "BLOCKHASH_EXPIRED" || d?.code === "SESSION_EXPIRED";
+    const text = await res.text().catch(() => "");
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!res.ok) {
+      const d = data as Record<string, unknown> | null;
+      const msg =
+        d?.userMessage ||
+        d?.error ||
+        d?.message ||
+        `Request failed: ${res.status}`;
+      const e = new Error(String(msg)) as Error & {
+        code?: string;
+        stage?: string;
+        retryable?: boolean;
+      };
+      e.code = d?.code as string | undefined;
+      e.stage = d?.stage as string | undefined;
+      e.retryable =
+        d?.code === "BLOCKHASH_EXPIRED" ||
+        d?.code === "SESSION_EXPIRED" ||
+        d?.code === "TIMEOUT";
+      throw e;
+    }
+
+    return data as T;
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      const err = new Error("Request timed out") as Error & {
+        code?: string;
+        retryable?: boolean;
+      };
+      err.code = "TIMEOUT";
+      err.retryable = true;
+      throw err;
+    }
+    if (
+      e instanceof TypeError ||
+      String((e as Error)?.message || "").includes("Failed to fetch")
+    ) {
+      const err = new Error("Network error") as Error & {
+        code?: string;
+        retryable?: boolean;
+      };
+      err.code = "NETWORK_ERROR";
+      err.retryable = true;
+      throw err;
+    }
     throw e;
+  } finally {
+    clearTimeout(timeoutId);
+    if (outer) outer.removeEventListener("abort", onAbort);
   }
-
-  return data as T;
 }
 
 function pickWallet(
@@ -152,10 +198,25 @@ function isBlockhashError(e: unknown): boolean {
   );
 }
 
+function isRetryableError(e: unknown): boolean {
+  const code = String((e as { code?: string })?.code || "").toLowerCase();
+  return (
+    isBlockhashError(e) ||
+    code === "timeout" ||
+    code === "session_expired" ||
+    code === "network_error"
+  );
+}
+
+const PRIORITY_FEE_LAMPORTS_CAP = Number(
+  process.env.NEXT_PUBLIC_PRIORITY_FEE_LAMPORTS_CAP ?? "100000",
+);
+const MAX_BUILD_ATTEMPTS = 2;
+const MAX_SEND_ATTEMPTS = 2;
+
 /* ───────── HOOK ───────── */
 
 export function useServerSponsoredSwap() {
-  const { login, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
 
@@ -211,25 +272,45 @@ export function useServerSponsoredSwap() {
         /* ══════════ PHASE 1: BUILD ══════════ */
         setStatus("building");
 
-        let buildResp: BuildResponse;
+        let buildResp: BuildResponse | undefined;
 
-        // Try up to 2 times for blockhash expiry
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
           try {
-            buildResp = await postJSON<BuildResponse>("/api/jup/build", {
-              fromOwnerBase58: input.fromOwnerBase58,
-              inputMint: input.inputMint,
-              outputMint: input.outputMint,
-              amountUi: input.amountUi,
-              slippageBps: input.slippageBps ?? 50,
-              isMax: input.isMax === true,
-            });
+            buildResp = await postJSONWithOptions<BuildResponse>(
+              "/api/jup/build",
+              {
+                fromOwnerBase58: input.fromOwnerBase58,
+                inputMint: input.inputMint,
+                outputMint: input.outputMint,
+                amountUi: input.amountUi,
+                slippageBps: input.slippageBps ?? 50,
+                isMax: input.isMax === true,
+              },
+              { timeout: 10_000, signal: abortRef.current?.signal },
+            );
             break;
           } catch (e) {
-            if (attempt === 2 || !isBlockhashError(e)) throw e;
-            // Retry on blockhash error
-            await new Promise((r) => setTimeout(r, 500));
+            if (attempt === MAX_BUILD_ATTEMPTS || !isRetryableError(e)) throw e;
+            await new Promise((r) => setTimeout(r, 120));
           }
+        }
+
+        const priorityFeeLamports = buildResp!.priorityFeeLamports;
+        if (
+          typeof priorityFeeLamports === "number" &&
+          Number.isFinite(priorityFeeLamports) &&
+          priorityFeeLamports > PRIORITY_FEE_LAMPORTS_CAP
+        ) {
+          const err: SwapError = {
+            message:
+              "Network is busy right now. Try again in a moment for cheaper fees.",
+            code: "PRIORITY_FEE_TOO_HIGH",
+            stage: "build",
+            retryable: true,
+          };
+          setError(err);
+          setStatus("error");
+          throw Object.assign(new Error(err.message), err);
         }
 
         /* ══════════ PHASE 2: SIGN ══════════ */
@@ -265,20 +346,34 @@ export function useServerSponsoredSwap() {
         /* ══════════ PHASE 3: SEND ══════════ */
         setStatus("sending");
 
-        let sendResp: SendResponse;
-        try {
-          // Pass fee info from build response to send endpoint for tracking
-          sendResp = await postJSON<SendResponse>("/api/jup/send", {
-            transaction: signedB64,
-            // Fee tracking info (symbol resolved server-side from token config)
-            feeUnits: buildResp!.feeUnits,
-            feeMint: buildResp!.feeMint,
-            feeDecimals: buildResp!.feeDecimals,
-          });
-        } catch (e) {
-          // If blockhash expired during send, could retry build+sign
-          // For now, just throw
-          throw e;
+        let sendResp: SendResponse | undefined;
+        for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+          try {
+            // Pass fee info from build response to send endpoint for tracking
+            sendResp = await postJSONWithOptions<SendResponse>(
+              "/api/jup/send",
+              {
+                transaction: signedB64,
+                // Fee tracking info (symbol resolved server-side from token config)
+                feeUnits: buildResp!.feeUnits,
+                feeMint: buildResp!.feeMint,
+                feeDecimals: buildResp!.feeDecimals,
+                // fast-confirm inputs
+                recentBlockhash: buildResp!.recentBlockhash,
+                lastValidBlockHeight: buildResp!.lastValidBlockHeight,
+              },
+              { timeout: 30_000, signal: abortRef.current?.signal },
+            );
+            break;
+          } catch (e) {
+            if (isBlockhashError(e)) throw e;
+            if (attempt === MAX_SEND_ATTEMPTS || !isRetryableError(e)) throw e;
+            await new Promise((r) => setTimeout(r, 150));
+          }
+        }
+
+        if (!sendResp?.signature) {
+          throw new Error("Send failed: missing signature");
         }
 
         setSignature(sendResp.signature);

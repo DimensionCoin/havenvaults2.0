@@ -18,9 +18,9 @@ if (PYTH_POLL_ENABLED) {
  */
 crons.interval(
   "cleanup rate limits",
-  { minutes: 10 },
+  { minutes: 5 },
   internal.rateLimit.cleanupExpired,
-  { maxDeletes: 10000 }, // tune this as needed
+  { maxDeletes: 10000 },
 );
 
 export default crons;

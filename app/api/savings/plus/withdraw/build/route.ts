@@ -1,5 +1,5 @@
 // app/api/savings/plus/withdraw/build/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
@@ -17,6 +17,7 @@ import {
 } from "@solana/spl-token";
 import { Buffer } from "buffer";
 import BN from "bn.js";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -727,10 +728,24 @@ async function getQuoteWithFallback(opts: {
    ROUTE HANDLER
    ═══════════════════════════════════════════════════════════════════════════ */
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
+
+  // Rate limit
+  const blocked = await rateLimitServer(req, {
+    api: "savings:plus:withdraw:build",
+    requireAuth: true,
+    allowIpFallback: false,
+    failMode: "closed",
+    tiers: [
+      { limit: 2, windowMs: 10_000, suffix: "burst" },
+      { limit: 8, windowMs: 60_000, suffix: "minute" },
+      { limit: 60, windowMs: 3_600_000, suffix: "hour" },
+    ],
+  });
+  if (blocked) return blocked;
 
   const metrics = {
     parseMs: 0,

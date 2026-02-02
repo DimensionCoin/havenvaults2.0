@@ -332,6 +332,53 @@ async function jupFetch(url: string, init?: RequestInit) {
   });
 }
 
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function jupFetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  opts?: { maxRetries?: number; timeoutMs?: number },
+) {
+  const maxRetries = opts?.maxRetries ?? 3;
+  const timeoutMs = opts?.timeoutMs ?? 8_000;
+
+  let lastErr: unknown = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await jupFetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+
+      if (res.ok) return res;
+
+      const shouldRetry =
+        res.status === 429 || (res.status >= 500 && res.status <= 599);
+      if (!shouldRetry || attempt === maxRetries) return res;
+
+      const backoff = 150 * attempt + Math.floor(Math.random() * 150);
+      await sleep(backoff);
+    } catch (e) {
+      lastErr = e;
+      if (attempt === maxRetries) break;
+      const backoff = 150 * attempt + Math.floor(Math.random() * 150);
+      await sleep(backoff);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Jupiter request failed");
+}
+
 function rebuildAtaCreatesAsSponsored(setupIxs: TransactionInstruction[]) {
   const sponsored: TransactionInstruction[] = [];
   const nonAta: TransactionInstruction[] = [];
@@ -667,7 +714,10 @@ export async function POST(req: NextRequest) {
 
     const [quoteRes, blockhashData, priorityFeeMicroLamports] =
       await Promise.all([
-        jupFetch(quoteUrl),
+        jupFetchWithRetry(quoteUrl, undefined, {
+          timeoutMs: 8_000,
+          maxRetries: 3,
+        }),
         conn.getLatestBlockhash("confirmed"),
         getOptimalPriorityFee(conn, [
           inputMint.toBase58(),
@@ -690,21 +740,25 @@ export async function POST(req: NextRequest) {
     const quoteResponse = await quoteRes.json();
 
     stage = "swapInstructions";
-    const swapIxRes = await jupFetch(JUP_SWAP_IXS, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey: userOwner.toBase58(),
-        wrapAndUnwrapSol: false,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 0,
-        dynamicSlippage: {
-          minBps: slip.dynamicMinBps,
-          maxBps: slip.dynamicMaxBps,
-        },
-      }),
-    });
+    const swapIxRes = await jupFetchWithRetry(
+      JUP_SWAP_IXS,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse,
+          userPublicKey: userOwner.toBase58(),
+          wrapAndUnwrapSol: false,
+          dynamicComputeUnitLimit: true,
+          prioritizationFeeLamports: 0,
+          dynamicSlippage: {
+            minBps: slip.dynamicMinBps,
+            maxBps: slip.dynamicMaxBps,
+          },
+        }),
+      },
+      { timeoutMs: 8_000, maxRetries: 3 },
+    );
 
     if (!swapIxRes.ok) {
       return jsonError(swapIxRes.status, {

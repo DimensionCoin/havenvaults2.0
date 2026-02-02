@@ -8,6 +8,7 @@ import {
   type ActivityKind,
 } from "@/lib/solanaActivity";
 import { getSessionFromCookies } from "@/lib/auth";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -184,6 +185,19 @@ async function buildCounterpartyMap(items: ActivityItem[]) {
 export async function GET(req: NextRequest) {
   const rid = mkReqId();
   const tag = `[wallet/transactions][${rid}]`;
+
+  // Rate limit
+  const blocked = await rateLimitServer(req, {
+    api: "wallet:transactions",
+    requireAuth: true,
+    allowIpFallback: false,
+    failMode: "open",
+    tiers: [
+      { limit: 5, windowMs: 10_000, suffix: "burst" },
+      { limit: 20, windowMs: 60_000, suffix: "minute" },
+    ],
+  });
+  if (blocked) return blocked;
 
   try {
     const url = new URL(req.url);

@@ -1,5 +1,5 @@
 // app/api/booster/sweep-sol/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   ComputeBudgetProgram,
   PublicKey,
@@ -10,6 +10,7 @@ import {
 } from "@solana/web3.js";
 
 import { RPC_CONNECTION } from "@/types/constants";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -99,10 +100,23 @@ async function getBlockhashCached(): Promise<{
   return result;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
 
   try {
+    // Rate limit (no auth required for build endpoint, but limit by IP)
+    const blocked = await rateLimitServer(req, {
+      api: "booster:sweep-sol",
+      requireAuth: false,
+      allowIpFallback: true,
+      failMode: "closed",
+      tiers: [
+        { limit: 3, windowMs: 10_000, suffix: "burst" },
+        { limit: 15, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
     // Early validation - fail fast
     if (!HAVEN_FEEPAYER) {
       return jsonError(500, {

@@ -52,8 +52,14 @@ function readU64LEBigint(buf: Uint8Array, offset: number): bigint {
  * Returns total lamports Haven funds via SystemProgram create* in this tx.
  * Throws on disallowed patterns.
  */
-export function validateHavenSpendGuards(tx: VersionedTransaction): {
+type TransferAllowance = { to: PublicKey; maxLamports: number };
+
+export function validateHavenSpendGuards(
+  tx: VersionedTransaction,
+  opts?: { allowSystemTransfers?: TransferAllowance[] },
+): {
   fundedLamports: number;
+  transferredLamports: number;
 } {
   const msg = tx.message;
 
@@ -76,6 +82,23 @@ export function validateHavenSpendGuards(tx: VersionedTransaction): {
   }
 
   let fundedLamports = 0;
+  let transferredLamports = 0;
+  const allow = Array.isArray(opts?.allowSystemTransfers)
+    ? opts!.allowSystemTransfers!
+    : [];
+  const allowMap = new Map<string, { max: number; used: number }>();
+  for (const a of allow) {
+    if (!a?.to) continue;
+    const max = Number(a.maxLamports);
+    if (!Number.isFinite(max) || max <= 0) continue;
+    const key = a.to.toBase58();
+    const prev = allowMap.get(key);
+    if (!prev) {
+      allowMap.set(key, { max, used: 0 });
+    } else {
+      allowMap.set(key, { max: prev.max + max, used: prev.used });
+    }
+  }
 
   for (const ix of compiled) {
     const pidIndex = ix.programIdIndex;
@@ -131,9 +154,30 @@ export function validateHavenSpendGuards(tx: VersionedTransaction): {
       const lamports = readU64LEBigint(data, 4);
 
       if (fromKey.equals(HAVEN_PUBKEY)) {
-        throw new Error(
-          `Unsafe transaction (SystemProgram.transfer from fee payer: ${lamports.toString()} lamports)`,
-        );
+        const toIndex = acctIdxs[1];
+        const toKey = typeof toIndex === "number" && toIndex < staticLen
+          ? staticKeys[toIndex]
+          : undefined;
+
+        if (!toKey) {
+          throw new Error("Unsafe transaction (system toKey unresolved)");
+        }
+
+        const allowance = allowMap.get(toKey.toBase58());
+        const n = Number(lamports);
+        if (
+          !allowance ||
+          !Number.isFinite(n) ||
+          n < 0 ||
+          allowance.used + n > allowance.max
+        ) {
+          throw new Error(
+            `Unsafe transaction (SystemProgram.transfer from fee payer: ${lamports.toString()} lamports)`,
+          );
+        }
+
+        allowance.used += n;
+        transferredLamports += n;
       }
 
       continue;
@@ -201,5 +245,5 @@ export function validateHavenSpendGuards(tx: VersionedTransaction): {
     );
   }
 
-  return { fundedLamports };
+  return { fundedLamports, transferredLamports };
 }

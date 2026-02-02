@@ -130,6 +130,29 @@ const CACHE: Map<string, { ts: number; payload: PlusBalancePayload }> =
   plusCache.__PLUS_CACHE__ ?? (plusCache.__PLUS_CACHE__ = new Map());
 
 const TTL_MS = 60_000; // 60s cached freshness (tune 30s–120s)
+const CACHE_CAP = 5000; // hard cap to avoid unbounded growth
+
+function cacheGetFresh(key: string): PlusBalancePayload | null {
+  const hit = CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > TTL_MS) {
+    // stale — return null but keep entry so catch-block can serve it as fallback
+    return null;
+  }
+  // LRU: move to back
+  CACHE.delete(key);
+  CACHE.set(key, hit);
+  return hit.payload;
+}
+
+function cacheSet(key: string, payload: PlusBalancePayload) {
+  CACHE.set(key, { ts: Date.now(), payload });
+  while (CACHE.size > CACHE_CAP) {
+    const oldestKey = CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    CACHE.delete(oldestKey);
+  }
+}
 
 export async function GET(req: NextRequest) {
   const started = Date.now();
@@ -168,12 +191,10 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get("force") === "1";
 
     // ✅ Serve fresh-enough cache immediately
-    const cached = CACHE.get(owner);
-    const cacheFresh = cached && Date.now() - cached.ts < TTL_MS;
-
-    if (cacheFresh && !forceFresh) {
+    const cachedPayload = !forceFresh ? cacheGetFresh(owner) : null;
+    if (cachedPayload) {
       return NextResponse.json(
-        { ...cached.payload, cached: true, stale: false },
+        { ...cachedPayload, cached: true, stale: false },
         {
           status: 200,
           headers: {
@@ -253,7 +274,7 @@ export async function GET(req: NextRequest) {
     })();
 
     // ✅ update cache
-    CACHE.set(owner, { ts: Date.now(), payload });
+    cacheSet(owner, payload);
 
     return NextResponse.json(
       { ...payload, cached: false, stale: false, ms: Date.now() - started },

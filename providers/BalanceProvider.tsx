@@ -11,7 +11,10 @@ import React, {
   useState,
 } from "react";
 import { useUser } from "./UserProvider";
-import { useBoosterPositions } from "@/hooks/useBoosterPositions";
+import {
+  useBoosterPositions,
+  type BoosterRow,
+} from "@/hooks/useBoosterPositions";
 
 export type WalletToken = {
   mint: string;
@@ -74,9 +77,11 @@ type BalanceContextValue = {
   boosterTakeHomeUsd: number; // display currency
   boosterPositionsCount: number;
   boosterPositions: BoosterStaticPosition[];
+  boosterRows: BoosterRow[]; // full rows with markUsd, liqUsd, netUsd
   boosterReady: boolean;
   boosterError?: string | null;
   refetchBooster: () => void;
+  burstBooster: () => void;
 
   refresh: () => Promise<void>;
   refreshNow: () => Promise<void>;
@@ -686,9 +691,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       boosterTakeHomeUsd,
       boosterPositionsCount,
       boosterPositions,
+      boosterRows: booster.rows,
       boosterReady,
       boosterError,
       refetchBooster: () => void booster.refetch(),
+      burstBooster: () => void booster.burst(),
 
       refresh,
       refreshNow,
@@ -716,7 +723,9 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       boosterPositions,
       boosterReady,
       boosterError,
+      booster.rows,
       booster.refetch,
+      booster.burst,
       refresh,
       refreshNow,
     ],

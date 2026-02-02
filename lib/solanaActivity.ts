@@ -70,7 +70,30 @@ export type ActivityItem = {
 ========================= */
 
 const CACHE_TTL_MS = 10_000;
+const CACHE_CAP = 2000;
 const CACHE = new Map<string, { ts: number; items: ActivityItem[] }>();
+
+function cacheGetFresh(key: string): ActivityItem[] | null {
+  const hit = CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) {
+    CACHE.delete(key);
+    return null;
+  }
+  // LRU: move to back
+  CACHE.delete(key);
+  CACHE.set(key, hit);
+  return hit.items;
+}
+
+function cacheSet(key: string, items: ActivityItem[]) {
+  CACHE.set(key, { ts: Date.now(), items });
+  while (CACHE.size > CACHE_CAP) {
+    const oldestKey = CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    CACHE.delete(oldestKey);
+  }
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -690,8 +713,8 @@ export async function getUsdcActivityForOwner(
   const limit = Math.min(Math.max(opts?.limit ?? 30, 1), 100);
 
   const cacheKey = `${owner58}|${opts?.before || ""}|${limit}|${HELIUS_NETWORK}|v3`;
-  const cached = CACHE.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.items;
+  const cached = cacheGetFresh(cacheKey);
+  if (cached) return cached;
 
   // We fetch more than needed because we filter out irrelevant txs.
   const RAW_PAGE_LIMIT = 100;
@@ -724,6 +747,6 @@ export async function getUsdcActivityForOwner(
   }
 
   const items = out.slice(0, limit);
-  CACHE.set(cacheKey, { ts: Date.now(), items });
+  cacheSet(cacheKey, items);
   return items;
 }

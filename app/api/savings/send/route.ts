@@ -483,7 +483,8 @@ async function recordSavingsFeeAsync(params: {
   const { userId, signature, feeUi, accountType } = params;
 
   try {
-    const feeUiNum = parseFloat(feeUi);
+    const feeUiStr = String(feeUi || "0").trim();
+    const feeUiNum = parseFloat(feeUiStr);
     if (!Number.isFinite(feeUiNum) || feeUiNum <= 0) {
       return; // No fee to record
     }
@@ -502,7 +503,7 @@ async function recordSavingsFeeAsync(params: {
       tokens: [
         {
           mint: USDC_MINT_STR,
-          amountUi: feeUiNum,
+          amountUi: feeUiStr,
           decimals: DECIMALS,
           symbol: "USDC",
         },

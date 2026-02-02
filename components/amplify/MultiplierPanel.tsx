@@ -48,6 +48,7 @@ type Props = {
   positions?: MultiplierPosition[];
   onPositionsChange: (next: MultiplierPosition[]) => void;
   onAfterAction?: () => void;
+  hasExistingPosition?: boolean;
 };
 
 type ModalKind = "processing" | "success" | "error";
@@ -207,6 +208,7 @@ export default function MultiplierPanel({
   positions,
   onPositionsChange,
   onAfterAction,
+  hasExistingPosition,
 }: Props) {
   const balanceCtx = useBalance();
   const ctxLoading = !!balanceCtx?.loading;
@@ -276,8 +278,8 @@ export default function MultiplierPanel({
     [pDisplay, lev]
   );
 
-  // ✅ Minimum buy-in requirement: $10 USD (converted to user's currency)
-  const MIN_BUYIN_USD = 10;
+  // ✅ Minimum buy-in: $10 USD for new positions, $1 USD if adding to existing
+  const MIN_BUYIN_USD = hasExistingPosition ? 1 : 10;
 
   const minBuyInLocal = useMemo(() => (fx > 0 ? MIN_BUYIN_USD * fx : 0), [fx]);
 
@@ -493,7 +495,7 @@ export default function MultiplierPanel({
           {fx > 0 && buyInNum > 0 && showMinError && (
             <div className="mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               Minimum buy-in is {formatMoney(minBuyInLocal, currencySafe)} (≈
-              $10 USD).
+              ${MIN_BUYIN_USD} USD).
             </div>
           )}
 

@@ -346,6 +346,16 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // $1 USD floor (marginUnits is USDC with 6 decimals)
+    if (marginUnits < 1_000_000) {
+      return jsonError(400, {
+        code: "TOO_SMALL",
+        error: "Margin below $1 USD minimum",
+        userMessage: "Minimum trade amount is $1 USD.",
+        stage: stageRef.stage,
+      });
+    }
+
     const owner = new PublicKey(ownerBase58);
 
     // ─────────── Wallet Binding ───────────

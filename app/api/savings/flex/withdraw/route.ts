@@ -35,6 +35,7 @@ import marginfiIdl from "@/lib/marginfi_idl.json";
 import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 import { getSessionFromCookies } from "@/lib/auth";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 /* ───────── ENV (parsed once at module load) ───────── */
 
@@ -453,6 +454,20 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
+    // Rate limit
+    const blocked = await rateLimitServer(req, {
+      api: "savings:flex:withdraw",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "closed",
+      tiers: [
+        { limit: 2, windowMs: 10_000, suffix: "burst" },
+        { limit: 8, windowMs: 60_000, suffix: "minute" },
+        { limit: 60, windowMs: 3_600_000, suffix: "hour" },
+      ],
+    });
+    if (blocked) return blocked;
+
     const body = (await req.json().catch(() => null)) as {
       amountUi?: number;
       withdrawAll?: boolean;

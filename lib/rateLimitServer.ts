@@ -29,7 +29,6 @@ export type RateLimitServerOptions = {
 
   failMode?: "closed" | "open";
 
-  /** ✅ NEW: global tiers across all users */
   globalTiers?: RateLimitTier[];
 };
 
@@ -125,47 +124,13 @@ function tooManyRequestsResponse(params: {
   return res;
 }
 
-async function consumeTier(params: {
-  client: ConvexHttpClient;
-  rlKey: string;
-  tier: RateLimitTier;
-  failMode: "closed" | "open";
-}): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
-  const { client, rlKey, tier, failMode } = params;
-
-  try {
-    const result = await client.mutation(api.rateLimit.consume, {
-      key: rlKey,
-      limit: tier.limit,
-      windowMs: tier.windowMs,
-    });
-
-    if (result.ok) return { ok: true };
-
-    return {
-      ok: false,
-      res: tooManyRequestsResponse({
-        limit: tier.limit,
-        windowMs: tier.windowMs,
-        resetMs: result.resetMs,
-      }),
-    };
-  } catch (err) {
-    if (failMode === "open") return { ok: true };
-
-    console.error("[rateLimitServer] Convex consume failed:", err);
-    return {
-      ok: false,
-      res: NextResponse.json(
-        { error: "Temporarily unavailable" },
-        { status: 503 },
-      ),
-    };
-  }
-}
-
 /**
- * ✅ Call at the TOP of any API route.
+ * Call at the TOP of any API route.
+ *
+ * Uses `consumeMulti` to batch ALL tier checks (global + user) into a
+ * single Convex transaction. This:
+ *   - Reduces latency (1 round-trip instead of N)
+ *   - Is atomic (no over-counting if a later tier blocks)
  */
 export async function rateLimitServer(
   req: NextRequest,
@@ -189,28 +154,60 @@ export async function rateLimitServer(
   const failMode = opts.failMode ?? "closed";
   const client = getConvexClient();
 
-  // ✅ 1) GLOBAL TIERS (protect infra even if attackers have many accounts)
-  const globalTiers = opts.globalTiers ?? [];
-  for (const tier of globalTiers) {
-    const globalKey = `${opts.api}${scope}:${method}:global:${tier.suffix}`;
-    const r = await consumeTier({ client, rlKey: globalKey, tier, failMode });
-    if (!r.ok) {
-      // Add a hint so you can tell it was global in logs/UI if you want
-      r.res.headers.set("X-RateLimit-Scope", "global");
-      return r.res;
-    }
+  // Build all tier keys into a single array for one Convex call
+  const allTiers: Array<{ key: string; limit: number; windowMs: number }> = [];
+
+  // Global tiers first (checked first = fail-fast for infra protection)
+  for (const tier of opts.globalTiers ?? []) {
+    allTiers.push({
+      key: `${opts.api}${scope}:${method}:global:${tier.suffix}`,
+      limit: tier.limit,
+      windowMs: tier.windowMs,
+    });
   }
 
-  // ✅ 2) PER-USER / PER-IP TIERS
-  const tiers = resolveTiers(opts);
-  for (const tier of tiers) {
-    const rlKey = `${opts.api}${scope}:${method}:${key}:${tier.suffix}`;
-    const r = await consumeTier({ client, rlKey, tier, failMode });
-    if (!r.ok) {
-      r.res.headers.set("X-RateLimit-Scope", "user");
-      return r.res;
-    }
+  // Per-user / per-IP tiers
+  for (const tier of resolveTiers(opts)) {
+    allTiers.push({
+      key: `${opts.api}${scope}:${method}:${key}:${tier.suffix}`,
+      limit: tier.limit,
+      windowMs: tier.windowMs,
+    });
   }
 
-  return null;
+  try {
+    const result = await client.mutation(api.rateLimit.consumeMulti, {
+      tiers: allTiers,
+    });
+
+    if (!result.ok) {
+      const blocked = result as {
+        ok: false;
+        blocked: true;
+        limit: number;
+        windowMs: number;
+        resetMs: number;
+        key: string;
+      };
+      const isGlobal = blocked.key?.includes(":global:");
+      const res = tooManyRequestsResponse({
+        limit: blocked.limit,
+        windowMs: blocked.windowMs,
+        resetMs: blocked.resetMs,
+        scopeLabel: isGlobal ? "global" : "user",
+      });
+      if (isGlobal) res.headers.set("X-RateLimit-Scope", "global");
+      return res;
+    }
+
+    return null;
+  } catch (err) {
+    if (failMode === "open") return null;
+
+    console.error("[rateLimitServer] Convex consumeMulti failed:", err);
+    return NextResponse.json(
+      { error: "Temporarily unavailable" },
+      { status: 503 },
+    );
+  }
 }

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import Bundle from "@/models/Bundle";
 import { getServerUser } from "@/lib/getServerUser";
+import { rateLimitServer } from "@/lib/rateLimitServer";
 
 export const dynamic = "force-dynamic";
 
@@ -10,8 +11,21 @@ export const dynamic = "force-dynamic";
  * GET /api/bundle/user
  * Fetch the logged-in user's bundles (both public and private)
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // Rate limit
+    const blocked = await rateLimitServer(req, {
+      api: "bundle:user",
+      requireAuth: true,
+      allowIpFallback: false,
+      failMode: "open",
+      tiers: [
+        { limit: 5, windowMs: 10_000, suffix: "burst" },
+        { limit: 30, windowMs: 60_000, suffix: "minute" },
+      ],
+    });
+    if (blocked) return blocked;
+
     const user = await getServerUser();
 
     if (!user) {

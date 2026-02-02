@@ -23,7 +23,6 @@ import { useBalance } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
 import { findTokenBySymbol } from "@/lib/tokenConfig";
 import { useAmplifyCoingecko } from "@/hooks/useAmplifyCoingecko";
-import { useBoosterPositions } from "@/hooks/useBoosterPositions";
 
 /* ---------- constants ---------- */
 
@@ -47,6 +46,9 @@ export default function AmplifyPage() {
     displayCurrency,
     fxRate,
     usdcUsd,
+    boosterRows,
+    boosterReady,
+    burstBooster,
   } = useBalance();
   const depositBalanceDisplay = (usdcUsd || 0) * (fxRate || 1);
 
@@ -74,21 +76,14 @@ export default function AmplifyPage() {
     enabled: true,
   });
 
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  const booster = useBoosterPositions({
-    ownerBase58,
-    refreshKey,
-    enabled: !!ownerBase58,
-  });
-
   const [multiplierPositions, setMultiplierPositions] = useState<
     MultiplierPosition[]
   >([]);
 
   const handleAfterAction = useCallback(() => {
-    setTimeout(() => setRefreshKey((k) => k + 1), 1500);
-  }, []);
+    // Small delay for chain confirmation, then burst-poll every 5s for 30s
+    setTimeout(() => burstBooster(), 1500);
+  }, [burstBooster]);
 
   // Mock handler - disabled since predict is coming soon
   const handleOpenPrediction = useCallback(() => {
@@ -110,8 +105,13 @@ export default function AmplifyPage() {
       : 0;
 
   const safeBoosterRows = useMemo(
-    () => (Array.isArray(booster.rows) ? booster.rows : []),
-    [booster.rows]
+    () => (Array.isArray(boosterRows) ? boosterRows : []),
+    [boosterRows],
+  );
+
+  const hasExistingPosition = useMemo(
+    () => safeBoosterRows.some((r) => r.symbol === activeSymbol),
+    [safeBoosterRows, activeSymbol],
   );
 
   return (
@@ -184,6 +184,7 @@ export default function AmplifyPage() {
                 positions={multiplierPositions}
                 onPositionsChange={setMultiplierPositions}
                 onAfterAction={handleAfterAction}
+                hasExistingPosition={hasExistingPosition}
               />
 
               <PositionsPanel
@@ -191,7 +192,7 @@ export default function AmplifyPage() {
                 displayCurrency={displayCurrency}
                 fxRate={fxRate}
                 rows={safeBoosterRows}
-                loading={!!booster.loading}
+                loading={!boosterReady}
                 onClosed={handleAfterAction}
               />
             </>

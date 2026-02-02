@@ -23,26 +23,26 @@ function normalizeSymbol(symbol?: string | null): string | undefined {
 }
 
 function toD128FromUi(
-  amountUi: number,
-  decimals: number,
+  amountUi: string,
+  _decimals: number,
 ): mongoose.Types.Decimal128 {
-  const d = clampDecimals(decimals);
-  const a = Number.isFinite(amountUi) ? Math.max(0, amountUi) : 0;
-  return D128.fromString(a.toFixed(d));
+  const s = String(amountUi || "0").trim();
+  if (!s || s === "0") return D128.fromString("0");
+  // The string is already a valid decimal from bigintToUiString; pass through
+  return D128.fromString(s);
 }
 
-function uiToBaseUnits(amountUi: number, decimals: number): string {
+function uiToBaseUnits(amountUi: string, decimals: number): string {
   const d = clampDecimals(decimals);
-  const a = Number(amountUi);
-  if (!Number.isFinite(a) || a <= 0) return "0";
+  const s = String(amountUi || "0").trim();
+  if (!s || s === "0") return "0";
 
-  const fixed = a.toFixed(d);
-  const [wholeStr, fracStr = ""] = fixed.split(".");
+  const [wholeStr, fracStr = ""] = s.split(".");
   const whole = BigInt(wholeStr || "0");
   const frac = BigInt((fracStr + "0".repeat(d)).slice(0, d) || "0");
 
   const base = whole * BigInt("10") ** BigInt(String(d)) + frac;
-  return base.toString();
+  return base <= BigInt(0) ? "0" : base.toString();
 }
 
 function addBase(a: string, b: string): string {
@@ -51,9 +51,28 @@ function addBase(a: string, b: string): string {
   return (x + y).toString();
 }
 
+function baseToUiString(baseUnits: string, decimals: number): string {
+  const d = clampDecimals(decimals);
+  let x: bigint;
+  try {
+    x = BigInt(baseUnits || "0");
+  } catch {
+    return "0";
+  }
+  if (x <= BigInt(0)) return "0";
+  if (d === 0) return x.toString();
+
+  const denom = BigInt("10") ** BigInt(String(d));
+  const whole = x / denom;
+  const frac = x % denom;
+
+  const fracStr = frac.toString().padStart(d, "0").replace(/0+$/, "");
+  return fracStr ? `${whole}.${fracStr}` : whole.toString();
+}
+
 export type FeeToken = {
   mint: string;
-  amountUi: number;
+  amountUi: string;
   decimals: number;
   symbol?: string;
 };
@@ -99,7 +118,7 @@ export async function recordUserFees(params: {
       mint: string;
       decimals: number;
       symbol?: string;
-      amountUi: number;
+      amountUi: string;
       amountBase: string;
     }
   >();
@@ -109,8 +128,8 @@ export async function recordUserFees(params: {
     if (!mint) continue;
 
     const decimals = clampDecimals(Number(t?.decimals));
-    const amountUi = Number(t?.amountUi);
-    if (!Number.isFinite(amountUi) || amountUi <= 0) continue;
+    const amountUi = String(t?.amountUi || "0").trim();
+    if (!amountUi || amountUi === "0") continue;
 
     const symbol = normalizeSymbol(t?.symbol);
     const amountBase = uiToBaseUnits(amountUi, decimals);
@@ -120,12 +139,13 @@ export async function recordUserFees(params: {
     if (!prev) {
       merged.set(mint, { mint, decimals, symbol, amountUi, amountBase });
     } else {
+      const nextBase = addBase(prev.amountBase, amountBase);
       merged.set(mint, {
         mint,
         decimals: prev.decimals || decimals,
         symbol: prev.symbol ?? symbol,
-        amountUi: prev.amountUi + amountUi,
-        amountBase: addBase(prev.amountBase, amountBase),
+        amountUi: baseToUiString(nextBase, prev.decimals || decimals),
+        amountBase: nextBase,
       });
     }
   }

@@ -667,7 +667,10 @@ export function usePlusWithdraw() {
           try {
             sendResp = await postJSON<SendResponse>(
               SEND_URL,
-              { transaction: signedTxB64 },
+              {
+                transaction: signedTxB64,
+                expectedUserBase58: connectedWallet58,
+              },
               signal,
             );
             break;
@@ -816,8 +819,7 @@ export function usePlusWithdraw() {
       connectedWallet58,
 
       // convenience
-      isBusy:
-        inFlightRef.current || !["idle", "done", "error"].includes(status),
+      isBusy: !["idle", "done", "error"].includes(status),
       isIdle: status === "idle",
       isDone: status === "done",
       isError: status === "error",

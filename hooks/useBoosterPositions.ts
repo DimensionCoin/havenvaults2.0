@@ -106,6 +106,14 @@ function estimateLiqPrice(
 }
 
 /* ─────────────────────────────────────────────────────────────
+   POLLING CONSTANTS
+───────────────────────────────────────────────────────────── */
+
+const STEADY_POLL_MS = 60_000; // 1 minute (normal)
+const BURST_POLL_MS = 5_000; // 5 seconds (after action)
+const BURST_DURATION_MS = 30_000; // burst lasts 30 seconds
+
+/* ─────────────────────────────────────────────────────────────
    HOOK
 ───────────────────────────────────────────────────────────── */
 
@@ -122,6 +130,10 @@ export function useBoosterPositions(args: UseBoosterPositionsArgs) {
   // stale request protection + aborts
   const reqIdRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+
+  // burst polling state
+  const burstUntilRef = useRef(0);
+  const [burstTick, setBurstTick] = useState(0);
 
   // mounted guard
   const aliveRef = useRef(true);
@@ -339,54 +351,66 @@ export function useBoosterPositions(args: UseBoosterPositionsArgs) {
     });
   }, [positions, priceMap]);
 
-  /* ───────── Fetch on mount / owner change / refreshKey ───────── */
+  /* ───────── Burst mode trigger ───────── */
+
+  const burst = useCallback(() => {
+    burstUntilRef.current = Date.now() + BURST_DURATION_MS;
+    void fetchPositions();
+    setBurstTick((t) => t + 1);
+  }, [fetchPositions]);
+
+  /* ───────── Unified fetch + poll (dynamic interval) ───────── */
 
   useEffect(() => {
     if (!enabled || !ownerBase58?.trim()) return;
 
+    // Enter burst mode when refreshKey changes (backward compat)
+    if (refreshKey !== undefined && refreshKey > 0) {
+      burstUntilRef.current = Math.max(
+        burstUntilRef.current,
+        Date.now() + BURST_DURATION_MS,
+      );
+    }
+
+    // Immediate fetch on mount / dep change
     void fetchPositions();
 
-    // abort in-flight if deps change mid-request
-    return () => {
-      controllerRef.current?.abort();
-      controllerRef.current = null;
-    };
-  }, [enabled, ownerBase58, refreshKey, fetchPositions]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
 
-  /* ───────── Poll every 30s (pause in background) ───────── */
-
-  useEffect(() => {
-    if (!enabled || !ownerBase58?.trim()) return;
-
-    let iv: ReturnType<typeof setInterval> | null = null;
-
-    const start = () => {
-      if (iv) return;
-      iv = setInterval(() => void fetchPositions(), 30_000);
-    };
-
-    const stop = () => {
-      if (iv) clearInterval(iv);
-      iv = null;
+    const scheduleNext = () => {
+      if (stopped) return;
+      if (timer) clearTimeout(timer);
+      const delay =
+        Date.now() < burstUntilRef.current ? BURST_POLL_MS : STEADY_POLL_MS;
+      timer = setTimeout(() => {
+        if (stopped) return;
+        void fetchPositions();
+        scheduleNext();
+      }, delay);
     };
 
     const onVisibility = () => {
       if (document.hidden) {
-        stop();
+        if (timer) clearTimeout(timer);
+        timer = null;
       } else {
         void fetchPositions();
-        start();
+        scheduleNext();
       }
     };
 
     document.addEventListener("visibilitychange", onVisibility);
-    start();
+    scheduleNext();
 
     return () => {
-      stop();
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      controllerRef.current?.abort();
+      controllerRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [enabled, ownerBase58, fetchPositions]);
+  }, [enabled, ownerBase58, refreshKey, burstTick, fetchPositions]);
 
   return useMemo(
     () => ({
@@ -394,8 +418,9 @@ export function useBoosterPositions(args: UseBoosterPositionsArgs) {
       rows,
       error,
       refetch: fetchPositions,
+      burst,
       pricesLoading: convexPrices === undefined,
     }),
-    [loading, rows, error, fetchPositions, convexPrices],
+    [loading, rows, error, fetchPositions, burst, convexPrices],
   );
 }

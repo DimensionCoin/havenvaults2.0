@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   Connection,
   PublicKey,
+  ParsedTransactionMeta,
   SendTransactionError,
   VersionedTransaction,
 } from "@solana/web3.js";
@@ -11,7 +12,7 @@ import { PrivyClient } from "@privy-io/server-auth";
 import { getSessionFromCookies } from "@/lib/auth";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
-import { recordUserFees } from "@/lib/fees";
+import { recordUserFees, type FeeToken } from "@/lib/fees";
 import User from "@/models/User";
 import { connect } from "@/lib/db";
 import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
@@ -35,6 +36,11 @@ const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 const HAVEN_PUBKEY = new PublicKey(
   required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
 );
+const TREASURY_OWNER = new PublicKey(
+  required("NEXT_PUBLIC_APP_TREASURY_OWNER")
+);
+const USDC_MINT_STR =
+  process.env.NEXT_PUBLIC_USDC_SWAP_MINT || process.env.NEXT_PUBLIC_USDC_MINT;
 
 /* ───────── Singletons ───────── */
 let _privy: PrivyClient | null = null;
@@ -51,6 +57,9 @@ function getPrivyClient(): PrivyClient {
 const KEEP_DUST_LAMPORTS = 900_000; // 0.0009 SOL
 const DUST_TOLERANCE_LAMPORTS = 100_000;
 const DUST_MAX_LAMPORTS = KEEP_DUST_LAMPORTS + DUST_TOLERANCE_LAMPORTS;
+const BOOSTER_MAX_TOPUP_LAMPORTS = Number(
+  process.env.BOOSTER_MAX_TOPUP_LAMPORTS ?? "50000000", // 0.05 SOL
+);
 
 /* ───────── Token Lookup ───────── */
 
@@ -235,19 +244,203 @@ function toSignedBytes(resp: unknown): Uint8Array {
   throw new Error("Unexpected signTransaction return type");
 }
 
+/* ───────── Fee detection (confirmed meta) ───────── */
+
+type TokenBalanceMetaLike = {
+  accountIndex?: number;
+  owner?: string;
+  mint?: string;
+  uiTokenAmount?: { amount?: string; decimals?: number };
+  amount?: string;
+  decimals?: number;
+};
+
+type TxMetaLike = Pick<
+  ParsedTransactionMeta,
+  "preTokenBalances" | "postTokenBalances"
+> & {
+  preTokenBalances?: TokenBalanceMetaLike[];
+  postTokenBalances?: TokenBalanceMetaLike[];
+};
+
+type TxWithMetaLike = { meta?: TxMetaLike | null } | null;
+
+function bi0(): bigint {
+  return BigInt(0);
+}
+
+function bigIntFromString(x: unknown): bigint {
+  try {
+    if (typeof x === "string" && x.trim()) return BigInt(x.trim());
+  } catch {}
+  return bi0();
+}
+
+function clampDecimals(decimals: number) {
+  const d = Number.isFinite(decimals) ? Math.floor(decimals) : 0;
+  return Math.max(0, Math.min(18, d));
+}
+
+function pow10BigInt(decimals: number): bigint {
+  const d = clampDecimals(decimals);
+  let out = BigInt(1);
+  const ten = BigInt(10);
+  for (let i = 0; i < d; i++) out = out * ten;
+  return out;
+}
+
+function bigintToUiString(base: bigint, decimals: number): string {
+  const d = clampDecimals(decimals);
+  if (base <= BigInt(0)) return "0";
+  if (d === 0) return base.toString();
+  const denom = pow10BigInt(d);
+  const whole = base / denom;
+  const frac = base % denom;
+  const fracStr = frac.toString().padStart(d, "0").replace(/0+$/, "");
+  return fracStr ? `${whole}.${fracStr}` : whole.toString();
+}
+
+async function detectTreasuryFeeTokensFromMeta(params: {
+  conn: Connection;
+  signature: string;
+  treasuryOwner: PublicKey;
+  mintHint?: string;
+}): Promise<FeeToken[]> {
+  const { conn, signature, treasuryOwner, mintHint } = params;
+
+  const tx = (await conn.getTransaction(signature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  })) as TxWithMetaLike;
+
+  const meta = tx?.meta ?? null;
+  if (!meta) return [];
+
+  const ownerStr = treasuryOwner.toBase58();
+  const hint = mintHint ? mintHint.trim() : "";
+
+  const pre: TokenBalanceMetaLike[] = Array.isArray(meta.preTokenBalances)
+    ? meta.preTokenBalances
+    : [];
+  const post: TokenBalanceMetaLike[] = Array.isArray(meta.postTokenBalances)
+    ? meta.postTokenBalances
+    : [];
+
+  const preByIdx = new Map<number, TokenBalanceMetaLike>();
+  for (const b of pre) {
+    if (typeof b?.accountIndex === "number") preByIdx.set(b.accountIndex, b);
+  }
+
+  const deltas = new Map<
+    string,
+    { mint: string; decimals: number; baseDelta: bigint; symbol?: string }
+  >();
+
+  for (const pb of post) {
+    const idx = pb?.accountIndex;
+    if (typeof idx !== "number") continue;
+
+    if (pb?.owner !== ownerStr) continue;
+
+    const mint = String(pb?.mint || "").trim();
+    if (!mint) continue;
+    if (hint && mint !== hint) continue;
+
+    const decimalsRaw = Number(
+      pb?.uiTokenAmount?.decimals ?? pb?.decimals ?? 0,
+    );
+    const decimals = clampDecimals(decimalsRaw);
+
+    const postBaseStr =
+      pb?.uiTokenAmount?.amount ??
+      (typeof pb?.amount === "string" ? pb.amount : "0");
+
+    const preBal = preByIdx.get(idx);
+    const preBaseStr =
+      preBal?.uiTokenAmount?.amount ??
+      (typeof preBal?.amount === "string" ? preBal.amount : "0");
+
+    const postBase = bigIntFromString(postBaseStr);
+    const preBase = bigIntFromString(preBaseStr);
+
+    const delta = postBase - preBase;
+    if (delta <= bi0()) continue;
+
+    const prev = deltas.get(mint);
+    if (!prev) {
+      deltas.set(mint, {
+        mint,
+        decimals,
+        baseDelta: delta,
+        symbol:
+          USDC_MINT_STR && mint === USDC_MINT_STR ? "USDC" : undefined,
+      });
+    } else {
+      deltas.set(mint, {
+        mint,
+        decimals: prev.decimals > 0 ? prev.decimals : decimals,
+        baseDelta: prev.baseDelta + delta,
+        symbol:
+          prev.symbol ??
+          (USDC_MINT_STR && mint === USDC_MINT_STR ? "USDC" : undefined),
+      });
+    }
+  }
+
+  const out: FeeToken[] = [];
+  for (const v of deltas.values()) {
+    if (v.baseDelta <= bi0()) continue;
+    out.push({
+      mint: v.mint,
+      decimals: v.decimals,
+      amountUi: bigintToUiString(v.baseDelta, v.decimals),
+      symbol: v.symbol ?? getSymbolForMint(v.mint),
+    });
+  }
+
+  return out;
+}
+
+async function detectTreasuryFeeTokensWithRetry(params: {
+  conn: Connection;
+  signature: string;
+  treasuryOwner: PublicKey;
+  mintHint?: string;
+  attempts?: number;
+  delayMs?: number;
+}): Promise<FeeToken[]> {
+  const { conn, signature, treasuryOwner, mintHint } = params;
+  const attempts = Number.isFinite(params.attempts)
+    ? Math.max(1, params.attempts!)
+    : 3;
+  const delayMs = Number.isFinite(params.delayMs)
+    ? Math.max(0, params.delayMs!)
+    : 250;
+
+  for (let i = 0; i < attempts; i++) {
+    const tokens = await detectTreasuryFeeTokensFromMeta({
+      conn,
+      signature,
+      treasuryOwner,
+      mintHint,
+    });
+    if (tokens.length > 0 || i === attempts - 1) return tokens;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return [];
+}
+
 /**
  * Record fee to database (fire-and-forget, non-blocking)
  */
-async function recordFeeAsync(params: {
+async function recordFeeFromChainAsync(params: {
+  conn: Connection;
   privyId: string;
   signature: string;
-  feeUnits: number;
-  feeMint: string;
-  feeDecimals: number;
+  feeMintHint?: string;
   feeKind: string;
 }): Promise<void> {
-  const { privyId, signature, feeUnits, feeMint, feeDecimals, feeKind } =
-    params;
+  const { conn, privyId, signature, feeMintHint, feeKind } = params;
 
   try {
     await connect();
@@ -262,29 +455,33 @@ async function recordFeeAsync(params: {
       return;
     }
 
-    // Convert base units to UI units
-    const feeUi = feeUnits / Math.pow(10, feeDecimals);
+    const feeTokens = await detectTreasuryFeeTokensWithRetry({
+      conn,
+      signature,
+      treasuryOwner: TREASURY_OWNER,
+      mintHint: feeMintHint,
+      attempts: 4,
+      delayMs: 300,
+    });
 
-    // Look up symbol from token config
-    const feeSymbol = getSymbolForMint(feeMint);
+    if (!feeTokens.length) {
+      console.warn(
+        "[booster/send] Fee tracking skipped: no treasury inflow found",
+        signature.slice(0, 8),
+      );
+      return;
+    }
 
     const result = await recordUserFees({
       userId: user._id,
       signature,
       kind: feeKind,
-      tokens: [
-        {
-          mint: feeMint,
-          amountUi: feeUi,
-          decimals: feeDecimals,
-          symbol: feeSymbol,
-        },
-      ],
+      tokens: feeTokens,
     });
 
     if (result.ok && result.recorded) {
       console.log(
-        `[booster/send] Fee recorded: ${feeUi} ${feeSymbol || feeMint.slice(0, 8)} (${feeKind}) for ${signature.slice(0, 8)}`
+        `[booster/send] Fee recorded (${feeKind}) for ${signature.slice(0, 8)}`
       );
     } else if (result.ok && !result.recorded) {
       console.log(
@@ -375,8 +572,6 @@ export async function POST(req: NextRequest) {
     const feeUnits = typeof parsed?.feeUnits === "number" ? parsed.feeUnits : 0;
     const feeMint =
       typeof parsed?.feeMint === "string" ? parsed.feeMint.trim() : "";
-    const feeDecimals =
-      typeof parsed?.feeDecimals === "number" ? parsed.feeDecimals : 6;
     const feeKind =
       typeof parsed?.feeKind === "string" ? parsed.feeKind.trim() : "perp";
 
@@ -492,7 +687,11 @@ export async function POST(req: NextRequest) {
     // ✅ Prevent SOL drain attacks via SystemProgram instructions
     stageRef.stage = "spendGuards";
     try {
-      validateHavenSpendGuards(userSignedTx);
+      validateHavenSpendGuards(userSignedTx, {
+        allowSystemTransfers: [
+          { to: authedUserPk, maxLamports: BOOSTER_MAX_TOPUP_LAMPORTS },
+        ],
+      });
     } catch (e) {
       const m = e instanceof Error ? e.message : "Unsafe transaction";
       return jsonError(400, {
@@ -638,13 +837,12 @@ export async function POST(req: NextRequest) {
     }
 
     /* ───────── RECORD FEE (fire-and-forget) ───────── */
-    if (feeUnits > 0 && feeMint) {
-      recordFeeAsync({
+    if (feeMint || feeUnits > 0) {
+      recordFeeFromChainAsync({
+        conn,
         privyId: session.userId,
         signature,
-        feeUnits,
-        feeMint,
-        feeDecimals,
+        feeMintHint: feeMint || undefined,
         feeKind,
       }).catch(() => {
         // Already logged inside the function
