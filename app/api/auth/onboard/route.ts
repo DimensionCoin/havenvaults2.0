@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateCsrf } from "@/lib/csrf";
 import User, {
   type FinancialKnowledgeLevel,
   type RiskLevel,
@@ -67,6 +68,9 @@ function cleanCountry(v: unknown): string | undefined {
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ✅ Auth check early (also avoids burning Convex on totally unauthenticated spam)
     const session = await getSessionFromCookies();
     if (!session?.sub) {

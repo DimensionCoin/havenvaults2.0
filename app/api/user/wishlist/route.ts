@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User from "@/models/User";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export async function GET() {
 // 🔽 NEW: add mint to wishlist
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     const session = await getSessionFromCookies();
     if (!session || !session.sub) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -94,6 +98,9 @@ export async function POST(req: NextRequest) {
 }
 export async function DELETE(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     const session = await getSessionFromCookies();
     if (!session || !session.sub) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

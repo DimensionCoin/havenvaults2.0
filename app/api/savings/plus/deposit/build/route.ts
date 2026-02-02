@@ -19,6 +19,7 @@ import { Buffer } from "buffer";
 
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -568,6 +569,9 @@ export async function POST(req: NextRequest) {
   let stage = "init";
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth (cookie session) ───────────
     let authedUserPk: PublicKey;
     try {

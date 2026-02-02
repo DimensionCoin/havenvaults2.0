@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,6 +159,9 @@ async function fetchBatch(
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ✅ Avoid req.json() crashing when client aborts mid-stream (truncated JSON)
     const raw = await req.text();
     const parsed = safeJsonParse<Partial<JupPriceRequest>>(raw);

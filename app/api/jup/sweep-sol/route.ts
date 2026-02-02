@@ -1,5 +1,5 @@
 // app/api/booster/sweep-sol/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   ComputeBudgetProgram,
   PublicKey,
@@ -10,6 +10,7 @@ import {
 } from "@solana/web3.js";
 
 import { RPC_CONNECTION } from "@/types/constants";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,11 @@ const COMPUTE_UNIT_LIMIT = 200_000;
 
 // base fee buffer (for Haven fee payer, not the user)
 const BASE_FEE_BUFFER_LAMPORTS = 5_000;
+
+const IS_PROD = process.env.NODE_ENV === "production";
+const debugLog = (...args: unknown[]) => {
+  if (!IS_PROD) console.log(...args);
+};
 
 /* ───────── HELPERS ───────── */
 
@@ -47,16 +53,19 @@ function jsonError(
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const stageRef: { stage: string } = { stage: "init" };
 
-  console.log("\n\n============================");
-  console.log("[/api/booster/sweep-sol] POST start");
-  console.log("============================");
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
+  debugLog("\n\n============================");
+  debugLog("[/api/booster/sweep-sol] POST start");
+  debugLog("============================");
 
   try {
     stageRef.stage = "envCheck";
-    console.log("[sweep-sol] stage:", stageRef.stage);
+    debugLog("[sweep-sol] stage:", stageRef.stage);
 
     if (!HAVEN_FEEPAYER_STR) {
       return jsonError(500, {
@@ -71,7 +80,7 @@ export async function POST(req: Request) {
     const HAVEN_FEEPAYER = new PublicKey(HAVEN_FEEPAYER_STR);
 
     stageRef.stage = "parseBody";
-    console.log("[sweep-sol] stage:", stageRef.stage);
+    debugLog("[sweep-sol] stage:", stageRef.stage);
 
     const body = (await req.json().catch((err) => {
       console.error("[sweep-sol] req.json() failed", err);
@@ -83,7 +92,7 @@ export async function POST(req: Request) {
       minResidualLamports?: number;
     } | null;
 
-    console.log("[sweep-sol] raw body:", body);
+    debugLog("[sweep-sol] raw body:", body);
 
     const ownerBase58 = body?.ownerBase58 ?? "";
 
@@ -117,14 +126,14 @@ export async function POST(req: Request) {
     const targetResidualLamports = MIN_RESIDUAL_LAMPORTS;
 
     stageRef.stage = "balances";
-    console.log("[sweep-sol] stage:", stageRef.stage);
+    debugLog("[sweep-sol] stage:", stageRef.stage);
 
     const [ownerLamportsBefore, havenLamports] = await Promise.all([
       RPC_CONNECTION.getBalance(owner, "processed"),
       RPC_CONNECTION.getBalance(HAVEN_FEEPAYER, "processed"),
     ]);
 
-    console.log("[sweep-sol] balances BEFORE sweep", {
+    debugLog("[sweep-sol] balances BEFORE sweep", {
       ownerLamportsBefore,
       ownerSolBefore: ownerLamportsBefore / 1e9,
       havenLamports,
@@ -134,7 +143,7 @@ export async function POST(req: Request) {
 
     // If the wallet is already empty, nothing to do.
     if (ownerLamportsBefore <= targetResidualLamports) {
-      console.log(
+      debugLog(
         "[sweep-sol] nothing to sweep — owner balance <= target residual",
         {
           ownerLamportsBefore,
@@ -153,7 +162,7 @@ export async function POST(req: Request) {
     const sweepLamports = ownerLamportsBefore - targetResidualLamports;
     const expectedOwnerAfter = ownerLamportsBefore - sweepLamports;
 
-    console.log("[sweep-sol] sweepCalc", {
+    debugLog("[sweep-sol] sweepCalc", {
       ownerLamportsBefore,
       targetResidualLamports,
       sweepLamports,
@@ -163,7 +172,7 @@ export async function POST(req: Request) {
     });
 
     if (sweepLamports <= 0) {
-      console.log("[sweep-sol] sweepLamports <= 0, nothing to sweep");
+      debugLog("[sweep-sol] sweepLamports <= 0, nothing to sweep");
       return NextResponse.json({
         transaction: null,
         reason: "LOW_BALANCE",
@@ -180,7 +189,7 @@ export async function POST(req: Request) {
     const requiredLamportsForThisTx =
       estimatedPriorityFeeLamports + BASE_FEE_BUFFER_LAMPORTS;
 
-    console.log("[sweep-sol] fee-payer check", {
+    debugLog("[sweep-sol] fee-payer check", {
       havenLamports,
       havenSol: havenLamports / 1e9,
       requiredLamportsForThisTx,
@@ -202,7 +211,7 @@ export async function POST(req: Request) {
     /* ───────── Build instructions ───────── */
 
     stageRef.stage = "buildInstructions";
-    console.log("[sweep-sol] stage:", stageRef.stage);
+    debugLog("[sweep-sol] stage:", stageRef.stage);
 
     const ixs: TransactionInstruction[] = [];
 
@@ -232,12 +241,12 @@ export async function POST(req: Request) {
     /* ───────── Compile tx ───────── */
 
     stageRef.stage = "compile";
-    console.log("[sweep-sol] stage:", stageRef.stage);
+    debugLog("[sweep-sol] stage:", stageRef.stage);
 
     const { blockhash, lastValidBlockHeight } =
       await RPC_CONNECTION.getLatestBlockhash("processed");
 
-    console.log("[sweep-sol] latestBlockhash", {
+    debugLog("[sweep-sol] latestBlockhash", {
       blockhash,
       lastValidBlockHeight,
       ixCount: ixs.length,
@@ -252,7 +261,7 @@ export async function POST(req: Request) {
     const unsignedTx = new VersionedTransaction(msg);
     const b64 = Buffer.from(unsignedTx.serialize()).toString("base64");
 
-    console.log("[sweep-sol] success: returning sweep transaction", {
+    debugLog("[sweep-sol] success: returning sweep transaction", {
       owner: owner.toBase58(),
       ownerLamportsBefore,
       ownerSolBefore: ownerLamportsBefore / 1e9,

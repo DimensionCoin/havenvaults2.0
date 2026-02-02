@@ -6,12 +6,16 @@ import User, { IBalanceSnapshot } from "@/models/User";
 import mongoose from "mongoose";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     /* ── auth ── */
     let authedWallet: string;
     try {

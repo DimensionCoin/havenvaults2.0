@@ -1,5 +1,6 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,9 @@ function pickEnDescription(desc: unknown): string | null {
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     const body = (await req.json().catch(() => ({}))) as Body;
     const ids = Array.isArray(body?.ids) ? body.ids.filter(Boolean) : [];
 

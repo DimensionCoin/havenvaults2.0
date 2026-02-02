@@ -18,6 +18,11 @@ const privy = APP_ID && SECRET ? new PrivyClient(APP_ID, SECRET) : null;
 
 const enc = new TextEncoder();
 
+const IS_PROD = process.env.NODE_ENV === "production";
+const debugLog = (...args: unknown[]) => {
+  if (!IS_PROD) console.log(...args);
+};
+
 // ---------- helpers ----------
 function readBearer(req: Request): string | null {
   const authz = req.headers.get("authorization");
@@ -42,7 +47,7 @@ function readCookie(req: Request, name: string): string | null {
 async function getUserDocFromRequest(req: Request) {
   // If we don't have the secrets configured, just skip auth
   if (!JWT_SECRET && !privy) {
-    console.log(
+    debugLog(
       "[FX] getUserDocFromRequest: no JWT_SECRET/privy, skipping auth"
     );
     return null;
@@ -52,13 +57,13 @@ async function getUserDocFromRequest(req: Request) {
   const bearer = readBearer(req);
   if (bearer && privy) {
     try {
-      console.log("[FX] getUserDocFromRequest: trying Privy bearer");
+      debugLog("[FX] getUserDocFromRequest: trying Privy bearer");
       const claims = await privy.verifyAuthToken(bearer);
       const privyId = claims.userId;
       await connect();
       const byPrivy = await User.findOne({ privyId }).lean();
       if (byPrivy) {
-        console.log("[FX] getUserDocFromRequest: found user by privyId", {
+        debugLog("[FX] getUserDocFromRequest: found user by privyId", {
           privyId,
           userId: byPrivy._id?.toString?.(),
           displayCurrency: byPrivy.displayCurrency,
@@ -73,7 +78,7 @@ async function getUserDocFromRequest(req: Request) {
 
   // 2) Fallback to app session cookie (haven_session) -> verify JWT -> find by _id
   if (!JWT_SECRET) {
-    console.log(
+    debugLog(
       "[FX] getUserDocFromRequest: no JWT_SECRET, skipping cookie path"
     );
     return null;
@@ -81,7 +86,7 @@ async function getUserDocFromRequest(req: Request) {
 
   const sessionJwt = readCookie(req, SESSION_COOKIE);
   if (!sessionJwt) {
-    console.log("[FX] getUserDocFromRequest: no session cookie");
+    debugLog("[FX] getUserDocFromRequest: no session cookie");
     return null;
   }
 
@@ -105,7 +110,7 @@ async function getUserDocFromRequest(req: Request) {
       });
       return null;
     }
-    console.log("[FX] getUserDocFromRequest: found user by _id", {
+    debugLog("[FX] getUserDocFromRequest: found user by _id", {
       uid,
       displayCurrency: byId.displayCurrency,
     });
@@ -124,7 +129,7 @@ const normalizeTargetCurrency = (c: string) =>
 type FxResult = { rate: number; asOf?: string; source: string };
 
 async function fetchRateUSDTo_Frankfurter(target: string): Promise<FxResult> {
-  console.log("[FX] Frankfurter: fetching USD ->", target);
+  debugLog("[FX] Frankfurter: fetching USD ->", target);
   const r = await fetch(
     `https://api.frankfurter.app/latest?from=USD&to=${encodeURIComponent(
       target
@@ -137,7 +142,7 @@ async function fetchRateUSDTo_Frankfurter(target: string): Promise<FxResult> {
     date?: string;
   };
   const rate = Number(j?.rates?.[target]);
-  console.log("[FX] Frankfurter: raw JSON", {
+  debugLog("[FX] Frankfurter: raw JSON", {
     date: j.date,
     rate,
     target,
@@ -147,7 +152,7 @@ async function fetchRateUSDTo_Frankfurter(target: string): Promise<FxResult> {
 }
 
 async function fetchRateUSDTo_ERAPI(target: string): Promise<FxResult> {
-  console.log("[FX] ER-API: fetching USD ->", target);
+  debugLog("[FX] ER-API: fetching USD ->", target);
   const r = await fetch("https://open.er-api.com/v6/latest/USD", {
     next: { revalidate: 300 },
   });
@@ -157,7 +162,7 @@ async function fetchRateUSDTo_ERAPI(target: string): Promise<FxResult> {
     time_last_update_utc?: string;
   };
   const rate = Number(j?.rates?.[target]);
-  console.log("[FX] ER-API: raw JSON snippet", {
+  debugLog("[FX] ER-API: raw JSON snippet", {
     time_last_update_utc: j.time_last_update_utc,
     rate,
     target,
@@ -169,7 +174,7 @@ async function fetchRateUSDTo_ERAPI(target: string): Promise<FxResult> {
 async function fetchRateUSDTo_ExchangerateHost(
   target: string
 ): Promise<FxResult> {
-  console.log("[FX] exchangerate.host: fetching USD ->", target);
+  debugLog("[FX] exchangerate.host: fetching USD ->", target);
   const r = await fetch(
     `https://api.exchangerate.host/latest?base=USD&symbols=${encodeURIComponent(
       target
@@ -182,7 +187,7 @@ async function fetchRateUSDTo_ExchangerateHost(
     date?: string;
   };
   const rate = Number(j?.rates?.[target]);
-  console.log("[FX] exchangerate.host: raw JSON", {
+  debugLog("[FX] exchangerate.host: raw JSON", {
     date: j.date,
     rate,
     target,
@@ -193,7 +198,7 @@ async function fetchRateUSDTo_ExchangerateHost(
 }
 
 async function fetchRateUSDTo(target: string): Promise<FxResult> {
-  console.log("[FX] fetchRateUSDTo: start", { target });
+  debugLog("[FX] fetchRateUSDTo: start", { target });
 
   const attempts: { name: string; fn: (t: string) => Promise<FxResult> }[] = [
     { name: "frankfurter", fn: fetchRateUSDTo_Frankfurter },
@@ -205,7 +210,7 @@ async function fetchRateUSDTo(target: string): Promise<FxResult> {
   for (const { name, fn } of attempts) {
     try {
       const res = await fn(target);
-      console.log("[FX] fetchRateUSDTo: provider success", {
+      debugLog("[FX] fetchRateUSDTo: provider success", {
         provider: name,
         target,
         rate: res.rate,
@@ -231,7 +236,7 @@ async function fetchRateUSDTo(target: string): Promise<FxResult> {
 // ---------- GET: allow query override + user displayCurrency ----------
 export async function GET(req: NextRequest) {
   try {
-    console.log("[FX] GET /api/fx called:", { url: req.url });
+    debugLog("[FX] GET /api/fx called:", { url: req.url });
 
     const url = new URL(req.url);
 
@@ -262,7 +267,7 @@ export async function GET(req: NextRequest) {
       toParam || userDisplayCurrency || "USD"
     );
 
-    console.log("[FX] GET: resolved currency info", {
+    debugLog("[FX] GET: resolved currency info", {
       toParam,
       userDisplayCurrency,
       normalizedTarget: target,
@@ -282,7 +287,7 @@ export async function GET(req: NextRequest) {
         source: "peg",
         timestamp: Date.now(),
       };
-      console.log("[FX] GET: returning peg (USD)", payload);
+      debugLog("[FX] GET: returning peg (USD)", payload);
       return NextResponse.json(payload, {
         headers: {
           "Cache-Control": "no-store",
@@ -307,7 +312,7 @@ export async function GET(req: NextRequest) {
       timestamp: Date.now(),
     };
 
-    console.log("[FX] GET: returning FX payload", payload);
+    debugLog("[FX] GET: returning FX payload", payload);
 
     return NextResponse.json(payload, {
       headers: {

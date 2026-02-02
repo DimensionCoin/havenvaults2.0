@@ -2,6 +2,7 @@
 // Hides the Helius API key from the client bundle.
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,6 +123,9 @@ function validateSingleRequest(
 /* ───────── Route handler ───────── */
 
 export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   if (!SOLANA_RPC) {
     return NextResponse.json(
       { error: "RPC proxy not configured" },

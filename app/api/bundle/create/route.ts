@@ -12,6 +12,7 @@ import { findTokenBySymbol } from "@/lib/tokenConfig";
 
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 export const dynamic = "force-dynamic";
 
@@ -124,6 +125,9 @@ export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ✅ Rate limit early (protect DB / avoid spam bundle creation)
     const blocked = await rateLimitServer(req, {
       api: "bundle:create",

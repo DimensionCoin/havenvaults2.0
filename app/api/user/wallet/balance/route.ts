@@ -34,6 +34,11 @@ const LOCAL_USDC_MINT =
 const JUP_PRICE_URL = "https://api.jup.ag/price/v3";
 const JUP_API_KEY = process.env.JUP_API_KEY;
 
+const IS_PROD = process.env.NODE_ENV === "production";
+const debugLog = (...args: unknown[]) => {
+  if (!IS_PROD) console.log(...args);
+};
+
 /**
  * Normalize any local/dev USDC mint to the real one for pricing
  * so we get correct prices from Jup, but we still return the
@@ -243,7 +248,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    console.log("[/api/user/wallet/balance] owner:", owner);
+    debugLog("[/api/user/wallet/balance] owner:", owner);
 
     const [splPositions, nativeSol] = await Promise.all([
       getSplTokenPositions(owner),
@@ -381,7 +386,7 @@ export async function GET(req: NextRequest) {
     const totalChangePct =
       prevTotal > 0 ? Number((totalChangeUsd / prevTotal).toFixed(4)) : 0;
 
-    console.log("[/api/user/wallet/balance] summary:", {
+    debugLog("[/api/user/wallet/balance] summary:", {
       totalUsd,
       totalChangeUsd,
       totalChangePct,

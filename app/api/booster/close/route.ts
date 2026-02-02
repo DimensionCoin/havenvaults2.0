@@ -21,6 +21,7 @@ import { BN } from "@coral-xyz/anchor";
 
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 import {
   RPC_CONNECTION,
@@ -196,6 +197,9 @@ export async function POST(req: NextRequest) {
   const stageRef = { stage: "init" };
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth ───────────
     stageRef.stage = "auth";
     let authedUserPk: PublicKey;

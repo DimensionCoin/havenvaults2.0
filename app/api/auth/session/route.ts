@@ -5,6 +5,7 @@ import { privyServerClient } from "@/lib/privyServer";
 import { setSessionCookie } from "@/lib/auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -130,6 +131,9 @@ function deriveSolanaWalletFromPrivyUser(privyUser: PrivyUser | null | undefined
 }
 
 export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   try {
     await connect();
 

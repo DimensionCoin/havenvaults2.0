@@ -5,12 +5,16 @@ import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { getSessionFromCookies } from "@/lib/auth";
 import { cloudinary } from "@/lib/cloudinary";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     await connect();
 
     const session = await getSessionFromCookies();

@@ -28,6 +28,7 @@ import {
 
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -234,6 +235,9 @@ export async function POST(req: NextRequest) {
   let stage = "init";
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth ───────────
     stage = "auth";
     let authedUserPk: PublicKey;

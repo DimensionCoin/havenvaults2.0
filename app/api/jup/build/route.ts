@@ -22,6 +22,7 @@ import { Buffer } from "buffer";
 
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -500,6 +501,9 @@ export async function POST(req: NextRequest) {
   let stage = "init";
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth (server cookie) ───────────
     stage = "auth";
     let userOwner: PublicKey;

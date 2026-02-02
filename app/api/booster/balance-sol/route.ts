@@ -1,13 +1,17 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { PublicKey, type Commitment } from "@solana/web3.js";
 import { RPC_CONNECTION } from "@/types/constants";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const COMMITMENT: Commitment = "processed";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   const body = (await req.json().catch(() => ({}))) as { ownerBase58?: string };
   const ownerStr = (body.ownerBase58 || "").trim();
   if (!ownerStr) {

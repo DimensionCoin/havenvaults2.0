@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User, { IContact, IInvite } from "@/models/User";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,9 @@ const isValidEmail = (email: string) =>
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     await connect();
 
     const session = await getSessionFromCookies();

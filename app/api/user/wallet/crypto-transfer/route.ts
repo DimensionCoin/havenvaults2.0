@@ -27,6 +27,7 @@ import {
 } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 /* ───────── Next.js route config ───────── */
 
@@ -389,6 +390,9 @@ export async function POST(req: NextRequest) {
   if (!req.headers.get("content-type")?.includes("application/json")) {
     return jsonError(415, "Content-Type must be application/json");
   }
+
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
 
   // ✅ Rate limit FIRST (money-moving route)
   const blocked = await rateLimitServer(req, {

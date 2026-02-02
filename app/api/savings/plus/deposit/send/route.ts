@@ -17,6 +17,7 @@ import {
   assertUserSigned,
 } from "@/lib/getServerUser";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -164,6 +165,9 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth (cookie session -> user -> wallet pubkey) ───────────
     let authedUserPk: PublicKey;
     try {

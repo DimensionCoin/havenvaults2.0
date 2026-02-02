@@ -5,6 +5,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 import {
   JUPITER_PERPETUALS_PROGRAM_ID,
@@ -125,6 +126,9 @@ function decodePositionAccount(data: Buffer): {
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     /* ── auth ── */
     let authedUserPk: PublicKey;
     try {

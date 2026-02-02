@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +22,10 @@ async function jupFetch(url: string) {
   });
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   const body = (await req.json().catch(() => null)) as {
     inputMint?: string;
     outputMint?: string;

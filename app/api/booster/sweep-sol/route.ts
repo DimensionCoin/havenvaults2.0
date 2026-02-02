@@ -11,6 +11,7 @@ import {
 
 import { RPC_CONNECTION } from "@/types/constants";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,6 +105,9 @@ export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // Rate limit (no auth required for build endpoint, but limit by IP)
     const blocked = await rateLimitServer(req, {
       api: "booster:sweep-sol",

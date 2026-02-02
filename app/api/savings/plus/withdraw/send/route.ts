@@ -31,6 +31,7 @@ import User from "@/models/User";
 import { SavingsLedger } from "@/models/SavingsLedger";
 import { recordUserFees } from "@/lib/fees";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -681,6 +682,9 @@ async function recordWithdrawFeeEvent(params: {
 export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startedAt = Date.now();
+
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
 
   // 1) RATE LIMIT — do this first (cheap early exit)
   const rl = await rateLimitServer(req, {

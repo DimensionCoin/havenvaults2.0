@@ -23,6 +23,7 @@ import {
 } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 /* ───────── Next.js route config ───────── */
 
@@ -421,6 +422,9 @@ export async function POST(req: NextRequest) {
       traceId,
     });
   }
+
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
 
   // ✅ Rate limit at the very top (money-moving route: strict)
   const blocked = await rateLimitServer(req, {

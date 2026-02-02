@@ -35,6 +35,7 @@ import { getSessionFromCookies } from "@/lib/auth";
 import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateCsrf } from "@/lib/csrf";
 
 /* ───────── ENV (parsed once at module load) ───────── */
 
@@ -262,6 +263,9 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // Rate limit
     const blocked = await rateLimitServer(req, {
       api: "savings:flex:open-and-deposit",

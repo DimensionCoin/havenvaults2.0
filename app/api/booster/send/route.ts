@@ -17,6 +17,7 @@ import User from "@/models/User";
 import { connect } from "@/lib/db";
 import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -504,6 +505,9 @@ export async function POST(req: NextRequest) {
   const stageRef: { stage: string } = { stage: "init" };
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth ───────────
     stageRef.stage = "auth";
     let authedUserPk: PublicKey;

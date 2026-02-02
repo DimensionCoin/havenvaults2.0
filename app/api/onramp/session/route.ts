@@ -7,6 +7,7 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { requireServerUser } from "@/lib/getServerUser";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,11 @@ const ORIGINS = (process.env.NEXT_PUBLIC_APP_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+const IS_PROD = process.env.NODE_ENV === "production";
+const debugLog = (...args: unknown[]) => {
+  if (!IS_PROD) console.log(...args);
+};
 
 /* ───────── helpers ───────── */
 
@@ -213,6 +219,9 @@ async function generateCoinbaseJwtV2(method: string, path: string) {
 /* ───────── main ───────── */
 
 export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   if (!API_KEY_ID || !API_KEY_SECRET) {
     return json(req, 500, { error: "Missing Coinbase API credentials" });
   }
@@ -313,7 +322,7 @@ export async function POST(req: NextRequest) {
     ? requestedPaymentMethod
     : "CARD";
 
-  console.log("[Onramp] Request:", {
+  debugLog("[Onramp] Request:", {
     country: userCountry,
     isUSUser,
     currency: paymentCurrency,
@@ -369,7 +378,7 @@ export async function POST(req: NextRequest) {
       sessionReq.partnerUserRef = String(user.id || user._id);
     }
 
-    console.log("[Onramp] Session request body:", sessionReq);
+    debugLog("[Onramp] Session request body:", sessionReq);
 
     const jwt = await generateCoinbaseJwtV2(
       "POST",
@@ -408,7 +417,7 @@ export async function POST(req: NextRequest) {
       return json(req, 502, { error: "No onrampUrl returned by Coinbase" });
     }
 
-    console.log("[Onramp] Success! URL:", onrampUrl);
+    debugLog("[Onramp] Success! URL:", onrampUrl);
 
     // Quote is only included for US users with full payment details
     const quote = data?.quote ?? null;

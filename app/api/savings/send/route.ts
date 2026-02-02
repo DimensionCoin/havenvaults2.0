@@ -33,6 +33,7 @@ import { SavingsLedger } from "@/models/SavingsLedger";
 import { recordUserFees } from "@/lib/fees";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
+import { validateCsrf } from "@/lib/csrf";
 
 const enc = new TextEncoder();
 const SESSION_COOKIE = "haven_session";
@@ -529,6 +530,9 @@ async function recordSavingsFeeAsync(params: {
 /* ───────── route ───────── */
 
 export async function POST(req: NextRequest) {
+  const csrfError = validateCsrf(req);
+  if (csrfError) return csrfError;
+
   // ✅ Rate limit FIRST (money-moving route)
   const blocked = await rateLimitServer(req, {
     api: "savings:send",

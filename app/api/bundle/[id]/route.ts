@@ -4,6 +4,7 @@ import { connect } from "@/lib/db";
 import Bundle from "@/models/Bundle";
 import { getServerUser } from "@/lib/getServerUser";
 import mongoose from "mongoose";
+import { validateCsrf } from "@/lib/csrf";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     const user = await getServerUser();
 
     if (!user) {
@@ -129,6 +133,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     const user = await getServerUser();
 
     if (!user) {

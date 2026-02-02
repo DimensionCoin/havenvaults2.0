@@ -29,6 +29,7 @@ import {
   assertUserSigned,
 } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateCsrf } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -809,6 +810,9 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   try {
+    const csrfError = validateCsrf(req);
+    if (csrfError) return csrfError;
+
     // ─────────── Auth (server cookie) ───────────
     let userPk: PublicKey;
     let userIdForFeeEvents: string;
