@@ -22,6 +22,7 @@ import {
   ArrowRight,
   BadgeCheck,
 } from "lucide-react";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 // ----------------- Page -----------------
 
@@ -492,14 +493,14 @@ export default function SignInPage() {
               <div className="relative h-10 w-10 overflow-hidden rounded-2xl border border-border bg-background">
                 <Image
                   src="/logo.jpg"
-                  alt="Haven"
+                  alt="Haven Financial"
                   fill
                   className="object-contain"
                 />
               </div>
 
               <div className="flex flex-col">
-                <span className="haven-kicker">Haven</span>
+                <span className="haven-kicker">Haven Financial</span>
                 <span className="text-[12px] text-muted-foreground">
                   {bootstrapping
                     ? "Signing you in…"
@@ -519,7 +520,7 @@ export default function SignInPage() {
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5" />
-                Non-custodial
+                Self-custodial
               </span>
             </div>
           </div>
@@ -574,7 +575,7 @@ export default function SignInPage() {
             <div className="relative h-9 w-9 overflow-hidden rounded-2xl border border-border bg-card shadow-fintech-sm">
               <Image
                 src="/logo.jpg"
-                alt="Haven"
+                  alt="Haven Financial"
                 fill
                 className="object-contain"
               />
@@ -582,7 +583,7 @@ export default function SignInPage() {
 
             <div className="hidden sm:flex flex-col leading-tight">
               <span className="text-[12px] font-semibold tracking-tight">
-                Haven
+                Haven Financial
               </span>
               <span className="text-[11px] text-muted-foreground">
                 Banking that works for you
@@ -603,12 +604,12 @@ export default function SignInPage() {
             <div className="max-w-xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-3 py-2 text-[11px] text-muted-foreground shadow-fintech-sm backdrop-blur-xl">
                 <Sparkles className="h-4 w-4 text-primary" />
-                Non-custodial · Your keys, your money
+                Self-custodial · You approve every transaction
               </div>
 
               <h1 className="mt-5 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight leading-[1.05]">
-                Sign in to your <span className="text-primary">Haven</span>{" "}
-                account
+                Sign in to your{" "}
+                <span className="text-primary">Haven Financial</span> account
               </h1>
 
               <p className="mt-4 text-[15px] sm:text-base text-muted-foreground leading-relaxed">
@@ -621,7 +622,7 @@ export default function SignInPage() {
                   {
                     icon: ShieldCheck,
                     title: "Secure by design",
-                    desc: "We don’t custody funds. You control the keys.",
+                    desc: "Self-custodial. Haven Financial and Privy never access your private keys.",
                   },
                   {
                     icon: BadgeCheck,
@@ -631,7 +632,7 @@ export default function SignInPage() {
                   {
                     icon: Lock,
                     title: "Private session",
-                    desc: "HttpOnly app session after Privy verification.",
+                    desc: "Secure session after Privy verification.",
                   },
                   {
                     icon: Sparkles,
@@ -679,12 +680,13 @@ export default function SignInPage() {
                   <div>
                     <p className="haven-kicker">Welcome back</p>
                     <h2 className="mt-2 text-xl font-semibold tracking-tight">
-                      Continue to Haven
+                      Continue to Haven Financial
                     </h2>
                     <p className="mt-2 text-[12px] text-muted-foreground leading-relaxed">
                       Use email or Google. We’ll create your Solana wallet if
                       you don’t have one yet.
                     </p>
+                    <TrustLine compact className="mt-3" withLink />
                   </div>
 
                   <div className="shrink-0">
@@ -878,15 +880,16 @@ export default function SignInPage() {
 
                 {/* Fine print */}
                 <p className="mt-6 text-[11px] leading-relaxed text-muted-foreground">
-                  By continuing, you agree to Haven’s Terms and acknowledge our
-                  Privacy Policy. Haven is non-custodial software — you remain
-                  in control of your assets at all times.
+                  By continuing, you agree to Haven Financial’s Terms and
+                  acknowledge our Privacy Policy. Haven Financial is
+                  self-custodial software — you remain in control of your assets
+                  at all times.
                 </p>
               </div>
 
               {/* tiny footer */}
               <div className="mt-4 text-center text-[11px] text-muted-foreground">
-                Haven Labs · Secured by Privy · Built on Solana
+                Haven Financial · Secured by Privy · Built on Solana
               </div>
             </div>
           </section>

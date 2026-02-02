@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { VersionedTransaction } from "@solana/web3.js";
+import { assertUserIsSigner } from "./assertUserIsSigner";
 import {
   useWallets,
   useSignTransaction,
@@ -377,6 +378,10 @@ export function useServerSponsoredBoosterClose() {
           }
 
           // Sign and send (no fee tracking for sweep)
+          assertUserIsSigner(
+            new Uint8Array(Buffer.from(sweepBuild.transaction, "base64")),
+            address,
+          );
           const signedSweep = await signWithWallet(
             address,
             fromB64(sweepBuild.transaction)
@@ -481,6 +486,10 @@ export function useServerSponsoredBoosterClose() {
             }
 
             setStatus("signing");
+            assertUserIsSigner(
+              new Uint8Array(Buffer.from(closeBuild.transaction, "base64")),
+              args.ownerBase58,
+            );
             signedCloseTx = await signWithWallet(
               args.ownerBase58,
               fromB64(closeBuild.transaction)

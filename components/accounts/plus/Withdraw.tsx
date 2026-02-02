@@ -27,6 +27,7 @@ import {
   usePlusWithdraw,
   type PlusWithdrawStatus,
 } from "@/hooks/usePlusWithdraw";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 /* ───────── TYPES ───────── */
 
@@ -444,6 +445,8 @@ export default function WithdrawPlus({
                   </div>
                 )}
             </div>
+
+            <TrustLine compact className="mt-3" />
 
             {/* Summary */}
             {amountDisplay > 0 && (

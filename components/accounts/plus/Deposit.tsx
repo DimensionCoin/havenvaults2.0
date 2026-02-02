@@ -21,6 +21,7 @@ import {
 import { useUser } from "@/providers/UserProvider";
 import { useBalance } from "@/providers/BalanceProvider";
 import { usePlusDeposit, type PlusDepositStatus } from "@/hooks/usePlusDeposit";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 /* ───────── TYPES ───────── */
 
@@ -483,6 +484,8 @@ export default function DepositPlus({
                 </button>
               </div>
             </div>
+
+            <TrustLine compact className="mt-3" />
 
             <button
               disabled={!canSubmit || isBusy}

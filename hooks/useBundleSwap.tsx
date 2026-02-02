@@ -8,6 +8,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
+import { assertUserIsSigner } from "./assertUserIsSigner";
 
 /* ───────── TYPES ───────── */
 
@@ -127,6 +128,7 @@ export function useBundleSwap() {
       if (!wallet) throw new Error("Wallet not connected");
 
       const txBytes = Buffer.from(txBase64, "base64");
+      assertUserIsSigner(new Uint8Array(txBytes), ownerAddress);
 
       const { signedTransaction } = await signTransaction({
         transaction: txBytes,

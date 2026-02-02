@@ -863,7 +863,7 @@ const SettingsPage: React.FC = () => {
                           {shortAddress(user.walletAddress)}
                         </p>
                         <p className="mt-0.5 text-[10px] text-muted-foreground">
-                          Read-only. Managed by Privy.
+                          Self-custodial. Only you can export your key.
                         </p>
                       </div>
                     </div>

@@ -17,6 +17,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import ThemeToggle from "@/components/shared/ThemeToggle";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 type ApyResponse = {
   apy?: number; // decimal (e.g. 0.0587)
@@ -82,7 +83,7 @@ const Landing = () => {
   const apyStatValue = apyText ? `${apyText}%` : "—";
 
   const heroSubcopy =
-    "Haven Financial is a new, fun investment and savings platform with financial tools that help you build wealth over time. Save, invest, and grow with a clean experience that feels familiar from day one.";
+    "Haven Financial is a modern investment and savings platform built to help you grow steadily over time. Save, invest, and build wealth with simple tools and clear control.";
 
   const slogan =
     "Wealth isn't made overnight - it's built one smart step at a time.";
@@ -96,9 +97,9 @@ const Landing = () => {
     : `Earn high-yield savings on your balance. Your money can grow automatically, with a smooth experience and clear control.`;
 
   // ✅ Updated (no “audited” claims, no unverifiable promises)
-  const trustTitle = "Built for control, built with care";
+  const trustTitle = "Self-custody you can feel";
   const trustBody =
-    "We’re building Haven with a security-first mindset: strong sign-in protections, careful handling of sensitive data, and clear user control over assets.";
+    "Your wallet stays in your hands. Haven Financial and Privy never access your private keys or move your funds. Every transaction requires your approval.";
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
@@ -135,14 +136,14 @@ const Landing = () => {
               <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-border bg-background/60 backdrop-blur-sm transition-all group-hover:border-primary/30">
                 <Image
                   src="/logo.jpg"
-                  alt="Haven"
+                  alt="Haven Financial"
                   fill
                   className="object-contain"
                   priority
                 />
               </div>
               <span className="text-lg font-semibold tracking-tight">
-                Haven
+                Haven Financial
               </span>
             </Link>
 
@@ -174,7 +175,7 @@ const Landing = () => {
                 <Lock className="h-3 w-3 text-primary" />
               </div>
               <span className="text-sm text-muted-foreground">
-                Self-directed · You stay in control
+                Self-custodial · You approve every transaction
               </span>
             </div>
           </div>
@@ -244,7 +245,7 @@ const Landing = () => {
             </h2>
             <p className="mt-4 text-lg text-muted-foreground max-w-xl mx-auto">
               Most finance apps still feel like tradeoffs: low interest, slow
-              movement, and limited flexibility. Haven is built to feel modern —
+              movement, and limited flexibility. Haven Financial is built to feel modern —
               without the learning curve.
             </p>
           </div>
@@ -274,11 +275,11 @@ const Landing = () => {
               </ul>
             </div>
 
-            {/* Haven - Solutions */}
+            {/* Haven Financial - Solutions */}
             <div className="rounded-3xl border border-primary/30 bg-primary/[0.06] p-8">
               <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary mb-6">
                 <Sparkles className="h-3 w-3" />
-                Haven
+                Haven Financial
               </div>
               <ul className="space-y-4">
                 {[
@@ -469,6 +470,12 @@ const Landing = () => {
             </Link>
           </div>
 
+          <TrustLine
+            align="center"
+            withLink
+            className="mt-6 max-w-2xl"
+          />
+
           <p className="mt-4 text-sm text-muted-foreground">
             No credit checks · No minimum balance · Start in under 1 minute
           </p>
@@ -481,7 +488,7 @@ const Landing = () => {
               <div className="relative h-8 w-8 overflow-hidden rounded-lg">
                 <Image
                   src="/logo.jpg"
-                  alt="Haven"
+                  alt="Haven Financial"
                   fill
                   className="object-contain"
                 />
@@ -509,7 +516,7 @@ const Landing = () => {
           </div>
 
           <p className="mt-6 text-xs text-muted-foreground text-center max-w-2xl mx-auto">
-            Haven is non-custodial software. You control your assets. Rates can
+            Haven Financial is non-custodial software. You control your assets. Rates can
             change and are not guaranteed. Savings yield may be generated using
             tokenized cash equivalents (e.g., stable-value digital dollars). Not
             available in all regions. Investing involves risk.

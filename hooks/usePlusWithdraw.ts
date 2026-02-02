@@ -5,6 +5,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
 import { Buffer } from "buffer";
+import { assertUserIsSigner } from "./assertUserIsSigner";
 
 declare global {
   interface Window {
@@ -646,6 +647,7 @@ export function usePlusWithdraw() {
         const unsignedBytes = new Uint8Array(
           Buffer.from(buildResp.transaction, "base64"),
         );
+        assertUserIsSigner(unsignedBytes, connectedWallet58);
 
         let signedBytes: Uint8Array;
         try {

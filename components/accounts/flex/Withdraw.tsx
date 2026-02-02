@@ -23,6 +23,7 @@ import {
   useSavingsWithdraw,
   type WithdrawStatus,
 } from "@/hooks/useSavingsWithdraw";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 /* ───────── TYPES ───────── */
 
@@ -436,6 +437,8 @@ export default function WithdrawFlex({
                 </div>
               )}
             </div>
+
+            <TrustLine compact className="mt-3" />
 
             {/* Summary */}
             {amountNum > 0 && (

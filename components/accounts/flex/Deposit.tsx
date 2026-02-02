@@ -24,6 +24,7 @@ import {
   useSavingsDeposit,
   type DepositStatus,
 } from "@/hooks/useSavingsDeposit";
+import { TrustLine } from "@/components/shared/TrustLine";
 
 /* ───────── TYPES ───────── */
 
@@ -430,6 +431,8 @@ export default function DepositFlex({
                 </div>
               )}
             </div>
+
+            <TrustLine compact className="mt-3" />
 
             {/* Summary */}
             {amountNum > 0 && (
