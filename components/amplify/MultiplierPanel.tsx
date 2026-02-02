@@ -281,11 +281,14 @@ export default function MultiplierPanel({
   // ✅ Minimum buy-in: $10 USD for new positions, $1 USD if adding to existing
   const MIN_BUYIN_USD = hasExistingPosition ? 1 : 10;
 
-  const minBuyInLocal = useMemo(() => (fx > 0 ? MIN_BUYIN_USD * fx : 0), [fx]);
+  const minBuyInLocal = useMemo(
+    () => (fx > 0 ? MIN_BUYIN_USD * fx : 0),
+    [fx, MIN_BUYIN_USD],
+  );
 
   const meetsMinBuyIn = useMemo(
     () => (fx > 0 ? marginUsd >= MIN_BUYIN_USD : false),
-    [fx, marginUsd]
+    [fx, marginUsd, MIN_BUYIN_USD],
   );
 
   // ✅ NEW: Debounced "show minimum error" (wait 1s after user stops typing)

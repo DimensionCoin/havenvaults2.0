@@ -16,7 +16,6 @@ import type {
   ChartTimeframe,
   MultiplierPosition,
   PredictionTimeframe,
-  PredictionPosition,
 } from "@/components/amplify/types";
 
 import { useBalance } from "@/providers/BalanceProvider";

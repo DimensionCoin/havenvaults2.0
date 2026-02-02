@@ -1,7 +1,7 @@
 // components/bundles/MakeBundle.tsx
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import Image from "next/image";
 import {
   Plus,
@@ -18,7 +18,6 @@ import {
   TrendingUp,
   Shield,
   Zap,
-  ChevronDown,
   AlertCircle,
 } from "lucide-react";
 
@@ -31,7 +30,7 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 
-import { TOKENS, findTokenBySymbol, type TokenMeta } from "@/lib/tokenConfig";
+import { TOKENS, findTokenBySymbol } from "@/lib/tokenConfig";
 import { useBalance } from "@/providers/BalanceProvider";
 import { useBundleSwap } from "@/hooks/useBundleSwap";
 import { requireMintBySymbol } from "@/lib/tokenConfig";
@@ -63,13 +62,6 @@ function getRiskIcon(risk: RiskLevel) {
   if (risk === "medium") return TrendingUp;
   if (risk === "high") return Zap;
   return Sparkles;
-}
-
-function riskLabel(risk: RiskLevel) {
-  if (risk === "low") return "Conservative";
-  if (risk === "medium") return "Balanced";
-  if (risk === "high") return "Aggressive";
-  return "Speculative";
 }
 
 function cleanNumberInput(raw: string) {
@@ -408,7 +400,6 @@ export default function MakeBundle({ ownerBase58, onBundleCreated }: Props) {
   // API state
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [createdBundleId, setCreatedBundleId] = useState<string | null>(null);
 
   const amountNumber = useMemo(() => {
     const n = Number(amountDisplay);
@@ -500,7 +491,6 @@ export default function MakeBundle({ ownerBase58, onBundleCreated }: Props) {
         throw new Error(data.error || "Failed to create bundle");
       }
 
-      setCreatedBundleId(data.bundle._id);
       setStep("buy");
       onBundleCreated?.();
     } catch (e) {
@@ -550,7 +540,6 @@ export default function MakeBundle({ ownerBase58, onBundleCreated }: Props) {
       setVisibility("private");
       setAmountDisplay("");
       setCreateError(null);
-      setCreatedBundleId(null);
       bundle.reset();
     }, 300);
   }, [bundle]);

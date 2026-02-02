@@ -22,10 +22,6 @@ type PlusSavingsAccountCardProps = {
   loading?: boolean;
   displayCurrency?: string;
 
-  onDeposit?: () => void;
-  onWithdraw?: () => void;
-  onOpenAccount?: () => void;
-
   apyPctOverride?: number;
 };
 
@@ -67,9 +63,6 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
   loading: loadingProp,
   displayCurrency,
-  onDeposit,
-  onWithdraw,
-  onOpenAccount,
 
   apyPctOverride,
 }) => {

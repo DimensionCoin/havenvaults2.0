@@ -22,10 +22,7 @@ function normalizeSymbol(symbol?: string | null): string | undefined {
   return s ? s : undefined;
 }
 
-function toD128FromUi(
-  amountUi: string,
-  _decimals: number,
-): mongoose.Types.Decimal128 {
+function toD128FromUi(amountUi: string): mongoose.Types.Decimal128 {
   const s = String(amountUi || "0").trim();
   if (!s || s === "0") return D128.fromString("0");
   // The string is already a valid decimal from bigintToUiString; pass through
@@ -165,7 +162,7 @@ export async function recordUserFees(params: {
           mint: t.mint,
           symbol: t.symbol,
           decimals: t.decimals,
-          amountUi: toD128FromUi(t.amountUi, t.decimals),
+          amountUi: toD128FromUi(t.amountUi),
         })),
       },
     },

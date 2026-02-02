@@ -83,7 +83,12 @@ export default function About({
           </div>
         </div>
 
-        
+        <ChevronDown
+          className={[
+            "h-4 w-4 text-muted-foreground transition-transform duration-200",
+            expanded ? "rotate-180" : "rotate-0",
+          ].join(" ")}
+        />
       </button>
 
       <div className="px-3 py-3 sm:px-4">

@@ -303,10 +303,8 @@ const USDCAccountsCarousel: React.FC = () => {
     type === "flex" && setFlexDepositOpen(true);
   const handleWithdrawClick = (type: SlideKey) =>
     type === "flex" && setFlexDepositOpen(true);
-  const handleOpenAccountClick = (type: SlideKey) =>
-    type === "flex" && setFlexDepositOpen(true);
-  const handleTransferClick = (type: SlideKey) =>
-    type === "flex" && setFlexDepositOpen(true);
+ 
+ 
 
  
   return (
@@ -375,7 +373,6 @@ const USDCAccountsCarousel: React.FC = () => {
                 balanceOverride={cashBalanceDisplay}
                 onDeposit={() => handleDepositClick("deposit")}
                 onWithdraw={() => handleWithdrawClick("deposit")}
-                onTransfer={() => handleTransferClick("deposit")}
               />
             </div>
 
@@ -389,9 +386,6 @@ const USDCAccountsCarousel: React.FC = () => {
                 account={plusAccount}
                 loading={loading}
                 displayCurrency={displayCurrency}
-                onDeposit={() => handleDepositClick("plus")}
-                onWithdraw={() => handleWithdrawClick("plus")}
-                onOpenAccount={() => handleOpenAccountClick("plus")}
               />
             </div>
           </div>

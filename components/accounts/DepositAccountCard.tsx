@@ -14,7 +14,6 @@ type DepositAccountCardProps = {
   walletAddress: string;
   balanceOverride?: number;
   onDeposit?: () => void;
-  onTransfer?: () => void;
   onWithdraw?: () => void;
 };
 
@@ -29,7 +28,6 @@ export default function DepositAccountCard({
   walletAddress,
   balanceOverride,
   onDeposit,
-  onTransfer,
   onWithdraw,
 }: DepositAccountCardProps) {
   const router = useRouter();

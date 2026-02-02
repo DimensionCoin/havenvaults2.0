@@ -266,7 +266,6 @@ export default function FlexAccountPage() {
   /* -------- ✅ Interest (DB principal + provider onchain balance) -------- */
   const {
     loading: interestLoading,
-    principalNet,
     unrealizedInterest,
     // lifetimeInterestEarned,
     // interestWithdrawn,

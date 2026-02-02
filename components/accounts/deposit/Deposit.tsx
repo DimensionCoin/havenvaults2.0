@@ -350,34 +350,31 @@ const Deposit: React.FC<DepositProps> = ({
   };
 
   // Balance polling after checkout
-  const startBalancePolling = useCallback(
-    (balanceBefore: number) => {
-      cleanupPolling();
-      setPostCheckoutState("checking");
-      pollCountRef.current = 0;
+  const startBalancePolling = useCallback(() => {
+    cleanupPolling();
+    setPostCheckoutState("checking");
+    pollCountRef.current = 0;
 
-      const checkBalance = async () => {
-        pollCountRef.current += 1;
-        try {
-          await refreshNow();
-        } catch (e) {
-          console.error("[Deposit] Balance refresh failed:", e);
-        }
-      };
+    const checkBalance = async () => {
+      pollCountRef.current += 1;
+      try {
+        await refreshNow();
+      } catch (e) {
+        console.error("[Deposit] Balance refresh failed:", e);
+      }
+    };
 
-      setTimeout(checkBalance, 2000);
+    setTimeout(checkBalance, 2000);
 
-      pollIntervalRef.current = setInterval(async () => {
-        if (pollCountRef.current >= 10) {
-          cleanupPolling();
-          setPostCheckoutState("no_change");
-          return;
-        }
-        await checkBalance();
-      }, 3000);
-    },
-    [refreshNow, cleanupPolling],
-  );
+    pollIntervalRef.current = setInterval(async () => {
+      if (pollCountRef.current >= 10) {
+        cleanupPolling();
+        setPostCheckoutState("no_change");
+        return;
+      }
+      await checkBalance();
+    }, 3000);
+  }, [refreshNow, cleanupPolling]);
 
   // Watch for balance changes
   useEffect(() => {
@@ -404,7 +401,7 @@ const Deposit: React.FC<DepositProps> = ({
     setBalanceBeforeCheckout(usdcUsd);
     setCheckoutOpen(false);
     setCoinbaseLaunching(false);
-    startBalancePolling(usdcUsd);
+    startBalancePolling();
   }, [usdcUsd, startBalancePolling]);
 
   const handleCloseAfterCheckout = useCallback(() => {
@@ -608,7 +605,7 @@ const Deposit: React.FC<DepositProps> = ({
                   <button
                     onClick={() => {
                       setPostCheckoutState("checking");
-                      startBalancePolling(balanceBeforeCheckout ?? usdcUsd);
+                      startBalancePolling();
                     }}
                     className="haven-btn-secondary flex-1"
                   >

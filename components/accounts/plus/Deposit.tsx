@@ -211,7 +211,6 @@ function StageIcon({
 export default function DepositPlus({
   open,
   onOpenChange,
-  hasAccount: _hasAccountProp,
   prefetch,
   skipRefreshOnOpen = true,
 }: DepositPlusProps) {
