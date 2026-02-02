@@ -82,7 +82,10 @@ const Landing = () => {
   const apyStatValue = apyText ? `${apyText}%` : "—";
 
   const heroSubcopy =
-    "Haven is a modern money app with a high-yield savings account, simple investing, and total control — with a clean experience that feels familiar from day one.";
+    "Haven Financial is a new, fun investment and savings platform with financial tools that help you build wealth over time. Save, invest, and grow with a clean experience that feels familiar from day one.";
+
+  const slogan =
+    "Wealth isn't made overnight - it's built one smart step at a time.";
 
   const havenSavingsLine = apyText
     ? `Earn ${apyText}% APY with Haven Savings`
@@ -179,7 +182,7 @@ const Landing = () => {
           {/* Headline */}
           <div className="text-center max-w-3xl">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1]">
-              <span className="text-foreground">Your money, </span>
+              <span className="text-foreground">Haven Financial, </span>
               <span className="bg-gradient-to-r from-primary via-primary to-primary bg-clip-text text-transparent">
                 upgraded
               </span>
@@ -187,6 +190,9 @@ const Landing = () => {
 
             <p className="mt-6 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
               {heroSubcopy}
+            </p>
+            <p className="mt-4 text-sm sm:text-base text-muted-foreground">
+              {slogan}
             </p>
           </div>
 
@@ -481,7 +487,7 @@ const Landing = () => {
                 />
               </div>
               <span className="text-sm text-muted-foreground">
-                © {new Date().getFullYear()} Haven Vaults
+                © {new Date().getFullYear()} Haven Financial
               </span>
             </div>
 

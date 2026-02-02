@@ -12,7 +12,7 @@ const Terms = () => {
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← Back to Haven
+            ← Back to Haven Financial
           </Link>
 
           <h1 className="mt-4 text-3xl font-bold tracking-tight">
@@ -25,10 +25,11 @@ const Terms = () => {
 
         <section className="prose prose-invert max-w-none">
           <p>
-            These Terms of Service (“Terms”) govern your access to and use of
-            Haven Vaults (“Haven”, “we”, “us”, “our”) websites, applications,
-            and related services (collectively, the “Services”). By accessing or
-            using the Services, you agree to these Terms.
+            These Terms of Service (&ldquo;Terms&rdquo;) govern your access to
+            and use of Haven Financial (&ldquo;Haven&rdquo;, &ldquo;we&rdquo;,
+            &ldquo;us&rdquo;, &ldquo;our&rdquo;) websites, applications, and
+            related services (collectively, the &ldquo;Services&rdquo;). By
+            accessing or using the Services, you agree to these Terms.
           </p>
 
           <p>
@@ -57,6 +58,16 @@ const Terms = () => {
             networks. You control your assets and authorize transactions. We do
             not control the underlying networks and cannot reverse, cancel, or
             modify transactions once broadcast or confirmed.
+          </p>
+          <h3>2.1 How money moves in Haven</h3>
+          <p>
+            When you deposit, swap, save, or withdraw, you are authorizing a
+            transaction that is executed on your behalf. Depending on the
+            feature, Haven may route your transaction to third-party protocols
+            (for example, liquidity or lending providers) to complete the action
+            you requested. Haven may also collect disclosed fees, which are
+            transferred on-chain to a Haven treasury address and recorded for
+            your account history.
           </p>
 
           <hr />

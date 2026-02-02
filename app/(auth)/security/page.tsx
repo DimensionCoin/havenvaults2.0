@@ -52,7 +52,7 @@ const SecurityPage = () => {
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← Back to Haven
+            ← Back to Haven Financial
           </Link>
 
           <h1 className="mt-4 text-3xl font-bold tracking-tight">Security</h1>
@@ -63,30 +63,30 @@ const SecurityPage = () => {
 
         <section className="prose prose-invert max-w-none">
           <p>
-            Haven is designed with security as a core product requirement. This
-            page explains, in plain language, how account access and wallet
-            functionality work, what we do (and do not) store, and how you can
-            keep your account protected.
+            Haven Financial is designed with security as a core product
+            requirement. This page explains, in plain language, how account
+            access and wallet functionality work, what we do (and do not) store,
+            and how you can keep your account protected.
           </p>
 
           <hr />
 
           <h2>1. Authentication and account access</h2>
           <p>
-            Haven uses Privy for authentication and embedded wallet
-            functionality. Privy supports modern sign-in methods (such as email
-            verification and social login), and is designed to reduce the
+            Haven Financial uses Privy for authentication and embedded wallet
+            functionality. Privy supports modern sign-in methods (such as
+            email verification and social login), and is designed to reduce the
             security risks associated with passwords.
           </p>
           <ul>
             <li>
-              <strong>No passwords stored by Haven:</strong> Haven does not
-              store user passwords in our database.
+              <strong>No passwords stored by Haven Financial:</strong> Haven
+              Financial does not store user passwords in our database.
             </li>
             <li>
               <strong>Protected sessions:</strong> After authentication, Haven
-              uses protected session mechanisms to keep you signed in without
-              exposing sensitive credentials to the client.
+              Financial uses protected session mechanisms to keep you signed in
+              without exposing sensitive credentials to the client.
             </li>
           </ul>
 
@@ -106,10 +106,10 @@ const SecurityPage = () => {
 
           <h2>2. Wallet management (embedded wallets)</h2>
           <p>
-            Haven uses embedded wallets provided by Privy. An embedded wallet is
-            a wallet created for you inside the Haven experience, so you can use
-            the app without installing browser extensions or copying long
-            addresses.
+            Haven Financial uses embedded wallets provided by Privy. An embedded
+            wallet is a wallet created for you inside the Haven Financial
+            experience, so you can use the app without installing browser
+            extensions or copying long addresses.
           </p>
 
           <p>
@@ -130,10 +130,11 @@ const SecurityPage = () => {
 
           <h2>3. Key export and portability</h2>
           <p>
-            Haven is built so you can maintain control over your assets. Subject
-            to the wallet configuration and features available in your account,
-            you may be able to export your wallet’s private key or recovery
-            material and import it into another compatible wallet application.
+            Haven Financial is built so you can maintain control over your
+            assets. Subject to the wallet configuration and features available
+            in your account, you may be able to export your wallet’s private key
+            or recovery material and import it into another compatible wallet
+            application.
           </p>
 
           <p className="text-muted-foreground">
@@ -145,7 +146,7 @@ const SecurityPage = () => {
 
           <div className="not-prose mt-4 rounded-2xl border border-border bg-background/60 p-5">
             <div className="text-sm font-semibold">
-              Use your Haven wallet elsewhere
+              Use your Haven Financial wallet elsewhere
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               If you choose to use your account in another wallet app, you can
@@ -168,17 +169,19 @@ const SecurityPage = () => {
 
           <hr />
 
-          <h2>4. What Haven stores (and what we don’t)</h2>
+          <h2>4. What Haven Financial stores (and what we don’t)</h2>
           <p>
-            Haven is designed to minimize sensitive data storage. We store basic
-            account profile details needed to operate the service (such as name,
-            email, country, display currency, and your self-reported investing
-            knowledge and risk tolerance), plus operational metadata (for
-            example, timestamps and configuration flags).
+            Haven Financial is designed to minimize sensitive data storage. We
+            store basic account profile details needed to operate the service
+            (such as name, email, country, display currency, and your
+            self-reported investing knowledge and risk tolerance), plus
+            operational metadata (for example, timestamps and configuration
+            flags).
           </p>
           <p>
-            Haven does not store your password. We also do not store your
-            private keys at all. Haven or Privy never have access to your privae key and only you can export it.
+            Haven Financial does not store your password. We also do not store
+            your private keys at all. Haven Financial or Privy never have access
+            to your private key and only you can export it.
           </p>
 
           <hr />
@@ -191,6 +194,13 @@ const SecurityPage = () => {
             for settlement. Public transactions may be irreversible after
             confirmation.
           </p>
+          <p>
+            Haven Financial does not custody your funds. Your assets remain in
+            your wallet, and transactions only occur when you authorize them.
+            When you use features like swaps or yield routing, Haven Financial
+            may route your request to third-party protocols, and any fees
+            disclosed in-app are paid on-chain as part of those transactions.
+          </p>
 
           <p>
             You are responsible for reviewing transaction details before you
@@ -202,17 +212,17 @@ const SecurityPage = () => {
 
           <h2>6. Third-party and smart contract risks</h2>
           <p>
-            Haven may integrate with third-party protocols and routing services
-            (for example, for swapping or yield features). These systems can
-            carry risks including smart contract vulnerabilities, oracle
-            failures, liquidity constraints, network congestion, or unexpected
-            protocol changes. These risks can result in delayed transactions or
-            loss of funds.
+            Haven Financial may integrate with third-party protocols and
+            routing services (for example, for swapping or yield features).
+            These systems can carry risks including smart contract
+            vulnerabilities, oracle failures, liquidity constraints, network
+            congestion, or unexpected protocol changes. These risks can result
+            in delayed transactions or loss of funds.
           </p>
           <p>
-            Haven cannot guarantee the security or availability of third-party
-            protocols or public networks. You should only use features you
-            understand and are comfortable with.
+            Haven Financial cannot guarantee the security or availability of
+            third-party protocols or public networks. You should only use
+            features you understand and are comfortable with.
           </p>
 
           <hr />

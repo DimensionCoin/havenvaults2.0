@@ -12,7 +12,7 @@ const PrivacyPage = () => {
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← Back to Haven
+            ← Back to Haven Financial
           </Link>
 
           <h1 className="mt-4 text-3xl font-bold tracking-tight">
@@ -26,10 +26,11 @@ const PrivacyPage = () => {
         {/* Intro */}
         <section className="prose prose-invert max-w-none">
           <p>
-            This Privacy Policy explains how Haven Vaults (“Haven”, “we”, “us”,
-            “our”) collects, uses, shares, and protects information when you use
-            our website, mobile or web applications, and related services
-            (collectively, the “Services”).
+            This Privacy Policy explains how Haven Financial (&ldquo;Haven&rdquo;,
+            &ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) collects, uses,
+            shares, and protects information when you use our website, mobile
+            or web applications, and related services (collectively, the
+            &ldquo;Services&rdquo;).
           </p>
 
           <p>
@@ -81,6 +82,16 @@ const PrivacyPage = () => {
             may be publicly visible and independently verifiable. We do not
             control these networks, and we cannot delete or modify public
             records once created.
+          </p>
+
+          <h3>1.4 How Haven handles your money</h3>
+          <p>
+            Haven is non-custodial software. Your funds remain in your control
+            and move only when you authorize a transaction. When you choose to
+            save or invest, Haven may route your transaction to third-party
+            protocols to execute the action you requested. We may also record
+            transaction metadata (such as signatures, amounts, and fee events)
+            to provide account history, support, and fee reporting.
           </p>
 
           <hr />
