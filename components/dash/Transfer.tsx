@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
@@ -162,9 +163,11 @@ function Avatar({
       style={{ width: size, height: size }}
     >
       {showImage ? (
-        <img
+        <Image
           src={url}
           alt={label}
+          width={size}
+          height={size}
           className="w-full h-full object-cover"
           onError={() => setImgError(true)}
         />

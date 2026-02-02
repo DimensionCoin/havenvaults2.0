@@ -86,12 +86,11 @@ const MIN_SOL_TO_NOTIFY = 0.004;
 const MIN_NATIVE_SOL_BUFFER = 0.0035;
 
 /**
- * RPC endpoint – matches the rest of your app.
- * resolveRpcUrl converts relative "/api/rpc" to absolute for @solana/web3.js.
+ * Raw env value — resolved to an absolute URL lazily inside SolProvider
+ * so that `window.location` is never read at module-load time during SSR.
  */
-const RPC = resolveRpcUrl(
-  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.devnet.solana.com",
-);
+const RPC_RAW =
+  process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.devnet.solana.com";
 
 /* ------------------------------------------------------------------ */
 /*                        Provider component                          */
@@ -115,7 +114,8 @@ const SolProvider: React.FC<SolProviderProps> = ({ children }) => {
   const [converting, setConverting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const connection = useMemo(() => new Connection(RPC, "confirmed"), []);
+  const rpc = useMemo(() => resolveRpcUrl(RPC_RAW), []);
+  const connection = useMemo(() => new Connection(rpc, "confirmed"), [rpc]);
 
   /* ------------------------- Modal visibility ------------------------- */
 

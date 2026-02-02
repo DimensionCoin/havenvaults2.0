@@ -1,7 +1,7 @@
 // app/api/savings/plus/balance/route.ts
 import "server-only";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 
 import { getSessionFromCookies } from "@/lib/auth";
@@ -51,6 +51,7 @@ type PlusBalancePayload = {
   jlSymbol: string;
   token?: EarnToken;
   hasPosition: boolean;
+  decimals?: number;
   shares: string;
   underlyingAssets: string;
   underlyingBalance: string;
@@ -130,8 +131,9 @@ const CACHE: Map<string, { ts: number; payload: PlusBalancePayload }> =
 
 const TTL_MS = 60_000; // 60s cached freshness (tune 30s–120s)
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const started = Date.now();
+  let owner: string | null = null;
 
   try {
     const session = await getSessionFromCookies();
@@ -152,7 +154,7 @@ export async function GET() {
         .select({ walletAddress: 1, privyId: 1 })
         .lean())) as UserWalletDoc | null;
 
-    const owner = String(user?.walletAddress || "").trim();
+    owner = String(user?.walletAddress || "").trim();
     if (!owner || owner === "pending") {
       return jsonError(400, {
         error: "User has no wallet address",
@@ -160,11 +162,16 @@ export async function GET() {
       });
     }
 
+    const forceFresh =
+      req.nextUrl.searchParams.has("fresh") ||
+      req.nextUrl.searchParams.has("bust") ||
+      req.nextUrl.searchParams.get("force") === "1";
+
     // ✅ Serve fresh-enough cache immediately
     const cached = CACHE.get(owner);
     const cacheFresh = cached && Date.now() - cached.ts < TTL_MS;
 
-    if (cacheFresh) {
+    if (cacheFresh && !forceFresh) {
       return NextResponse.json(
         { ...cached.payload, cached: true, stale: false },
         {
@@ -210,6 +217,7 @@ export async function GET() {
           symbol: "JupUSD",
           jlSymbol: TARGET_JL_SYMBOL,
           hasPosition: false,
+          decimals: 6,
           shares: "0",
           underlyingAssets: "0",
           underlyingBalance: "0",
@@ -229,6 +237,7 @@ export async function GET() {
         jlSymbol: pos.token?.symbol || TARGET_JL_SYMBOL,
         token: pos.token,
         hasPosition: true,
+        decimals,
         shares: pos.shares,
         underlyingAssets: pos.underlyingAssets,
         underlyingBalance: pos.underlyingBalance,
@@ -258,13 +267,18 @@ export async function GET() {
 
     // ✅ If we have ANY cached value, return it as stale instead of 504
     // (this prevents "blank plus balance" UX)
-    try {
-      const session = await getSessionFromCookies().catch(() => null);
-      if (session?.userId) {
-        // We can’t easily re-derive owner without DB, so just do best-effort:
-        // If you want perfect stale fallback, store cache by privyId too.
+    if (owner) {
+      const cached = CACHE.get(owner);
+      if (cached) {
+        return NextResponse.json(
+          { ...cached.payload, cached: true, stale: true },
+          {
+            status: 200,
+            headers: { "Cache-Control": "private, max-age=0, must-revalidate" },
+          },
+        );
       }
-    } catch {}
+    }
 
     // fallback: return 504, but make it a clean error
     if (err?.name === "AbortError") {

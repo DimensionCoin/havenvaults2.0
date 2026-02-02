@@ -86,8 +86,6 @@ type TxResponse = {
 ========================= */
 
 const normAddr = (a?: string | null) => (a || "").trim();
-const normLower = (a?: string | null) => normAddr(a).toLowerCase();
-
 const isJupUsdMint = (m?: string | null) =>
   !!JUPUSD_MINT && (m || "").trim().toLowerCase() === JUPUSD_MINT;
 
@@ -227,7 +225,6 @@ export default function DepositAccountPage() {
   }, [displayCurrency]);
 
   const [modalMode, setModalMode] = useState<DrawerMode>(null);
-  const [transferOpen, setTransferOpen] = useState(false);
 
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);

@@ -57,8 +57,6 @@ const ALLOWED_METHODS = new Set([
   "getVoteAccounts",
   "isBlockhashValid",
   "minimumLedgerSlot",
-  // Write (needed for client-side transaction submission)
-  "sendTransaction",
   // Simulation
   "simulateTransaction",
   // Parsed variants
@@ -77,9 +75,12 @@ function isRateLimited(ip: string): boolean {
   const now = Date.now();
   const hits = ipHits.get(ip) ?? [];
   const recent = hits.filter((t) => now - t < IP_WINDOW_MS);
+
+  if (recent.length >= IP_MAX_REQUESTS) return true;
+
   recent.push(now);
   ipHits.set(ip, recent);
-  return recent.length > IP_MAX_REQUESTS;
+  return false;
 }
 
 // Periodically clean up stale entries (every 60 s)

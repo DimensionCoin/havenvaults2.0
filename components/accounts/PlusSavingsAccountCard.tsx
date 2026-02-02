@@ -22,9 +22,9 @@ type PlusSavingsAccountCardProps = {
   loading?: boolean;
   displayCurrency?: string;
 
-  onDeposit: () => void; // compatibility (unused)
-  onWithdraw: () => void; // compatibility (unused)
-  onOpenAccount: () => void; // compatibility (unused)
+  onDeposit?: () => void;
+  onWithdraw?: () => void;
+  onOpenAccount?: () => void;
 
   apyPctOverride?: number;
 };
@@ -66,10 +66,10 @@ function getStringField(obj: unknown, key: string): string | undefined {
 const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
   loading: loadingProp,
-
-  onOpenAccount: _onOpenAccount,
-  onDeposit: _onDeposit,
-  onWithdraw: _onWithdraw,
+  displayCurrency,
+  onDeposit,
+  onWithdraw,
+  onOpenAccount,
 
   apyPctOverride,
 }) => {
@@ -103,7 +103,8 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
       ? user.walletAddress
       : "";
 
-  const displayCurrency = (
+  const displayCurrencyResolved = (
+    displayCurrency ??
     getStringField(balanceCtx, "displayCurrency") ??
     (isRecord(user) ? getStringField(user, "displayCurrency") : undefined) ??
     "USD"
@@ -122,7 +123,7 @@ const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
     try {
       return new Intl.NumberFormat(undefined, {
         style: "currency",
-        currency: displayCurrency,
+        currency: displayCurrencyResolved,
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       }).format(v);

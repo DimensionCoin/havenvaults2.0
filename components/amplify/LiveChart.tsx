@@ -76,8 +76,8 @@ export default function LiveChart({
         maxY: 0,
         min: 0,
         max: 1,
-        scaleX: (_i: number) => 0,
-        scaleY: (_y: number) => height,
+        scaleX: () => 0,
+        scaleY: () => height,
         lastX: width,
         lastY: height / 2,
       };

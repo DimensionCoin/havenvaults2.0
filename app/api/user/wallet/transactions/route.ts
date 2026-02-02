@@ -26,7 +26,6 @@ function isHelius429(err: unknown) {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __helius_pace__: { lastAt: number } | undefined;
 }
 

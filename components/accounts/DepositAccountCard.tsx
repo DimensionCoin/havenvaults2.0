@@ -4,7 +4,6 @@ import React, { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 import Deposit from "@/components/accounts/deposit/Deposit";
-import Transfer from "@/components/accounts/deposit/Transfer";
 import Withdraw from "@/components/accounts/deposit/Withdraw";
 import { useBalance } from "@/providers/BalanceProvider";
 
@@ -36,7 +35,6 @@ export default function DepositAccountCard({
   const router = useRouter();
 
   const [modalMode, setModalMode] = useState<DrawerMode>(null);
-  const [transferOpen, setTransferOpen] = useState(false);
 
   const { usdcUsd, loading: balanceLoading } = useBalance();
   const effectiveLoading = loading ?? balanceLoading;

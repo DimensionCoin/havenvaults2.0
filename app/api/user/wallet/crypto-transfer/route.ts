@@ -26,6 +26,7 @@ import {
   assertUserSigned,
 } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 /* ───────── Next.js route config ───────── */
 
@@ -515,6 +516,14 @@ export async function POST(req: NextRequest) {
       return jsonError(400, "USDC transfers are not allowed on this route", {
         code: "USDC_BLOCKED",
       });
+    }
+
+    // ✅ Prevent SOL drain attacks via SystemProgram instructions
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, m, { code: "UNSAFE_TX" });
     }
 
     const conn = getConnection();

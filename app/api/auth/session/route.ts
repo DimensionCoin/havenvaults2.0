@@ -134,7 +134,6 @@ export async function POST(req: NextRequest) {
     await connect();
 
     let accessToken: string | null = null;
-    let solanaAddressFromBody: string | undefined;
     let emailFromBody: string | undefined;
 
     const authHeader =
@@ -153,9 +152,8 @@ export async function POST(req: NextRequest) {
     if (!accessToken && body && typeof body.accessToken === "string") {
       accessToken = body.accessToken.trim();
     }
-    if (body && typeof body.solanaAddress === "string") {
-      solanaAddressFromBody = body.solanaAddress.trim();
-    }
+    // NOTE: solanaAddress from body is intentionally ignored.
+    // Wallet must come from Privy (server-verified), never the client.
     if (body && typeof body.email === "string") {
       emailFromBody = body.email.trim().toLowerCase();
     }
@@ -220,10 +218,9 @@ export async function POST(req: NextRequest) {
       user && user.walletAddress !== "pending" ? user.walletAddress : undefined;
 
     const finalWalletAddress: string =
-      solanaAddressFromBody || walletFromPrivy || existingWallet || "pending";
+      walletFromPrivy || existingWallet || "pending";
 
     console.log("[/api/auth/session] wallet + email resolution:", {
-      solanaAddressFromBody,
       walletFromPrivy,
       existingWallet,
       finalWalletAddress,

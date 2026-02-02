@@ -30,6 +30,7 @@ import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 import { SavingsLedger } from "@/models/SavingsLedger";
 import { recordUserFees } from "@/lib/fees";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -220,19 +221,6 @@ function assertTransactionIntegrity(tx: VersionedTransaction): void {
 /* ═══════════════════════════════════════════════════════════════════════════
    SIGNING HELPERS (Privy returns varying shapes)
    ═══════════════════════════════════════════════════════════════════════════ */
-
-type SignResp =
-  | string
-  | Uint8Array
-  | number[]
-  | { serialize: () => Uint8Array }
-  | {
-      signedTransaction:
-        | string
-        | Uint8Array
-        | number[]
-        | { serialize: () => Uint8Array };
-    };
 
 function hasSignedTransaction(x: unknown): x is { signedTransaction: unknown } {
   return (
@@ -746,6 +734,7 @@ export async function POST(req: NextRequest) {
     // 4) BODY VALIDATION
     const body = (await req.json().catch(() => null)) as {
       transaction?: string;
+      expectedUserBase58?: string;
     } | null;
 
     if (!body?.transaction || typeof body.transaction !== "string") {
@@ -753,6 +742,42 @@ export async function POST(req: NextRequest) {
         code: "MISSING_TRANSACTION",
         error: "Missing 'transaction' in body",
         userMessage: "Something went wrong sending your withdrawal.",
+        traceId,
+      });
+    }
+
+    // ✅ Require expectedUserBase58 and bind to session user (prevents cross-account use)
+    const expectedUserBase58 =
+      typeof body.expectedUserBase58 === "string"
+        ? body.expectedUserBase58.trim()
+        : "";
+
+    if (!expectedUserBase58) {
+      return jsonError(400, {
+        code: "MISSING_EXPECTED_USER",
+        error: "Missing expectedUserBase58",
+        userMessage: "Please approve the withdrawal again.",
+        traceId,
+      });
+    }
+
+    let clientExpectedPk: PublicKey;
+    try {
+      clientExpectedPk = new PublicKey(expectedUserBase58);
+    } catch {
+      return jsonError(400, {
+        code: "BAD_EXPECTED_USER",
+        error: "Invalid expectedUserBase58",
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+      });
+    }
+
+    if (!clientExpectedPk.equals(expectedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "expectedUserBase58 does not match authenticated user wallet",
+        userMessage: "This request doesn't match your account.",
         traceId,
       });
     }
@@ -817,6 +842,19 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // 6b) ✅ Prevent SOL drain attacks via SystemProgram instructions
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, {
+        code: "UNSAFE_TX",
+        error: msg,
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+      });
+    }
+
     const conn = getConnection();
     const privy = getPrivyClient();
 
@@ -843,7 +881,7 @@ export async function POST(req: NextRequest) {
     const sim = await conn
       .simulateTransaction(VersionedTransaction.deserialize(coSignedBytes), {
         commitment: "confirmed",
-        sigVerify: false,
+        sigVerify: true,
       })
       .catch(() => null);
 

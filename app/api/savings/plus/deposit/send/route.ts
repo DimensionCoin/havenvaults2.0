@@ -16,6 +16,7 @@ import {
   getUserWalletPubkey,
   assertUserSigned,
 } from "@/lib/getServerUser";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,7 +81,6 @@ function jsonError(
   },
 ) {
   if (!IS_PROD && payload.debug) {
-    // eslint-disable-next-line no-console
     console.error("[/api/savings/plus/deposit/send]", status, payload.code, {
       error: payload.error,
       debug: payload.debug,
@@ -324,6 +324,19 @@ export async function POST(req: NextRequest) {
       return jsonError(400, {
         code: "MISSING_HAVEN_SIGNER",
         error: "Haven is not a required signer",
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+      });
+    }
+
+    // ✅ Prevent SOL drain attacks via SystemProgram instructions
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, {
+        code: "UNSAFE_TX",
+        error: m,
         userMessage: "Security check failed. Please try again.",
         traceId,
       });

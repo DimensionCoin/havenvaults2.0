@@ -109,7 +109,6 @@ function jsonError(status: number, payload: ErrorPayload) {
     traceId: payload.traceId,
     ...(IS_PROD ? {} : { debug: payload.debug }),
   };
-  // eslint-disable-next-line no-console
   console.error("[/api/bundle/build]", log);
 
   const safe = IS_PROD ? { ...payload, debug: undefined } : payload;
@@ -464,7 +463,6 @@ export async function POST(req: NextRequest) {
 
       if (quoteRes.ok) {
         quoteResponse = await quoteRes.json();
-        // eslint-disable-next-line no-console
         console.log(
           `[BUNDLE/BUILD] ${traceId} route: maxAccounts=${attempt.maxAccounts} direct=${attempt.directOnly}`,
         );
@@ -642,7 +640,6 @@ export async function POST(req: NextRequest) {
     const b64 = Buffer.from(tx.serialize()).toString("base64");
     const buildTime = Date.now() - startTime;
 
-    // eslint-disable-next-line no-console
     console.log(
       `[BUNDLE/BUILD] ${traceId} ${buildTime}ms USDC→${outputMintStr.slice(0, 8)} amt=${netUnits} fee=${feeUnits} size=${encodedLen}`,
     );
@@ -660,7 +657,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // eslint-disable-next-line no-console
     console.error(`[BUNDLE/BUILD] ${traceId} error at ${stage}:`, msg);
     return jsonError(500, {
       code: "BUILD_ERROR",

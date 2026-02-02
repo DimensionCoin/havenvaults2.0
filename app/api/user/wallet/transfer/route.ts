@@ -22,6 +22,7 @@ import {
   assertUserSigned,
 } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 /* ───────── Next.js route config ───────── */
 
@@ -118,7 +119,6 @@ function getPrivyClient(): PrivyClient {
 
 function jsonError(status: number, payload: ErrorPayload): NextResponse {
   if (!IS_PROD && payload.debug) {
-    // eslint-disable-next-line no-console
     console.error("[/api/user/wallet/transfer]", status, payload.code, {
       error: payload.error,
       debug: payload.debug,
@@ -577,6 +577,19 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ✅ Prevent SOL drain attacks via SystemProgram instructions
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, {
+        code: "UNSAFE_TX",
+        error: m,
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+      });
+    }
+
     const conn = getConnection();
 
     // Pre-flight: ensure fee payer has SOL to sponsor fees
@@ -598,7 +611,6 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       // don't hard-fail on balance read; continue
       if (!IS_PROD) {
-        // eslint-disable-next-line no-console
         console.warn(
           "[/api/user/wallet/transfer] fee payer balance read failed",
           err,
@@ -842,7 +854,6 @@ export async function POST(req: NextRequest) {
       }
     } catch (e) {
       // Never fail the transfer response if analytics write fails
-      // eslint-disable-next-line no-console
       console.error("[/api/user/wallet/transfer] Fee tracking failed:", e);
     }
 
@@ -857,7 +868,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // eslint-disable-next-line no-console
     console.error("[/api/user/wallet/transfer] Unhandled error:", msg);
     return jsonError(500, {
       code: "UNHANDLED",

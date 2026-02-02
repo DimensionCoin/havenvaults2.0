@@ -58,8 +58,8 @@ export default function LineOnlyChart({
         maxY: 0,
         min: 0,
         max: 1,
-        scaleX: (_i: number) => 0,
-        scaleY: (_y: number) => height,
+        scaleX: () => 0,
+        scaleY: () => height,
       };
     }
 
@@ -144,7 +144,7 @@ export default function LineOnlyChart({
       priceText: formatMoney(activePoint.y, displayCurrency),
       timeText: formatTimeLabel(activePoint.t, timeframe),
     };
-  }, [activePoint, activeX, activeY, displayCurrency, timeframe]);
+  }, [activePoint, activeX, activeY, displayCurrency, timeframe, width, height]);
 
   return (
     <div ref={wrapRef} className="relative w-full select-none">

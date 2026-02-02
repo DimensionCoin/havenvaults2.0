@@ -99,10 +99,6 @@ function formatCurrency(amount: number, currency: string) {
   }
 }
 
-function clamp0(n: number): number {
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
 function SavingsAvatar() {
   return (
     <span className="h-7 w-7 rounded-full border border-white/10 bg-white/[0.06] inline-flex items-center justify-center shrink-0">

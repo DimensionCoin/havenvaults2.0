@@ -91,7 +91,7 @@ export default function AmplifyPage() {
   }, []);
 
   // Mock handler - disabled since predict is coming soon
-  const handleOpenPrediction = useCallback((_pos: PredictionPosition) => {
+  const handleOpenPrediction = useCallback(() => {
     // No-op - predictions are disabled
   }, []);
 

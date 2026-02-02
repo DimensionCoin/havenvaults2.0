@@ -301,8 +301,13 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   /* ───────── Refresh (wallet/fx/flex/plus only) ───────── */
 
   const runRefresh = useCallback(
-    async (opts?: { bypassUserLoading?: boolean }) => {
-      if (refreshInflight.current) return refreshInflight.current;
+    async (
+      opts?: { bypassUserLoading?: boolean; forcePlusFresh?: boolean },
+    ) => {
+      if (refreshInflight.current) {
+        if (!opts?.forcePlusFresh) return refreshInflight.current;
+        abortRef.current?.abort();
+      }
 
       const p = (async () => {
         if (!opts?.bypassUserLoading && userLoading) return;
@@ -389,7 +394,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
               })
             : Promise.resolve(null);
 
-          const plusP = fetch("/api/savings/plus/balance", {
+          const plusUrl = opts?.forcePlusFresh
+            ? `/api/savings/plus/balance?fresh=1&ts=${Date.now()}`
+            : "/api/savings/plus/balance";
+
+          const plusP = fetch(plusUrl, {
             method: "GET",
             cache: "no-store",
             credentials: "include",
@@ -622,7 +631,11 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       try {
         await p;
       } finally {
-        refreshInflight.current = null;
+        // Only clear if this is still the active call (prevents stale
+        // finally blocks from clearing a newer forcePlusFresh promise).
+        if (refreshInflight.current === p) {
+          refreshInflight.current = null;
+        }
       }
     },
     [user, userLoading, callBalanceSnapshot],
@@ -633,7 +646,7 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [runRefresh]);
 
   const refreshNow = useCallback(async () => {
-    await runRefresh({ bypassUserLoading: true });
+    await runRefresh({ bypassUserLoading: true, forcePlusFresh: true });
   }, [runRefresh]);
 
   useEffect(() => {

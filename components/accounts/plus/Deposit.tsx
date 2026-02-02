@@ -216,7 +216,9 @@ export default function DepositPlus({
 }: DepositPlusProps) {
   const { user, refresh: refreshUser } = useUser();
   const balance = useBalance();
-  const refreshBalance = balance.refresh;
+  const refreshBalance =
+    (balance as unknown as { refreshNow?: () => Promise<void> }).refreshNow ??
+    balance.refresh;
 
   const {
     deposit,
@@ -229,7 +231,7 @@ export default function DepositPlus({
   const [amountRaw, setAmountRaw] = useState("");
   const [modal, setModal] = useState<ModalState>(null);
   const [mounted, setMounted] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
+  const [, setShowDetails] = useState(false);
 
   const ownerReady = !!user?.walletAddress && user.walletAddress !== "pending";
   const tradeStartedRef = useRef(false);

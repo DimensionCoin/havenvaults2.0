@@ -2,6 +2,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
  * ENV + constants
@@ -86,12 +87,26 @@ export async function getSessionFromCookies(): Promise<SessionPayload | null> {
 }
 
 /**
+ * Compute an HMAC binding a CSRF nonce to a session subject.
+ * This ensures the CSRF cookie cannot be forged without the server secret
+ * and is bound to the specific user session.
+ */
+function computeCsrfHmac(nonce: string, sessionSub: string): string {
+  return createHmac("sha256", JWT_SECRET_BYTES)
+    .update(`csrf:${nonce}:${sessionSub}`)
+    .digest("hex");
+}
+
+/**
  * Set the HttpOnly session cookie.
  */
 export async function setSessionCookie(payload: SessionPayload): Promise<void> {
   const cookieStore = await cookies();
   const token = await signSessionToken(payload);
-  const csrfToken = crypto.randomUUID();
+
+  const nonce = crypto.randomUUID();
+  const sig = computeCsrfHmac(nonce, payload.sub);
+  const csrfToken = `${nonce}.${sig}`;
 
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -102,6 +117,7 @@ export async function setSessionCookie(payload: SessionPayload): Promise<void> {
   });
 
   // Double-submit token for CSRF protection (readable by client JS)
+  // Value is HMAC-bound to the session subject so it cannot be forged.
   cookieStore.set(CSRF_COOKIE_NAME, csrfToken, {
     httpOnly: false,
     secure: process.env.NODE_ENV === "production",
@@ -132,4 +148,47 @@ export async function clearSessionCookie(): Promise<void> {
     path: "/",
     maxAge: 0,
   });
+}
+
+/**
+ * Verify CSRF double-submit token on state-changing requests.
+ *
+ * Reads the CSRF cookie and compares it to the client-sent header
+ * (X-CSRF-Token). The cookie value is `nonce.hmac` where the HMAC
+ * is bound to the authenticated session's `sub`, so a stolen cookie
+ * value from a different session cannot pass verification.
+ *
+ * Returns `true` when valid, `false` when the check fails.
+ */
+export async function verifyCsrfToken(
+  headerToken: string | null | undefined,
+): Promise<boolean> {
+  if (!headerToken) return false;
+
+  const cookieStore = await cookies();
+  const csrfCookie = cookieStore.get(CSRF_COOKIE_NAME)?.value;
+
+  // Double-submit: header must match cookie
+  if (!csrfCookie || csrfCookie !== headerToken) return false;
+
+  // Split nonce.hmac
+  const dotIdx = csrfCookie.indexOf(".");
+  if (dotIdx < 1) return false;
+
+  const nonce = csrfCookie.slice(0, dotIdx);
+  const sig = csrfCookie.slice(dotIdx + 1);
+  if (!sig) return false;
+
+  // Read session to get the bound subject
+  const session = await getSessionFromCookies();
+  if (!session?.sub) return false;
+
+  // Recompute and compare with timing-safe equality
+  const expected = computeCsrfHmac(nonce, session.sub);
+
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expectedBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expectedBuf.length) return false;
+
+  return timingSafeEqual(sigBuf, expectedBuf);
 }

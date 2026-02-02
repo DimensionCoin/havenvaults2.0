@@ -22,10 +22,6 @@ type PlusSavingsAccountCardProps = {
   loading?: boolean;
   displayCurrency?: string;
 
-  onDeposit: () => void; // compatibility (unused)
-  onWithdraw: () => void; // compatibility (unused)
-  onOpenAccount: () => void; // compatibility (unused)
-
   apyPctOverride?: number;
 };
 
@@ -66,10 +62,6 @@ function getStringField(obj: unknown, key: string): string | undefined {
 const PlusSavingsAccountCard: React.FC<PlusSavingsAccountCardProps> = ({
   account,
   loading: loadingProp,
-
-  onOpenAccount: _onOpenAccount,
-  onDeposit: _onDeposit,
-  onWithdraw: _onWithdraw,
 
   apyPctOverride,
 }) => {

@@ -15,6 +15,7 @@ import { recordUserFees } from "@/lib/fees";
 import User from "@/models/User";
 import { connect } from "@/lib/db";
 import { TOKENS, getCluster, getMintFor } from "@/lib/tokenConfig";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,17 @@ const HAVEN_WALLET_ID = required("HAVEN_AUTH_ADDRESS_ID");
 const HAVEN_PUBKEY = new PublicKey(
   required("NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS")
 );
+
+/* ───────── Singletons ───────── */
+let _privy: PrivyClient | null = null;
+function getPrivyClient(): PrivyClient {
+  if (!_privy) {
+    _privy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
+      walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
+    });
+  }
+  return _privy;
+}
 
 /* ───────── CONSTANTS ───────── */
 const KEEP_DUST_LAMPORTS = 900_000; // 0.0009 SOL
@@ -477,18 +489,31 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ✅ Prevent SOL drain attacks via SystemProgram instructions
+    stageRef.stage = "spendGuards";
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Unsafe transaction";
+      return jsonError(400, {
+        code: "UNSAFE_TX",
+        error: m,
+        userMessage: "Security check failed. Please try again.",
+        traceId,
+        stage: stageRef.stage,
+      });
+    }
+
     /* ───────── PRIVY CO-SIGN ───────── */
 
     stageRef.stage = "privySign";
-    const appPrivy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
-      walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
-    });
+    const privy = getPrivyClient();
 
     let coSignedBytes: Uint8Array;
     try {
       console.log(`[booster/send] ${traceId} Calling Privy signTransaction...`);
 
-      const resp = await appPrivy.walletApi.solana.signTransaction({
+      const resp = await privy.walletApi.solana.signTransaction({
         walletId: HAVEN_WALLET_ID,
         transaction: userSignedTx,
       });
@@ -557,8 +582,8 @@ export async function POST(req: NextRequest) {
     try {
       const sim = await conn.simulateTransaction(cosignedTx, {
         replaceRecentBlockhash: false,
-        commitment: "processed",
-        sigVerify: false,
+        commitment: "confirmed",
+        sigVerify: true,
       });
 
       if (sim.value.err) {

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * GET /api/bundle/user
  * Fetch the logged-in user's bundles (both public and private)
  */
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
     const user = await getServerUser();
 

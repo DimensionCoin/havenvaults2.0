@@ -250,7 +250,7 @@ export async function POST(req: NextRequest) {
     // Check for duplicate names for this user
     const existing = await Bundle.findOne({
       userId: user._id,
-      name: { $regex: new RegExp(`^${name}$`, "i") },
+      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
       isActive: true,
     });
 
@@ -285,7 +285,6 @@ export async function POST(req: NextRequest) {
       traceId,
     });
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("[POST /api/bundle/create] Error:", error);
 
     if (error instanceof Error && error.message === "Unauthorized") {

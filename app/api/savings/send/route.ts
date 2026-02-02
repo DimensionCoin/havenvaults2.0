@@ -31,6 +31,8 @@ import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 import { SavingsLedger } from "@/models/SavingsLedger";
 import { recordUserFees } from "@/lib/fees";
+import { rateLimitServer } from "@/lib/rateLimitServer";
+import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 
 const enc = new TextEncoder();
 const SESSION_COOKIE = "haven_session";
@@ -526,6 +528,24 @@ async function recordSavingsFeeAsync(params: {
 /* ───────── route ───────── */
 
 export async function POST(req: NextRequest) {
+  // ✅ Rate limit FIRST (money-moving route)
+  const blocked = await rateLimitServer(req, {
+    api: "savings:send",
+    requireAuth: true,
+    allowIpFallback: false,
+    failMode: "closed",
+    tiers: [
+      { limit: 2, windowMs: 10_000, suffix: "burst" },
+      { limit: 8, windowMs: 60_000, suffix: "minute" },
+      { limit: 60, windowMs: 60 * 60_000, suffix: "hour" },
+    ],
+    globalTiers: [
+      { limit: 25, windowMs: 10_000, suffix: "burst" },
+      { limit: 180, windowMs: 60_000, suffix: "minute" },
+    ],
+  });
+  if (blocked) return blocked;
+
   try {
     const RPC = process.env.SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC;
     const HAVEN_ADDR = process.env.NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS;
@@ -608,6 +628,14 @@ export async function POST(req: NextRequest) {
       verifyTxOrThrow({ tx: userSignedTx, userPk, havenPk, marginfiProgramId });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Transaction rejected";
+      return json(400, { error: msg });
+    }
+
+    // ✅ Prevent SOL drain attacks via SystemProgram instructions
+    try {
+      validateHavenSpendGuards(userSignedTx);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unsafe transaction";
       return json(400, { error: msg });
     }
 

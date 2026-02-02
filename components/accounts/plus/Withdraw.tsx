@@ -37,8 +37,6 @@ type WithdrawPlusProps = {
   availableBalance: number;
 };
 
-type ModalKind = "processing" | "success" | "error";
-
 type ModalState =
   | { kind: "processing" }
   | { kind: "success"; signature: string }
@@ -203,7 +201,9 @@ export default function WithdrawPlus({
 }: WithdrawPlusProps) {
   const { user, refresh: refreshUser } = useUser();
   const balanceCtx = useBalance();
-  const refreshBalance = balanceCtx?.refresh;
+  const refreshBalance =
+    (balanceCtx as unknown as { refreshNow?: () => Promise<void> })
+      ?.refreshNow ?? balanceCtx?.refresh;
 
   const ctxLoading = !!balanceCtx?.loading;
 
