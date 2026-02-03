@@ -22,6 +22,7 @@ import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { recordUserFees, type FeeToken } from "@/lib/fees";
 import { validateCsrf } from "@/lib/csrf";
 import { WSOL_MINT } from "@/lib/tokenConfig";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -430,7 +431,7 @@ async function detectTreasuryFeeTokensWithRetry(params: {
 
 /* ───────── Route ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
@@ -922,3 +923,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/bundle/send", POSTHandler);

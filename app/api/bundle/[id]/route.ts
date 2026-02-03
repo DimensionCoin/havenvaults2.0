@@ -1,20 +1,21 @@
-// app/api/bundles/[id]/route.ts
+// app/api/bundle/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import Bundle from "@/models/Bundle";
 import { getServerUser } from "@/lib/getServerUser";
 import mongoose from "mongoose";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/bundles/[id]
+ * GET /api/bundle/[id]
  * Fetch a single bundle by ID
  * - Public bundles can be viewed by anyone
  * - Private bundles can only be viewed by the owner
  */
-export async function GET(
+async function GETHandler(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -57,7 +58,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error("[GET /api/bundles/[id]] Error:", error);
+    console.error("[GET /api/bundle/[id]] Error:", error);
     return NextResponse.json(
       { error: "Failed to fetch bundle" },
       { status: 500 },
@@ -66,11 +67,11 @@ export async function GET(
 }
 
 /**
- * DELETE /api/bundles/[id]
+ * DELETE /api/bundle/[id]
  * Soft-delete a bundle (set isActive to false)
  * Only the owner can delete their bundle
  */
-export async function DELETE(
+async function DELETEHandler(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -115,7 +116,7 @@ export async function DELETE(
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("[DELETE /api/bundles/[id]] Error:", error);
+    console.error("[DELETE /api/bundle/[id]] Error:", error);
     return NextResponse.json(
       { error: "Failed to delete bundle" },
       { status: 500 },
@@ -124,11 +125,11 @@ export async function DELETE(
 }
 
 /**
- * PATCH /api/bundles/[id]
+ * PATCH /api/bundle/[id]
  * Update a bundle's visibility
  * Only the owner can update their bundle
  */
-export async function PATCH(
+async function PATCHHandler(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -170,7 +171,13 @@ export async function PATCH(
     }
 
     // Update visibility if provided
-    if (body.visibility && ["public", "private"].includes(body.visibility)) {
+    if (body.visibility !== undefined) {
+      if (!["public", "private"].includes(body.visibility)) {
+        return NextResponse.json(
+          { error: "Invalid visibility value. Must be 'public' or 'private'" },
+          { status: 400 },
+        );
+      }
       bundle.visibility = body.visibility;
     }
 
@@ -186,10 +193,14 @@ export async function PATCH(
       },
     });
   } catch (error) {
-    console.error("[PATCH /api/bundles/[id]] Error:", error);
+    console.error("[PATCH /api/bundle/[id]] Error:", error);
     return NextResponse.json(
       { error: "Failed to update bundle" },
       { status: 500 },
     );
   }
 }
+
+export const GET = withApiLogging("/api/bundle/[id]", GETHandler);
+export const DELETE = withApiLogging("/api/bundle/[id]", DELETEHandler);
+export const PATCH = withApiLogging("/api/bundle/[id]", PATCHHandler);

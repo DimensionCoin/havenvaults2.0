@@ -29,6 +29,7 @@ import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { validateCsrf } from "@/lib/csrf";
 import { WSOL_MINT } from "@/lib/tokenConfig";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 /* ───────── Next.js route config ───────── */
 
@@ -465,7 +466,7 @@ async function detectTreasuryFeeTokensWithRetry(params: {
 
 /* ───────── Route ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   if (!req.headers.get("content-type")?.includes("application/json")) {
     return jsonError(415, "Content-Type must be application/json");
   }
@@ -801,3 +802,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/user/wallet/crypto-transfer", POSTHandler);

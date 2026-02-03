@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { requireServerUser } from "@/lib/getServerUser";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,7 +60,7 @@ function json(req: NextRequest, status: number, body: unknown) {
   });
 }
 
-export async function OPTIONS(req: NextRequest) {
+async function OPTIONSHandler(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
 
@@ -218,7 +219,7 @@ async function generateCoinbaseJwtV2(method: string, path: string) {
 
 /* ───────── main ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
@@ -453,3 +454,6 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const OPTIONS = withApiLogging("/api/onramp/session", OPTIONSHandler);
+export const POST = withApiLogging("/api/onramp/session", POSTHandler);

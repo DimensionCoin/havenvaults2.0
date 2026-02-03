@@ -13,6 +13,7 @@ import { findTokenBySymbol } from "@/lib/tokenConfig";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser } from "@/lib/getServerUser";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +122,7 @@ function validateAllocations(allocations: AllocationInput[]): string | null {
  * POST /api/bundle/create
  * Create a new user bundle
  */
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
 
   try {
@@ -318,3 +319,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/bundle/create", POSTHandler);

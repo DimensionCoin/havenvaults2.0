@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ type InviteItem = {
   email?: string | null;
 };
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -62,3 +63,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export const POST = withApiLogging("/api/user/invite/track", POSTHandler);

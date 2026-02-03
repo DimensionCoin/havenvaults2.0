@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,7 @@ type InviteDTO = {
 };
 
 
-export async function GET() {
+async function GETHandler() {
   try {
     await connect();
 
@@ -61,3 +62,5 @@ export async function GET() {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/invite", GETHandler);

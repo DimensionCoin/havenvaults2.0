@@ -11,6 +11,7 @@ import {
 
 import { RPC_CONNECTION } from "@/types/constants";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 
@@ -53,7 +54,7 @@ function jsonError(
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const stageRef: { stage: string } = { stage: "init" };
 
   const csrfError = validateCsrf(req);
@@ -301,3 +302,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/jup/sweep-sol", POSTHandler);

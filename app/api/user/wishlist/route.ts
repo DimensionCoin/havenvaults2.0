@@ -4,11 +4,12 @@ import { connect } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User from "@/models/User";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function GETHandler() {
   try {
     const session = await getSessionFromCookies();
     if (!session || !session.sub) {
@@ -41,7 +42,7 @@ export async function GET() {
 }
 
 // 🔽 NEW: add mint to wishlist
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-export async function DELETE(req: NextRequest) {
+async function DELETEHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -146,3 +147,7 @@ export async function DELETE(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/wishlist", GETHandler);
+export const POST = withApiLogging("/api/user/wishlist", POSTHandler);
+export const DELETE = withApiLogging("/api/user/wishlist", DELETEHandler);

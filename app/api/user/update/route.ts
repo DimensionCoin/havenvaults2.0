@@ -9,6 +9,7 @@ import User, {
 } from "@/models/User";
 import { getSessionFromCookies } from "@/lib/auth";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ const KNOWLEDGE_LEVELS: FinancialKnowledgeLevel[] = [
   "advanced",
 ];
 
-export async function PATCH(req: NextRequest) {
+async function PATCHHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -184,3 +185,5 @@ export async function PATCH(req: NextRequest) {
     );
   }
 }
+
+export const PATCH = withApiLogging("/api/user/update", PATCHHandler);

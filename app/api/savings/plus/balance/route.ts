@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import { getSessionFromCookies } from "@/lib/auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -154,7 +155,7 @@ function cacheSet(key: string, payload: PlusBalancePayload) {
   }
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   const started = Date.now();
   let owner: string | null = null;
 
@@ -316,3 +317,5 @@ export async function GET(req: NextRequest) {
     });
   }
 }
+
+export const GET = withApiLogging("/api/savings/plus/balance", GETHandler);

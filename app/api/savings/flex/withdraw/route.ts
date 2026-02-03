@@ -1,6 +1,7 @@
 // app/api/savings/flex/withdraw/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -451,7 +452,7 @@ function makeTransferCheckedIx(opts: {
 
 /* ───────── POST: BUILD WITHDRAW TRANSACTION ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const startTime = Date.now();
 
   try {
@@ -767,3 +768,5 @@ export async function POST(req: NextRequest) {
     return json(status, { error: msg || "Unknown error" });
   }
 }
+
+export const POST = withApiLogging("/api/savings/flex/withdraw", POSTHandler);

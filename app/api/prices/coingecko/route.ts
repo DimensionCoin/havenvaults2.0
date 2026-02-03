@@ -1,6 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ function pickEnDescription(desc: unknown): string | null {
   return typeof en === "string" && en.trim().length ? en : null;
 }
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -93,3 +94,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ prices: {} });
   }
 }
+
+export const POST = withApiLogging("/api/prices/coingecko", POSTHandler);

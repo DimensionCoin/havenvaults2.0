@@ -1,6 +1,7 @@
 // app/api/savings/send/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -529,7 +530,7 @@ async function recordSavingsFeeAsync(params: {
 
 /* ───────── route ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
@@ -862,3 +863,5 @@ export async function POST(req: NextRequest) {
     return json(500, { error: msg });
   }
 }
+
+export const POST = withApiLogging("/api/savings/send", POSTHandler);

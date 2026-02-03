@@ -2,6 +2,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { findTokenByMint, getCluster } from "@/lib/tokenConfig";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -236,7 +237,7 @@ async function fetchJupPrices(
   return json ?? {};
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const owner = searchParams.get("owner");
 
@@ -411,3 +412,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/wallet/balance", GETHandler);

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 function d128ToString(v: unknown): string | null {
   if (v == null) return null;
@@ -259,7 +260,7 @@ function serializeUser(user: UserLean) {
   };
 }
 
-export async function GET() {
+async function GETHandler() {
   try {
     await connect();
 
@@ -288,3 +289,5 @@ export async function GET() {
     );
   }
 }
+
+export const GET = withApiLogging("/api/auth/user", GETHandler);

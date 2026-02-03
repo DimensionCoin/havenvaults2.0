@@ -35,6 +35,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   USDC_MINT,
 } from "@/types/constants";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 
@@ -243,7 +244,7 @@ function leverageToFraction(lev: 1.5 | 2): { num: number; den: number } {
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const startTime = Date.now(); // ✅ Performance tracking
   const stageRef: { stage: string } = { stage: "init" };
 
@@ -743,3 +744,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/booster/open", POSTHandler);

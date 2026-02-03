@@ -23,6 +23,7 @@ import { Buffer } from "buffer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -495,7 +496,7 @@ function computeSlippage(params: {
 
 /* ───────── ROUTE ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
   let stage = "init";
@@ -953,3 +954,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/jup/build", POSTHandler);

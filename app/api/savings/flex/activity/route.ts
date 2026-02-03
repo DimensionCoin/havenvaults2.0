@@ -1,6 +1,7 @@
 // app/api/savings/flex/activity/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUser } from "@/lib/getServerUser";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,7 +88,7 @@ function parseFlexRowFromHeliusTx(tx: HeliusTx, userWallet: string) {
   return null;
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     const user = await getServerUser();
     if (!user?._id) {
@@ -198,3 +199,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/savings/flex/activity", GETHandler);

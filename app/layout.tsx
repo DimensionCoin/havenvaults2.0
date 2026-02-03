@@ -6,6 +6,7 @@ import PrivyProviders from "@/providers/PrivyProvider";
 import { Inter, DM_Sans } from "next/font/google";
 import { UserProvider } from "@/providers/UserProvider";
 import PwaRegister from "@/components/PwaRegister";
+import ClientErrorReporter from "@/components/ClientErrorReporter";
 import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 import ThemeProvider from "@/providers/ThemeProvider";
 
@@ -138,6 +139,7 @@ export default function RootLayout({
             <UserProvider>
               <ConvexClientProvider>
                 <PwaRegister />
+                <ClientErrorReporter />
 
                 {/* App shell scroll container */}
                 <div

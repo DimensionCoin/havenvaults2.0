@@ -3,11 +3,12 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME } from "@/lib/auth";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
@@ -25,3 +26,5 @@ export async function POST(req: NextRequest) {
 
   return res;
 }
+
+export const POST = withApiLogging("/api/auth/logout", POSTHandler);

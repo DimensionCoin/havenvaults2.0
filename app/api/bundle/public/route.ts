@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import Bundle from "@/models/Bundle";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
  *   - limit: number (default: 50, max: 100)
  *   - skip: number (default: 0)
  */
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     await connect();
 
@@ -88,3 +89,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/bundle/public", GETHandler);

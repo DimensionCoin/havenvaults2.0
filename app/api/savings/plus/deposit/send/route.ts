@@ -18,6 +18,7 @@ import {
 } from "@/lib/getServerUser";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -160,7 +161,7 @@ function isLikelySlippageError(msg: string) {
 
 /* ───────── Route ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const startTime = Date.now();
 
@@ -574,3 +575,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/savings/plus/deposit/send", POSTHandler);

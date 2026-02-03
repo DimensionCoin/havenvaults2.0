@@ -1,6 +1,7 @@
 // app/api/savings/flex/apy/route.ts
 import "server-only";
 import { NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -220,7 +221,7 @@ function extractFeeRates(bank: UnknownRecord) {
   return { reserve, insurance };
 }
 
-export async function GET() {
+async function GETHandler() {
   try {
     const conn = new Connection(RPC, { commitment: "confirmed" });
     const coder = new BorshAccountsCoder(marginfiIdl as anchor.Idl);
@@ -317,3 +318,5 @@ export async function GET() {
     );
   }
 }
+
+export const GET = withApiLogging("/api/savings/flex/apy", GETHandler);

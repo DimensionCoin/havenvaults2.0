@@ -1,6 +1,7 @@
 // app/api/savings/flex/balance/route.ts
 import "server-only";
 import { NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -159,7 +160,7 @@ function getFlexMarginfiAccountPkStrict(userLean: UserLean): string | null {
 
 /* ───────── route ───────── */
 
-export async function GET() {
+async function GETHandler() {
   try {
     const RPC = requiredAny(["SOLANA_RPC", "NEXT_PUBLIC_SOLANA_RPC"]);
     const MARGINFI_PROGRAM_ID_STR = requiredAny(["MARGINFI_PROGRAM_ID"]);
@@ -365,3 +366,5 @@ export async function GET() {
     return json(status, { error: message || "Unknown error" });
   }
 }
+
+export const GET = withApiLogging("/api/savings/flex/balance", GETHandler);

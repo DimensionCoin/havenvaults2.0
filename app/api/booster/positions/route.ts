@@ -12,6 +12,7 @@ import {
   JLP_POOL_ACCOUNT_PUBKEY,
   CUSTODY_PUBKEY,
 } from "@/types/constants";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 
@@ -124,7 +125,7 @@ function decodePositionAccount(data: Buffer): {
   };
 }
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -315,3 +316,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export const POST = withApiLogging("/api/booster/positions", POSTHandler);

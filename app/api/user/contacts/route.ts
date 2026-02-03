@@ -6,6 +6,7 @@ import User, { type IContact } from "@/models/User";
 import { Types } from "mongoose";
 import { getSessionFromCookies } from "@/lib/auth";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -144,7 +145,7 @@ async function fetchHavenUsersById(
    GET: list contacts
 ------------------------- */
 
-export async function GET() {
+async function GETHandler() {
   try {
     const { user, error, status } = await getAuthedUser();
     if (!user) return NextResponse.json({ error }, { status });
@@ -181,7 +182,7 @@ export async function GET() {
    POST: upsert contact
 ------------------------- */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -294,7 +295,7 @@ export async function POST(req: NextRequest) {
    DELETE: remove contact
 ------------------------- */
 
-export async function DELETE(req: NextRequest) {
+async function DELETEHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -352,3 +353,7 @@ export async function DELETE(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/contacts", GETHandler);
+export const POST = withApiLogging("/api/user/contacts", POSTHandler);
+export const DELETE = withApiLogging("/api/user/contacts", DELETEHandler);

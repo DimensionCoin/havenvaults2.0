@@ -1,6 +1,7 @@
 // app/api/savings/flex/open-and-deposit/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -259,7 +260,7 @@ async function resolveReusableFlexMarginfiPk(
 
 /* ───────── POST: BUILD TRANSACTION ───────── */
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const startTime = Date.now();
 
   try {
@@ -630,7 +631,7 @@ type UserMongo = {
   savingsAccounts?: SavingsAccountMongo[];
 };
 
-export async function PATCH(req: NextRequest) {
+async function PATCHHandler(req: NextRequest) {
   const startTime = Date.now();
 
   try {
@@ -756,3 +757,6 @@ export async function PATCH(req: NextRequest) {
     return json(status, { error: msg });
   }
 }
+
+export const POST = withApiLogging("/api/savings/flex/open-and-deposit", POSTHandler);
+export const PATCH = withApiLogging("/api/savings/flex/open-and-deposit", PATCHHandler);

@@ -8,6 +8,7 @@ import {
   type TokenCategory,
   type TokenKind,
 } from "@/lib/tokenConfig";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,7 +70,7 @@ function isTokenKind(v: string): v is TokenKind {
   return v === "crypto" || v === "stock";
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
 
@@ -170,3 +171,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/tokens", GETHandler);

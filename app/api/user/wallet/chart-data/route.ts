@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { requireServerUser } from "@/lib/getServerUser";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +45,7 @@ function decimalLikeToNumber(v: unknown): number {
   return 0;
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     // ✅ Auth gate + prevent leaking another user's history
     const serverUser = await requireServerUser();
@@ -96,3 +97,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/wallet/chart-data", GETHandler);

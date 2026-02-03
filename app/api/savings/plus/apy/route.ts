@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 const JUPUSD_MINT = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
 const JUP_API_BASE = "https://api.jup.ag/lend/v1/earn";
@@ -44,7 +45,7 @@ interface JupiterVault {
   rewards: unknown[];
 }
 
-export async function GET() {
+async function GETHandler() {
   try {
     const apiKey = process.env.JUP_API_KEY;
 
@@ -119,3 +120,5 @@ export async function GET() {
     );
   }
 }
+
+export const GET = withApiLogging("/api/savings/plus/apy", GETHandler);

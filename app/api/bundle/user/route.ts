@@ -4,6 +4,7 @@ import { connect } from "@/lib/db";
 import Bundle from "@/models/Bundle";
 import { getServerUser } from "@/lib/getServerUser";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
  * GET /api/bundle/user
  * Fetch the logged-in user's bundles (both public and private)
  */
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     // Rate limit
     const blocked = await rateLimitServer(req, {
@@ -58,3 +59,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/bundle/user", GETHandler);

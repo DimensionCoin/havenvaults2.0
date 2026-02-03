@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ async function jupFetch(url: string) {
   });
 }
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
@@ -98,3 +99,5 @@ export async function POST(req: NextRequest) {
     routeLabels: labels,
   });
 }
+
+export const POST = withApiLogging("/api/jup/quote", POSTHandler);

@@ -12,6 +12,7 @@ import {
 import { RPC_CONNECTION } from "@/types/constants";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,7 +102,7 @@ async function getBlockhashCached(): Promise<{
   return result;
 }
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
 
   try {
@@ -246,3 +247,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/booster/sweep-sol", POSTHandler);

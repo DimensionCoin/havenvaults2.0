@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ type HistoricalPoint = { t: number; price: number };
 type MarketChartResponse = { prices?: [number, number][] };
 type HistoricalApiResponse = { id: string; prices: HistoricalPoint[] };
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
   const id = searchParams.get("id"); // e.g. "solana"
@@ -71,3 +72,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/prices/coingecko/historical", GETHandler);

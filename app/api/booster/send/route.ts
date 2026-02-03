@@ -18,6 +18,7 @@ import { connect } from "@/lib/db";
 import { TOKENS, getCluster, getMintFor, WSOL_MINT } from "@/lib/tokenConfig";
 import { validateHavenSpendGuards } from "@/lib/havenSpendGuards";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -583,7 +584,7 @@ async function recordFeeFromChainAsync(params: {
 }
 
 /* ───────── ROUTE ───────── */
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   const startTime = Date.now();
   const traceId = Math.random().toString(36).slice(2, 10);
   const stageRef: { stage: string } = { stage: "init" };
@@ -1023,3 +1024,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withApiLogging("/api/booster/send", POSTHandler);

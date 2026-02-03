@@ -33,7 +33,7 @@ type FinancialKnowledgeLevel =
   | "advanced";
 
 // ISO 4217 — global currencies (excludes IRR, RUB, ILS, KPW)
-export const DISPLAY_CURRENCIES = [
+const DISPLAY_CURRENCIES = [
   "AED",
   "AFN",
   "ALL",
@@ -188,9 +188,9 @@ export const DISPLAY_CURRENCIES = [
   "USDC", // stable display currency
 ] as const;
 
-export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
+type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
 
-export const COUNTRIES = [
+const COUNTRIES = [
   // A
   { code: "AF", name: "Afghanistan" },
   { code: "AL", name: "Albania" },
@@ -304,7 +304,7 @@ export const COUNTRIES = [
   { code: "VN", name: "Vietnam" },
 ] as const;
 
-export type CountryCode = (typeof COUNTRIES)[number]["code"];
+type CountryCode = (typeof COUNTRIES)[number]["code"];
 
 const RISK_OPTIONS: {
   value: RiskLevel;

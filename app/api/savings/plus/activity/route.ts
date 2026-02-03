@@ -1,5 +1,6 @@
 // app/api/savings/plus/activity/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY!;
 const JUPUSD_MINT = process.env.NEXT_PUBLIC_JUPUSD_MINT!;
@@ -89,7 +90,7 @@ interface PlusActivityTransaction {
   accountData?: HeliusAccountData[];
 }
 
-export async function GET(request: NextRequest) {
+async function GETHandler(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const walletAddress = searchParams.get("wallet");
@@ -388,3 +389,5 @@ function parseJupLendTransaction(
           : null,
   };
 }
+
+export const GET = withApiLogging("/api/savings/plus/activity", GETHandler);

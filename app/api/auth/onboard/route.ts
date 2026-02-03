@@ -11,6 +11,7 @@ import User, {
   type RiskLevel,
   parseDisplayCurrency,
 } from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,7 +67,7 @@ function cleanCountry(v: unknown): string | undefined {
   return s;
 }
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -231,3 +232,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export const POST = withApiLogging("/api/auth/onboard", POSTHandler);

@@ -1,5 +1,6 @@
 // app/api/prices/historical/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 const CG_BASE = "https://api.coingecko.com/api/v3";
 const COINGECKO_DEMO_KEY = process.env.COINGECKO_DEMO_KEY;
@@ -14,7 +15,7 @@ type HistoricalApiResponse = {
   prices: HistoricalPoint[];
 };
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
   const id = searchParams.get("id"); // e.g. "bitcoin"
@@ -76,3 +77,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/prices/historical", GETHandler);

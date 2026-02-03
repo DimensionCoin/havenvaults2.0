@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import { getSessionFromCookies } from "@/lib/auth";
+import { logErrorEvent, shouldLogStatus } from "@/lib/logErrorEvent";
 
 type AuthSession = { sub?: string; userId?: string } | null;
 
@@ -139,14 +140,36 @@ export async function rateLimitServer(
   const { key, kind } = await buildRateLimitKey(req, opts);
 
   if (opts.requireAuth && kind !== "user") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const res = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (shouldLogStatus(401)) {
+      await logErrorEvent({
+        req,
+        error: "Unauthorized",
+        route: opts.api,
+        status: 401,
+        meta: { scope: opts.scope, method: req.method },
+      });
+      res.headers.set("X-Haven-Error-Logged", "1");
+    }
+    return res;
   }
 
   if (!key) {
-    return NextResponse.json(
+    const res = NextResponse.json(
       { error: "Rate limit key unavailable" },
       { status: 429 },
     );
+    if (shouldLogStatus(429)) {
+      await logErrorEvent({
+        req,
+        error: "Rate limit key unavailable",
+        route: opts.api,
+        status: 429,
+        meta: { scope: opts.scope, method: req.method },
+      });
+      res.headers.set("X-Haven-Error-Logged", "1");
+    }
+    return res;
   }
 
   const method = req.method || "UNKNOWN";
@@ -196,6 +219,23 @@ export async function rateLimitServer(
         resetMs: blocked.resetMs,
         scopeLabel: isGlobal ? "global" : "user",
       });
+      res.headers.set("X-Haven-Error-Logged", "1");
+      if (shouldLogStatus(429)) {
+        await logErrorEvent({
+          req,
+          error: "Rate limit exceeded",
+          route: opts.api,
+          status: 429,
+          meta: {
+            scope: opts.scope,
+            method: req.method,
+            limit: blocked.limit,
+            windowMs: blocked.windowMs,
+            resetMs: blocked.resetMs,
+            scopeLabel: isGlobal ? "global" : "user",
+          },
+        });
+      }
       if (isGlobal) res.headers.set("X-RateLimit-Scope", "global");
       return res;
     }
@@ -205,9 +245,24 @@ export async function rateLimitServer(
     if (failMode === "open") return null;
 
     console.error("[rateLimitServer] Convex consumeMulti failed:", err);
-    return NextResponse.json(
+    const res = NextResponse.json(
       { error: "Temporarily unavailable" },
       { status: 503 },
     );
+    if (shouldLogStatus(503)) {
+      try {
+        await logErrorEvent({
+          req,
+          error: err,
+          route: opts.api,
+          status: 503,
+          meta: { scope: opts.scope, method: req.method },
+        });
+        res.headers.set("X-Haven-Error-Logged", "1");
+      } catch (logErr) {
+        console.error("[rateLimitServer] logErrorEvent failed:", logErr);
+      }
+    }
+    return res;
   }
 }

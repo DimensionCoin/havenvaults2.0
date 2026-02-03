@@ -4,6 +4,7 @@ import { PrivyClient } from "@privy-io/server-auth";
 import { jwtVerify } from "jose";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -234,7 +235,7 @@ async function fetchRateUSDTo(target: string): Promise<FxResult> {
 }
 
 // ---------- GET: allow query override + user displayCurrency ----------
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     debugLog("[FX] GET /api/fx called:", { url: req.url });
 
@@ -326,3 +327,5 @@ export async function GET(req: NextRequest) {
     return new NextResponse(`FX failed: ${msg}`, { status: 400 });
   }
 }
+
+export const GET = withApiLogging("/api/fx", GETHandler);

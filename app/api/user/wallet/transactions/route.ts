@@ -9,6 +9,7 @@ import {
 } from "@/lib/solanaActivity";
 import { getSessionFromCookies } from "@/lib/auth";
 import { rateLimitServer } from "@/lib/rateLimitServer";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -182,7 +183,7 @@ async function buildCounterpartyMap(items: ActivityItem[]) {
    MAIN
 ========================= */
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   const rid = mkReqId();
   const tag = `[wallet/transactions][${rid}]`;
 
@@ -316,3 +317,5 @@ export async function GET(req: NextRequest) {
     return jerr(/unauthorized/i.test(msg) ? 401 : 500, msg);
   }
 }
+
+export const GET = withApiLogging("/api/user/wallet/transactions", GETHandler);

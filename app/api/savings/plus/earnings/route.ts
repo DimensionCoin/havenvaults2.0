@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import { getSessionFromCookies } from "@/lib/auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -249,7 +250,7 @@ function normalizeEarningsPayload(
 
 /* ───────── Route ───────── */
 
-export async function GET() {
+async function GETHandler() {
   const debug: Record<string, unknown> = {};
   const t0 = Date.now();
 
@@ -523,3 +524,5 @@ export async function GET() {
     });
   }
 }
+
+export const GET = withApiLogging("/api/savings/plus/earnings", GETHandler);

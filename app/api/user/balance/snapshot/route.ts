@@ -7,11 +7,12 @@ import mongoose from "mongoose";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 import { validateCsrf } from "@/lib/csrf";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+async function POSTHandler(req: NextRequest) {
   try {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
@@ -183,3 +184,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export const POST = withApiLogging("/api/user/balance/snapshot", POSTHandler);

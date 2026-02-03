@@ -14,7 +14,7 @@ type FinancialKnowledgeLevel =
   | "advanced";
 
 // ISO 4217 — global currencies (excludes IRR, RUB, ILS, KPW)
-export const DISPLAY_CURRENCIES = [
+const DISPLAY_CURRENCIES = [
   "AED","AFN","ALL","AMD","ANG","AOA","ARS","AUD","AWG","AZN",
   "BAM","BBD","BDT","BGN","BHD","BIF","BMD","BND","BOB","BRL",
   "BSD","BTN","BWP","BYN","BZD","CAD","CDF","CHF","CLP","CNY",
@@ -33,12 +33,12 @@ export const DISPLAY_CURRENCIES = [
   "USDC" // stable display currency
 ] as const;
 
-export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
+type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
 
 
 // ✅ Production-ready country selector (2-letter codes only)
 // (It enforces ISO-like prefixes and prevents "Canada"/"United States of America".)
-export const COUNTRIES = [
+const COUNTRIES = [
   // A
   { code: "AF", name: "Afghanistan" },
   { code: "AL", name: "Albania" },
@@ -152,7 +152,7 @@ export const COUNTRIES = [
   { code: "VN", name: "Vietnam" },
 ] as const;
 
-export type CountryCode = (typeof COUNTRIES)[number]["code"];
+type CountryCode = (typeof COUNTRIES)[number]["code"];
 
 
 type ApiUser = {

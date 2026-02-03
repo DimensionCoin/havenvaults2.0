@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connect } from "@/lib/db";
 import User, { IContact } from "@/models/User";
 import { getSessionFromCookies } from "@/lib/auth";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ function buildFullName(
   return parts.join(" ");
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   try {
     await connect();
 
@@ -154,3 +155,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export const GET = withApiLogging("/api/user/contacts/resolve", GETHandler);

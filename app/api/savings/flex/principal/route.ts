@@ -6,6 +6,7 @@ import { connect as connectMongo } from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import User from "@/models/User";
 import { SavingsLedger } from "@/models/SavingsLedger";
+import { withApiLogging } from "@/lib/withApiLogging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ const toNum = (v: unknown) => {
 
 const clamp0 = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
 
-export async function GET() {
+async function GETHandler() {
   try {
     const session = await getSessionFromCookies();
     if (!session?.sub) return json(401, { ok: false, error: "Unauthorized" });
@@ -141,3 +142,5 @@ export async function GET() {
     });
   }
 }
+
+export const GET = withApiLogging("/api/savings/flex/principal", GETHandler);
