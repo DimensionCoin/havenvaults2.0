@@ -130,6 +130,8 @@ const formatMembershipDuration = (iso?: string | null) => {
 const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
+
 const ProfilePage: React.FC = () => {
   const { user, refresh } = useUser();
   const { displayCurrency } = useBalance();
@@ -243,6 +245,22 @@ const ProfilePage: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size <= 0) {
+      setAvatarError("Empty file upload.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      setAvatarError("Image is too large. Max size is 5MB.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (!file.type || !file.type.startsWith("image/")) {
+      setAvatarError("Unsupported file type. Please upload an image.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     setAvatarError(null);
     setUploadingAvatar(true);
 
@@ -256,12 +274,19 @@ const ProfilePage: React.FC = () => {
         credentials: "include",
       });
 
-      const data: { error?: string } = await res.json().catch(() => ({}));
+      const data: { error?: string; message?: string } =
+        await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(
+        const serverMsg =
           typeof data.error === "string"
             ? data.error
-            : "Failed to upload avatar."
+            : typeof data.message === "string"
+              ? data.message
+              : res.status === 413
+                ? "Image is too large. Max size is 5MB."
+                : "Failed to upload avatar.";
+        throw new Error(
+          serverMsg
         );
       }
 

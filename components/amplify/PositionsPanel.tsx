@@ -27,6 +27,7 @@ import {
   type CloseStatus,
 } from "@/hooks/useServerSponsoredBoosterClose";
 import { useBalance } from "@/providers/BalanceProvider";
+import { PERP_OPEN_FEE_BPS, PERP_OPEN_FEE_PCT } from "@/lib/boosterFees";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -137,8 +138,13 @@ const STAGE_CONFIG: Record<
   },
 };
 
-const BOOSTER_FEE_BPS = 200;
 const JUP_BASE_FEE_BPS = 6;
+const HAVEN_FEE_PCT_LABEL =
+  Number.isFinite(PERP_OPEN_FEE_PCT) && PERP_OPEN_FEE_PCT > 0
+    ? PERP_OPEN_FEE_PCT % 1 === 0
+      ? PERP_OPEN_FEE_PCT.toFixed(0)
+      : PERP_OPEN_FEE_PCT.toFixed(2)
+    : "0";
 
 /* ───────── HELPERS ───────── */
 
@@ -569,7 +575,6 @@ export default function PositionsPanel({
 
               const collateralLocal = toLocal(collateralUsd);
               const positionValueLocal = toLocal(spotValueUsd);
-              const pnlLocal = toLocal(pnlUsd);
 
               const entryPriceUsd =
                 sizeTokens > 0
@@ -578,7 +583,7 @@ export default function PositionsPanel({
                     : (spotValueUsd + pnlUsd) / sizeTokens
                   : 0;
 
-              const feeBps = BOOSTER_FEE_BPS;
+              const feeBps = PERP_OPEN_FEE_BPS;
               const feeRate = feeBps / 10_000;
               const impliedMarginUsd =
                 feeRate > 0 ? collateralUsd / (1 - feeRate) : collateralUsd;
@@ -602,10 +607,6 @@ export default function PositionsPanel({
               const breakEvenLocal = toLocal(breakEvenUsd);
               const netPnlUsd = pnlUsd - feeUsd;
               const netPnlLocal = toLocal(netPnlUsd);
-              const havenFeeLocal = toLocal(feeUsd);
-              const havenFeeLabel = formatMoney(havenFeeLocal, displayCurrency);
-              const jupOpenFeeLocal = toLocal(jupOpenFeeUsd);
-              const jupCloseFeeLocal = toLocal(jupCloseFeeUsd);
               const totalFeeUsd = feeUsd + jupOpenFeeUsd + jupCloseFeeUsd;
               const totalFeeLocal = toLocal(totalFeeUsd);
 
@@ -721,8 +722,9 @@ export default function PositionsPanel({
                                 </span>
                               </div>
                               <div className="text-[10px] text-muted-foreground/80">
-                                Total fees include Haven (2% of margin) + Jupiter
-                                base fee (0.06% open + 0.06% close est.).
+                                Total fees include Haven ({HAVEN_FEE_PCT_LABEL}% of
+                                margin) + Jupiter base fee (0.06% open + 0.06%
+                                close est.).
                               </div>
                             </div>
                           </DropdownMenuContent>

@@ -36,6 +36,7 @@ import {
   USDC_MINT,
 } from "@/types/constants";
 import { withApiLogging } from "@/lib/withApiLogging";
+import { PERP_OPEN_FEE_BPS } from "@/lib/boosterFees";
 
 export const runtime = "nodejs";
 
@@ -49,8 +50,8 @@ const PROCESSED_COMMITMENT: Commitment = "processed";
 // Leverage options
 const ALLOWED_LEVERAGES = new Set([1.5, 2]);
 
-// Haven fee: 2% of user margin
-const BOOSTER_FEE_BPS = 200;
+// Haven fee (bps) - centralized via env
+const BOOSTER_FEE_BPS = PERP_OPEN_FEE_BPS;
 
 // Priority fee + compute - optimized for Jito/best path
 const PRIORITY_MICROLAMPORTS = 50_000; // ✅ Increased for better priority

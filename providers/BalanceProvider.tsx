@@ -123,6 +123,9 @@ type FxResponse = {
   rate?: number;
 };
 
+const SNAPSHOT_COOLDOWN_MS = 10 * 60 * 1000;
+const SNAPSHOT_MIN_DELTA_USD = 1;
+
 type FlexBalanceResponse = {
   amountUi?: string;
   error?: string;
@@ -221,6 +224,8 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
   // ✅ Snapshot dedupe (minimal, non-invasive)
   const snapshotInflightRef = useRef<Promise<void> | null>(null);
   const lastSnapshotKeyRef = useRef<string>("");
+  const lastSnapshotAtRef = useRef<number>(0);
+  const lastSnapshotTotalRef = useRef<number | null>(null);
 
   const callBalanceSnapshot = useCallback(
     (owner: string, combinedBaseUsd: number) => {
@@ -232,19 +237,29 @@ export const BalanceProvider: React.FC<{ children: React.ReactNode }> = ({
       const cents = Math.round(combinedBaseUsd * 100) / 100;
       const key = `${owner}:${day}:${cents}`;
       if (lastSnapshotKeyRef.current === key) return;
-      lastSnapshotKeyRef.current = key;
 
       if (snapshotInflightRef.current) return;
 
+      const now = Date.now();
+      if (now - lastSnapshotAtRef.current < SNAPSHOT_COOLDOWN_MS) return;
+      if (lastSnapshotTotalRef.current !== null) {
+        const delta = Math.abs(combinedBaseUsd - lastSnapshotTotalRef.current);
+        if (delta < SNAPSHOT_MIN_DELTA_USD) return;
+      }
+
       snapshotInflightRef.current = (async () => {
         try {
-          await fetch("/api/user/balance/snapshot", {
+          const res = await fetch("/api/user/balance/snapshot", {
             method: "POST",
             cache: "no-store",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ owner, totalUsd: cents }),
           });
+          if (!res.ok) return;
+          lastSnapshotKeyRef.current = key;
+          lastSnapshotAtRef.current = now;
+          lastSnapshotTotalRef.current = combinedBaseUsd;
         } catch {
           // snapshot must never break UI
         } finally {
