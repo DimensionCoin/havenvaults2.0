@@ -8,8 +8,11 @@ const CG_BASE = "https://api.coingecko.com/api/v3";
 const COINGECKO_DEMO_KEY = process.env.COINGECKO_DEMO_KEY;
 
 type HistoricalPoint = { t: number; price: number };
-type MarketChartResponse = { prices?: [number, number][] };
-type HistoricalApiResponse = { id: string; prices: HistoricalPoint[] };
+type VolumePoint = { t: number; volume: number };
+type MarketChartResponse = {
+  prices?: [number, number][];
+  total_volumes?: [number, number][];
+};
 
 async function GETHandler(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -51,6 +54,7 @@ async function GETHandler(req: NextRequest) {
 
     const raw = (await cgRes.json()) as MarketChartResponse;
     const rows = Array.isArray(raw?.prices) ? raw.prices : [];
+    const volRows = Array.isArray(raw?.total_volumes) ? raw.total_volumes : [];
 
     const prices: HistoricalPoint[] = rows
       .filter(
@@ -62,8 +66,17 @@ async function GETHandler(req: NextRequest) {
       .map(([ts, p]) => ({ t: ts, price: p }))
       .sort((a, b) => a.t - b.t);
 
-    const payload: HistoricalApiResponse = { id, prices };
-    return NextResponse.json(payload);
+    const volumes: VolumePoint[] = volRows
+      .filter(
+        (r) =>
+          Array.isArray(r) &&
+          typeof r[0] === "number" &&
+          typeof r[1] === "number"
+      )
+      .map(([ts, v]) => ({ t: ts, volume: v }))
+      .sort((a, b) => a.t - b.t);
+
+    return NextResponse.json({ id, prices, volumes });
   } catch (err) {
     console.error("Historical API internal error:", err);
     return NextResponse.json(

@@ -19,6 +19,21 @@ export type MultiplierPosition = {
   sweepSignature?: string | null;
 };
 
+export type ChartMode = "line" | "candlestick";
+
+export type OHLCPoint = {
+  t: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
+export type VolumePoint = {
+  t: number;
+  volume: number;
+};
+
 export type PredictionSide = "YES" | "NO";
 
 export type PredictionMarket = {

@@ -1,3 +1,4 @@
+//hooks/useServerSponsoredBoosterOpen.ts
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";

@@ -10,9 +10,12 @@ type HistoricalPoint = {
   price: number;
 };
 
-type HistoricalApiResponse = {
-  id: string;
-  prices: HistoricalPoint[];
+type OHLCApiPoint = {
+  t: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
 };
 
 async function GETHandler(req: NextRequest) {
@@ -61,14 +64,25 @@ async function GETHandler(req: NextRequest) {
       number
     ][];
 
+    const mode = searchParams.get("mode") ?? "line";
+
+    if (mode === "ohlc") {
+      const ohlc: OHLCApiPoint[] = raw.map(([ts, open, high, low, close]) => ({
+        t: ts,
+        open,
+        high,
+        low,
+        close,
+      }));
+      return NextResponse.json({ id, ohlc });
+    }
+
     const prices: HistoricalPoint[] = raw.map(([ts, , , , close]) => ({
-      t: ts, // ms since epoch
-      price: close, // closing price
+      t: ts,
+      price: close,
     }));
 
-    const payload: HistoricalApiResponse = { id, prices };
-
-    return NextResponse.json(payload);
+    return NextResponse.json({ id, prices });
   } catch (err) {
     console.error("Historical API internal error:", err);
     return NextResponse.json(

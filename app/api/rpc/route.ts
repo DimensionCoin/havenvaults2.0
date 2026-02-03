@@ -4,6 +4,7 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { validateCsrf } from "@/lib/csrf";
 import { withApiLogging } from "@/lib/withApiLogging";
+import { getSessionFromCookies } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,15 +98,6 @@ setInterval(() => {
 
 /* ───────── Helpers ───────── */
 
-function getClientIp(req: NextRequest): string | null {
-  return (
-    req.headers.get("cf-connecting-ip")?.trim() ||
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip")?.trim() ||
-    null
-  );
-}
-
 type JsonRpcRequest = {
   jsonrpc?: string;
   method?: string;
@@ -127,6 +119,15 @@ async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
+  // Require a valid session (lightweight JWT check, no DB hit)
+  const session = await getSessionFromCookies();
+  if (!session?.sub) {
+    return NextResponse.json(
+      { error: "Unauthorized", code: "NO_SESSION" },
+      { status: 401 },
+    );
+  }
+
   if (!SOLANA_RPC) {
     return NextResponse.json(
       { error: "RPC proxy not configured" },
@@ -134,15 +135,9 @@ async function POSTHandler(req: NextRequest) {
     );
   }
 
-  // Rate limit by IP
-  const ip = getClientIp(req);
-  if (!ip) {
-    return NextResponse.json(
-      { error: "IP required for this endpoint" },
-      { status: 400 },
-    );
-  }
-  if (isRateLimited(ip)) {
+  // Rate limit by authenticated user
+  const userKey = session.userId || session.sub;
+  if (isRateLimited(userKey)) {
     return NextResponse.json(
       { error: "Too many requests" },
       { status: 429 },

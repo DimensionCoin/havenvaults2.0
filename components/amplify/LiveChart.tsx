@@ -69,7 +69,7 @@ export default function LiveChart({
 
   // Compute chart path
   const computed = useMemo(() => {
-    if (!points || points.length < 2) {
+    if (!points || points.length === 0) {
       return {
         pathD: "",
         minY: 0,
@@ -77,7 +77,24 @@ export default function LiveChart({
         min: 0,
         max: 1,
         scaleX: () => 0,
-        scaleY: () => height,
+        scaleY: () => height / 2,
+        lastX: width,
+        lastY: height / 2,
+      };
+    }
+
+    // Single point: render dot at right edge, centered vertically
+    if (points.length === 1) {
+      const y = points[0].y;
+      const pad = y > 0 ? y * 0.01 : 1;
+      return {
+        pathD: "",
+        minY: y,
+        maxY: y,
+        min: y - pad,
+        max: y + pad,
+        scaleX: () => width,
+        scaleY: () => height / 2,
         lastX: width,
         lastY: height / 2,
       };
@@ -137,37 +154,6 @@ export default function LiveChart({
       >
         <div className="text-xs text-muted-foreground">
           Connecting to live feed…
-        </div>
-      </div>
-    );
-  }
-
-  // Waiting for enough data
-  if (points.length < 2) {
-    return (
-      <div
-        ref={wrapRef}
-        className="relative w-full rounded-3xl border bg-card/40"
-        style={{ height }}
-      >
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <div className="h-3 w-3 rounded-full bg-primary" />
-              <div className="absolute inset-0 h-3 w-3 rounded-full bg-primary animate-ping" />
-            </div>
-            <span className="text-sm text-foreground/70">Live</span>
-          </div>
-
-          {currentPrice !== null && (
-            <div className="mt-3 text-2xl font-semibold text-foreground">
-              {formatMoney(currentPrice, displayCurrency)}
-            </div>
-          )}
-
-          <div className="mt-2 text-xs text-muted-foreground">
-            Collecting data points…
-          </div>
         </div>
       </div>
     );
@@ -250,91 +236,99 @@ export default function LiveChart({
         )}
 
         {/* Current price dot with glow */}
-        <circle
-          cx={computed.lastX}
-          cy={computed.lastY}
-          r="6"
-          fill="var(--chart-1, rgb(16 185 129))"
-          filter="url(#glow)"
-          className={priceFlash ? "animate-pulse" : ""}
-        />
-
-        {/* Inner dot */}
-        <circle
-          cx={computed.lastX}
-          cy={computed.lastY}
-          r="3"
-          fill="hsl(var(--background))"
-        />
-
-        {/* Horizontal price line */}
-        <line
-          x1={0}
-          x2={computed.lastX - 10}
-          y1={computed.lastY}
-          y2={computed.lastY}
-          stroke="var(--chart-1, rgb(16 185 129))"
-          strokeOpacity="0.3"
-          strokeWidth="1"
-          strokeDasharray="4 4"
-        />
+        {points.length >= 1 && (
+          <>
+            <circle
+              cx={computed.lastX}
+              cy={computed.lastY}
+              r="6"
+              fill="var(--chart-1, rgb(16 185 129))"
+              filter="url(#glow)"
+              className={priceFlash ? "animate-pulse" : ""}
+            />
+            {/* Inner dot */}
+            <circle
+              cx={computed.lastX}
+              cy={computed.lastY}
+              r="3"
+              fill="hsl(var(--background))"
+            />
+            {/* Horizontal price line */}
+            <line
+              x1={0}
+              x2={computed.lastX - 10}
+              y1={computed.lastY}
+              y2={computed.lastY}
+              stroke="var(--chart-1, rgb(16 185 129))"
+              strokeOpacity="0.3"
+              strokeWidth="1"
+              strokeDasharray="4 4"
+            />
+          </>
+        )}
       </svg>
 
       {/* Current price label */}
-      <div
-        className={[
-          "absolute right-3 top-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 shadow-fintech-sm backdrop-blur transition-colors duration-200",
-          priceFlash === "up"
-            ? "border-primary/40 bg-primary/10"
-            : priceFlash === "down"
-              ? "border-destructive/40 bg-destructive/10"
-              : "border-border bg-card/70",
-        ].join(" ")}
-      >
+      {currentPrice !== null && (
         <div
           className={[
-            "text-lg font-semibold transition-colors duration-200",
+            "absolute right-3 top-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 shadow-fintech-sm backdrop-blur transition-colors duration-200",
             priceFlash === "up"
-              ? "text-primary"
+              ? "border-primary/40 bg-primary/10"
               : priceFlash === "down"
-                ? "text-destructive"
-                : "text-foreground",
+                ? "border-destructive/40 bg-destructive/10"
+                : "border-border bg-card/70",
           ].join(" ")}
         >
-          {currentPrice !== null
-            ? formatMoney(currentPrice, displayCurrency)
-            : "—"}
-        </div>
-
-        {priceChange !== null && (
           <div
             className={[
-              "text-[11px] font-medium",
-              isUp ? "text-primary" : "text-destructive",
+              "text-lg font-semibold transition-colors duration-200",
+              priceFlash === "up"
+                ? "text-primary"
+                : priceFlash === "down"
+                  ? "text-destructive"
+                  : "text-foreground",
             ].join(" ")}
           >
-            {isUp ? "+" : ""}
-            {priceChange.toFixed(3)}%
+            {formatMoney(currentPrice, displayCurrency)}
           </div>
-        )}
-      </div>
 
-      {/* Low/High display */}
-      <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
-        <span>
-          Low:{" "}
-          {computed.minY ? formatMoney(computed.minY, displayCurrency) : "—"}
-        </span>
+          {priceChange !== null && (
+            <div
+              className={[
+                "text-[11px] font-medium",
+                isUp ? "text-primary" : "text-destructive",
+              ].join(" ")}
+            >
+              {isUp ? "+" : ""}
+              {priceChange.toFixed(3)}%
+            </div>
+          )}
+        </div>
+      )}
 
-        <span className="text-muted-foreground/70">
-          {points.length} points • ~{Math.round((points.length * 3) / 60)}min
-        </span>
+      {/* Low/High display - only when we have enough data */}
+      {points.length >= 2 && (
+        <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
+          <span>
+            Low:{" "}
+            {computed.minY != null
+              ? formatMoney(computed.minY, displayCurrency)
+              : "—"}
+          </span>
 
-        <span>
-          High:{" "}
-          {computed.maxY ? formatMoney(computed.maxY, displayCurrency) : "—"}
-        </span>
-      </div>
+          <span className="text-muted-foreground/70">
+            {points.length} points • ~{Math.round((points.length * 3) / 60)}min
+          </span>
+
+          <span>
+            High:{" "}
+            {computed.maxY != null
+              ? formatMoney(computed.maxY, displayCurrency)
+              : "—"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

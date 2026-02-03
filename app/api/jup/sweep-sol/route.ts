@@ -12,6 +12,7 @@ import {
 import { RPC_CONNECTION } from "@/types/constants";
 import { validateCsrf } from "@/lib/csrf";
 import { withApiLogging } from "@/lib/withApiLogging";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 
@@ -60,8 +61,31 @@ async function POSTHandler(req: NextRequest) {
   const csrfError = validateCsrf(req);
   if (csrfError) return csrfError;
 
+  // Authenticate user
+  let user;
+  try {
+    user = await requireServerUser();
+  } catch {
+    return jsonError(401, {
+      code: "UNAUTHORIZED",
+      error: "Authentication required",
+      userMessage: "Please log in to continue.",
+      stage: "auth",
+    });
+  }
+
+  const authedUserPk = getUserWalletPubkey(user);
+  if (!authedUserPk) {
+    return jsonError(401, {
+      code: "UNAUTHORIZED",
+      error: "Authenticated wallet missing",
+      userMessage: "Please connect a wallet to continue.",
+      stage: "auth",
+    });
+  }
+
   debugLog("\n\n============================");
-  debugLog("[/api/booster/sweep-sol] POST start");
+  debugLog("[/api/jup/sweep-sol] POST start");
   debugLog("============================");
 
   try {
@@ -72,7 +96,7 @@ async function POSTHandler(req: NextRequest) {
       return jsonError(500, {
         code: "MISSING_ENV",
         error: "Missing env: NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS",
-        userMessage: "We couldn’t prepare this sweep request.",
+        userMessage: "We couldn't prepare this sweep request.",
         tip: "Please try again later while we fix configuration.",
         stage: stageRef.stage,
       });
@@ -101,7 +125,7 @@ async function POSTHandler(req: NextRequest) {
       return jsonError(400, {
         code: "INVALID_PAYLOAD",
         error: "ownerBase58 is required",
-        userMessage: "We couldn’t prepare this sweep request.",
+        userMessage: "We couldn't prepare this sweep request.",
         tip: "Please refresh and try again.",
         stage: stageRef.stage,
       });
@@ -116,10 +140,20 @@ async function POSTHandler(req: NextRequest) {
         error: `Invalid ownerBase58: ${
           e instanceof Error ? e.message : String(e)
         }`,
-        userMessage: "We couldn’t prepare this sweep request.",
+        userMessage: "We couldn't prepare this sweep request.",
         tip: "Please refresh and try again.",
         stage: stageRef.stage,
         details: { ownerBase58 },
+      });
+    }
+
+    // Wallet binding: ensure the caller owns this wallet
+    if (!owner.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "ownerBase58 does not match authenticated wallet",
+        userMessage: "You can only sweep your own wallet.",
+        stage: stageRef.stage,
       });
     }
 

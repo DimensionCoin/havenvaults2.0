@@ -13,6 +13,7 @@ import type { PredictionPositionRow } from "@/components/amplify/PredictionPosit
 
 import type {
   AmplifyTokenSymbol,
+  ChartMode,
   ChartTimeframe,
   MultiplierPosition,
   PredictionTimeframe,
@@ -54,6 +55,7 @@ export default function AmplifyPage() {
   // Token & chart state
   const [activeSymbol, setActiveSymbol] = useState<AmplifyTokenSymbol>("SOL");
   const [chartTf, setChartTf] = useState<ChartTimeframe>("1D");
+  const [chartMode, setChartMode] = useState<ChartMode>("line");
 
   // Tab state
   const [activeTab, setActiveTab] = useState<AmplifyTab>("multiplier");
@@ -72,6 +74,7 @@ export default function AmplifyPage() {
     symbol: activeSymbol,
     timeframe: chartTf,
     fxRate,
+    chartMode,
     enabled: true,
   });
 
@@ -92,6 +95,16 @@ export default function AmplifyPage() {
   const safeChartData = useMemo(
     () => (Array.isArray(market.chartData) ? market.chartData : []),
     [market.chartData]
+  );
+
+  const safeOhlcData = useMemo(
+    () => (Array.isArray(market.ohlcData) ? market.ohlcData : []),
+    [market.ohlcData]
+  );
+
+  const safeVolumeData = useMemo(
+    () => (Array.isArray(market.volumeData) ? market.volumeData : []),
+    [market.volumeData]
   );
 
   const safePct24h = Number.isFinite(market.pct24h ?? NaN)
@@ -136,6 +149,10 @@ export default function AmplifyPage() {
             activeTimeframe={chartTf}
             onChangeTimeframe={setChartTf}
             chartData={safeChartData}
+            ohlcData={safeOhlcData}
+            volumeData={safeVolumeData}
+            chartMode={chartMode}
+            onChangeChartMode={setChartMode}
             loading={market.loading}
             error={market.error}
           />

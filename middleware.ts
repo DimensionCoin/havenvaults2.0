@@ -15,7 +15,6 @@ const PUBLIC_API_ROUTES = new Set([
   "/api/auth/session",  // login — no session yet
   "/api/auth/logout",   // logout — clears cookie
   "/api/auth/onboard",  // onboarding — uses session internally but may have edge cases
-  "/api/rpc",           // RPC proxy — has its own CSRF + rate limiting
   "/api/user/invite/track", // public invite tracking
 ]);
 

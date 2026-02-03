@@ -13,6 +13,7 @@ import { RPC_CONNECTION } from "@/types/constants";
 import { rateLimitServer } from "@/lib/rateLimitServer";
 import { validateCsrf } from "@/lib/csrf";
 import { withApiLogging } from "@/lib/withApiLogging";
+import { requireServerUser, getUserWalletPubkey } from "@/lib/getServerUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,11 +110,45 @@ async function POSTHandler(req: NextRequest) {
     const csrfError = validateCsrf(req);
     if (csrfError) return csrfError;
 
-    // Rate limit (no auth required for build endpoint, but limit by IP)
+    // Authenticate user
+    let user;
+    try {
+      user = await requireServerUser();
+    } catch (err) {
+      const isAuthError =
+        err &&
+        typeof err === "object" &&
+        (((err as { name?: string }).name === "AuthError") ||
+          (err as { code?: string }).code === "UNAUTHENTICATED");
+
+      if (isAuthError) {
+        return jsonError(401, {
+          code: "UNAUTHORIZED",
+          error: "Authentication required",
+          userMessage: "Please log in to continue.",
+          details: { traceId },
+        });
+      }
+
+      console.error("[/api/booster/sweep-sol] requireServerUser failed", {
+        traceId,
+        user,
+        err,
+      });
+      return jsonError(500, {
+        code: "SERVER_ERROR",
+        error: "Authentication failed due to a server error",
+        userMessage: "We couldn't sweep SOL right now.",
+        details: { traceId },
+      });
+    }
+
+    const authedUserPk = getUserWalletPubkey(user);
+
+    // Rate limit (per-user)
     const blocked = await rateLimitServer(req, {
       api: "booster:sweep-sol",
-      requireAuth: false,
-      allowIpFallback: true,
+      requireAuth: true,
       failMode: "closed",
       tiers: [
         { limit: 3, windowMs: 10_000, suffix: "burst" },
@@ -147,6 +182,16 @@ async function POSTHandler(req: NextRequest) {
         error: "ownerBase58 is required and must be valid base58",
         userMessage: "We couldn't sweep SOL.",
         details: { ownerBase58: body?.ownerBase58 ?? null, traceId },
+      });
+    }
+
+    // Wallet binding: ensure the caller owns this wallet
+    if (!owner.equals(authedUserPk)) {
+      return jsonError(403, {
+        code: "WALLET_MISMATCH",
+        error: "ownerBase58 does not match authenticated wallet",
+        userMessage: "You can only sweep your own wallet.",
+        details: { traceId },
       });
     }
 

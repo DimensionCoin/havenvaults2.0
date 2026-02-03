@@ -2,14 +2,14 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, TrendingUp, BarChart3 } from "lucide-react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useUser } from "@/providers/UserProvider";
-import type { ChartTimeframe } from "./types";
+import type { ChartMode, ChartTimeframe, OHLCPoint, VolumePoint } from "./types";
 import { formatMoney } from "./utils";
 import TimeframeTabs from "./TimeframeTabs";
-import LineOnlyChart from "./LineOnlyChart";
+import TradingChart from "./TradingChart";
 import LiveChart from "./LiveChart";
 import Image from "next/image";
 
@@ -29,6 +29,10 @@ type Props = {
   onChangeTimeframe: (tf: ChartTimeframe) => void;
 
   chartData: Point[]; // Already in display currency from useAmplifyCoingecko
+  ohlcData: OHLCPoint[];
+  volumeData: VolumePoint[];
+  chartMode: ChartMode;
+  onChangeChartMode: (mode: ChartMode) => void;
   loading: boolean;
   error: string | null;
 };
@@ -63,6 +67,10 @@ export default function PriceChartPanel({
   activeTimeframe,
   onChangeTimeframe,
   chartData,
+  ohlcData,
+  volumeData,
+  chartMode,
+  onChangeChartMode,
   loading,
   error,
 }: Props) {
@@ -171,6 +179,14 @@ export default function PriceChartPanel({
   const safeChartData: Point[] = useMemo(() => {
     return Array.isArray(chartData) ? chartData : [];
   }, [chartData]);
+
+  const safeOhlcData: OHLCPoint[] = useMemo(() => {
+    return Array.isArray(ohlcData) ? ohlcData : [];
+  }, [ohlcData]);
+
+  const safeVolumeData: VolumePoint[] = useMemo(() => {
+    return Array.isArray(volumeData) ? volumeData : [];
+  }, [volumeData]);
 
   // Determine the price to display in header
   // Convex prices are in USD, so we multiply by fxRate
@@ -288,6 +304,36 @@ export default function PriceChartPanel({
       <div className="relative mt-4 overflow-hidden rounded-3xl border border-border/60 bg-card/40 shadow-[0_18px_55px_rgba(0,0,0,0.35)] -mx-4 sm:mx-0">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-background/40 to-transparent" />
 
+        {/* Chart mode toggle (line / candlestick) */}
+        {!isLive && (
+          <div className="absolute left-3 top-3 z-10 flex items-center gap-1">
+            <button
+              onClick={() => onChangeChartMode("line")}
+              className={[
+                "rounded-xl p-1.5 transition-colors",
+                chartMode === "line"
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              ].join(" ")}
+              aria-label="Line chart"
+            >
+              <TrendingUp className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => onChangeChartMode("candlestick")}
+              className={[
+                "rounded-xl p-1.5 transition-colors",
+                chartMode === "candlestick"
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              ].join(" ")}
+              aria-label="Candlestick chart"
+            >
+              <BarChart3 className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         <div className="absolute right-3 top-3 z-10">
           <TimeframeTabs
             timeframes={timeframes}
@@ -304,22 +350,26 @@ export default function PriceChartPanel({
               fxRate={fxRate}
             />
           ) : loading && !safeChartData.length ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
-              Loading chart…
+            <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">
+              Loading chart...
             </div>
           ) : error ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
+            <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">
               {error}
             </div>
           ) : !safeChartData.length ? (
-            <div className="flex h-[210px] items-center justify-center text-xs text-muted-foreground">
+            <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">
               No chart data.
             </div>
           ) : (
-            <LineOnlyChart
-              data={safeChartData}
+            <TradingChart
+              mode={chartMode}
+              lineData={safeChartData}
+              ohlcData={safeOhlcData}
+              volumeData={safeVolumeData}
               displayCurrency={displayCurrency}
               timeframe={activeTimeframe}
+              height={300}
             />
           )}
         </div>

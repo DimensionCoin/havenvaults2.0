@@ -16,6 +16,7 @@ import {
   XCircle,
   ExternalLink,
   Wallet,
+  Info,
 } from "lucide-react";
 
 import { formatMoney, safeNum, safeStr } from "./utils";
@@ -26,6 +27,11 @@ import {
   type CloseStatus,
 } from "@/hooks/useServerSponsoredBoosterClose";
 import { useBalance } from "@/providers/BalanceProvider";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* ───────── TYPES ───────── */
 
@@ -59,7 +65,9 @@ type BoosterRowView = {
   isLong?: boolean | null; // kept for safety, but UI assumes long only
   createdAt?: string | number | Date | null;
 
+  entryUsd?: number | string | null;
   collateralUsd?: number | string | null;
+  sizeUsd?: number | string | null;
   spotValueUsd?: number | string | null;
   pnlUsd?: number | string | null;
   liqUsd?: number | string | null;
@@ -129,6 +137,9 @@ const STAGE_CONFIG: Record<
   },
 };
 
+const BOOSTER_FEE_BPS = 200;
+const JUP_BASE_FEE_BPS = 6;
+
 /* ───────── HELPERS ───────── */
 
 function clamp(n: number, min: number, max: number) {
@@ -170,9 +181,17 @@ function asBoosterView(row: BoosterRow | null | undefined): BoosterRowView {
         ? (r.createdAt as string | number | Date)
         : null,
 
+    entryUsd:
+      typeof r.entryUsd === "number" || typeof r.entryUsd === "string"
+        ? (r.entryUsd as number | string)
+        : null,
     collateralUsd:
       typeof r.collateralUsd === "number" || typeof r.collateralUsd === "string"
         ? (r.collateralUsd as number | string)
+        : null,
+    sizeUsd:
+      typeof r.sizeUsd === "number" || typeof r.sizeUsd === "string"
+        ? (r.sizeUsd as number | string)
         : null,
     spotValueUsd:
       typeof r.spotValueUsd === "number" || typeof r.spotValueUsd === "string"
@@ -546,19 +565,58 @@ export default function PositionsPanel({
               const pnlUsd = safeNum(view.pnlUsd, 0);
               const liqUsd = safeNum(view.liqUsd, 0);
               const sizeTokens = safeNum(view.sizeTokens, 0);
+              const isLong = view.isLong !== false;
 
               const collateralLocal = toLocal(collateralUsd);
               const positionValueLocal = toLocal(spotValueUsd);
               const pnlLocal = toLocal(pnlUsd);
+
+              const entryPriceUsd =
+                sizeTokens > 0
+                  ? isLong
+                    ? (spotValueUsd - pnlUsd) / sizeTokens
+                    : (spotValueUsd + pnlUsd) / sizeTokens
+                  : 0;
+
+              const feeBps = BOOSTER_FEE_BPS;
+              const feeRate = feeBps / 10_000;
+              const impliedMarginUsd =
+                feeRate > 0 ? collateralUsd / (1 - feeRate) : collateralUsd;
+              const feeUsd = Math.max(0, impliedMarginUsd - collateralUsd);
+              const feePerTokenUsd =
+                sizeTokens > 0 ? feeUsd / sizeTokens : 0;
+              const jupFeeRate = JUP_BASE_FEE_BPS / 10_000;
+              const entryNotionalUsd =
+                entryPriceUsd > 0 ? entryPriceUsd * sizeTokens : 0;
+              const jupOpenFeeUsd = entryNotionalUsd * jupFeeRate;
+              const jupCloseFeeUsd = spotValueUsd * jupFeeRate;
+
+              const breakEvenUsd =
+                entryPriceUsd > 0 && sizeTokens > 0
+                  ? isLong
+                    ? (entryPriceUsd * (1 + jupFeeRate) + feePerTokenUsd) /
+                      (1 - jupFeeRate)
+                    : (entryPriceUsd * (1 - jupFeeRate) - feePerTokenUsd) /
+                      (1 + jupFeeRate)
+                  : 0;
+              const breakEvenLocal = toLocal(breakEvenUsd);
+              const netPnlUsd = pnlUsd - feeUsd;
+              const netPnlLocal = toLocal(netPnlUsd);
+              const havenFeeLocal = toLocal(feeUsd);
+              const havenFeeLabel = formatMoney(havenFeeLocal, displayCurrency);
+              const jupOpenFeeLocal = toLocal(jupOpenFeeUsd);
+              const jupCloseFeeLocal = toLocal(jupCloseFeeUsd);
+              const totalFeeUsd = feeUsd + jupOpenFeeUsd + jupCloseFeeUsd;
+              const totalFeeLocal = toLocal(totalFeeUsd);
 
               // ✅ Take home = collateral + P&L (in USD then FX)
               const takeHomeUsd = collateralUsd + pnlUsd;
               const takeHomeLocal = toLocal(takeHomeUsd);
 
               const pnlClass =
-                pnlLocal > 0
+                netPnlLocal > 0
                   ? "text-primary"
-                  : pnlLocal < 0
+                  : netPnlLocal < 0
                     ? "text-destructive"
                     : "text-muted-foreground";
 
@@ -615,10 +673,10 @@ export default function PositionsPanel({
                     </div>
 
                     <div className="text-muted-foreground">
-                      P&amp;L
+                      Net P&amp;L
                       <div className={`font-semibold ${pnlClass}`}>
-                        {pnlLocal >= 0 ? "+" : ""}
-                        {formatMoney(pnlLocal, displayCurrency)}
+                        {netPnlLocal >= 0 ? "+" : ""}
+                        {formatMoney(netPnlLocal, displayCurrency)}
                       </div>
                     </div>
 
@@ -627,6 +685,52 @@ export default function PositionsPanel({
                       <div className="font-semibold text-foreground">
                         {liqUsd > 0
                           ? formatMoney(toLocal(liqUsd), displayCurrency)
+                          : "—"}
+                      </div>
+                    </div>
+
+                    <div className="text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <span>Break-even (incl. fee)</span>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label="Break-even details"
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-border bg-card/60 text-muted-foreground/80 hover:text-foreground hover:bg-card/80 transition"
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="start"
+                            side="bottom"
+                            className="max-w-[260px] rounded-xl border bg-card/95 p-3 text-[11px] text-muted-foreground shadow-fintech-lg"
+                          >
+                            <div className="space-y-1.5">
+                              <div className="text-xs font-semibold text-foreground">
+                                Break-even details
+                              </div>
+                              <div>
+                                Total fees (est.):{" "}
+                                <span className="font-semibold text-foreground">
+                                  {formatMoney(
+                                    totalFeeLocal,
+                                    displayCurrency
+                                  )}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground/80">
+                                Total fees include Haven (2% of margin) + Jupiter
+                                base fee (0.06% open + 0.06% close est.).
+                              </div>
+                            </div>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <div className="font-semibold text-foreground">
+                        {breakEvenUsd > 0 && Number.isFinite(breakEvenUsd)
+                          ? formatMoney(breakEvenLocal, displayCurrency)
                           : "—"}
                       </div>
                     </div>

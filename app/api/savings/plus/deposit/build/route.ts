@@ -667,8 +667,11 @@ async function POSTHandler(req: NextRequest) {
     const conn = getConnection();
 
     stage = "tokenInfo";
-    const usdcProgId = await getTokenProgramId(conn, USDC_MINT);
-    const usdcDecimals = await getDecimals(conn, USDC_MINT);
+    const [usdcProgId, usdcDecimals, jupUsdProgId] = await Promise.all([
+      getTokenProgramId(conn, USDC_MINT),
+      getDecimals(conn, USDC_MINT),
+      getTokenProgramId(conn, JUPUSD_MINT),
+    ]);
 
     stage = "amount";
     const amountUiRaw = readAmountUi(body);
@@ -730,6 +733,19 @@ async function POSTHandler(req: NextRequest) {
       });
     }
 
+    // ─────────── Existing JupUSD balance (to sweep into vault) ───────────
+    stage = "jupUsdBalance";
+    const userJupUsdAta = getAssociatedTokenAddressSync(
+      JUPUSD_MINT,
+      userOwner,
+      false,
+      jupUsdProgId,
+    );
+    const jupUsdBalResp = await conn
+      .getTokenAccountBalance(userJupUsdAta, "confirmed")
+      .catch(() => null);
+    const existingJupUsdUnits = BigInt(jupUsdBalResp?.value?.amount || "0");
+
     // ─────────────────────────────────────────────────────────────
     // STEP 1: Quote USDC → JupUSD
     // ─────────────────────────────────────────────────────────────
@@ -767,7 +783,10 @@ async function POSTHandler(req: NextRequest) {
       });
     }
 
-    const jupUsdDepositAmount = minOut;
+    // Deposit ALL JupUSD in wallet: existing balance + guaranteed swap minOut
+    const jupUsdDepositAmount = (
+      BigInt(minOut) + existingJupUsdUnits
+    ).toString();
 
     // ─────────────────────────────────────────────────────────────
     // STEP 2: Swap instructions (USDC → JupUSD)
@@ -950,7 +969,7 @@ async function POSTHandler(req: NextRequest) {
     const buildTime = Date.now() - startTime;
 
     console.log(
-      `[PLUS/DEPOSIT/BUILD] ${traceId} SUCCESS ${buildTime}ms usdcIn=${amountUnits.toString()} jupUsdOut=${outAmount} jupUsdDeposit(minOut)=${jupUsdDepositAmount} txSize=${rawLen}`,
+      `[PLUS/DEPOSIT/BUILD] ${traceId} SUCCESS ${buildTime}ms usdcIn=${amountUnits.toString()} jupUsdOut=${outAmount} existingJupUsd=${existingJupUsdUnits.toString()} jupUsdDeposit(total)=${jupUsdDepositAmount} txSize=${rawLen}`,
     );
 
     return NextResponse.json({
@@ -962,6 +981,7 @@ async function POSTHandler(req: NextRequest) {
       usdcInUnits: amountUnits.toString(),
       jupUsdQuotedOutUnits: outAmount,
       jupUsdDepositUnits: jupUsdDepositAmount,
+      jupUsdExistingUnits: existingJupUsdUnits.toString(),
       slippageBps,
 
       payer: HAVEN_FEEPAYER.toBase58(),
