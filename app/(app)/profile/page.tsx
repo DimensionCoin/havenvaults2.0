@@ -9,6 +9,7 @@ import ThemeToggle from "@/components/shared/ThemeToggle"; // ✅ add your exist
 import {
   ArrowLeft,
   Calendar,
+  
   Wallet,
   Globe2,
   Users,

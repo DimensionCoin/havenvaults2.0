@@ -7,8 +7,10 @@ import React, {
   useEffect,
   useState,
   useCallback,
+  useRef,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { usePrivy } from "@privy-io/react-auth";
 import Loading from "@/components/shared/Loading";
 
 // This should match (or be a subset of) what /api/auth/user returns
@@ -152,10 +154,14 @@ function getSavingsByType(
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { ready: privyReady, authenticated: privyAuthenticated } = usePrivy();
 
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Guard to prevent concurrent session cleanup
+  const cleaningUpRef = useRef(false);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -201,6 +207,44 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     fetchUser();
   }, [fetchUser]);
+
+  // ✅ Privy session sync: detect when Privy expires but Haven session is still alive
+  // This prevents the "deposits not working" bug where useWallets() returns nothing
+  useEffect(() => {
+    // Wait for Privy to initialize
+    if (!privyReady) return;
+
+    // If Privy is authenticated, everything is fine
+    if (privyAuthenticated) return;
+
+    // On public routes, no action needed
+    if (isPublicRoute(pathname)) return;
+
+    // Privy is ready but NOT authenticated on a protected route
+    // This means the Privy session expired while the Haven session is still valid
+    if (cleaningUpRef.current) return;
+    cleaningUpRef.current = true;
+
+    console.warn(
+      "[UserProvider] Privy session expired on protected route, clearing Haven session"
+    );
+
+    // Clear the stale Haven session and redirect to sign-in
+    (async () => {
+      try {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          credentials: "include",
+        });
+      } catch (err) {
+        console.error("[UserProvider] Failed to clear Haven session:", err);
+      }
+
+      setUser(null);
+      router.replace("/sign-in");
+      cleaningUpRef.current = false;
+    })();
+  }, [privyReady, privyAuthenticated, pathname, router]);
 
   // Redirect logic for onboard / dashboard / auth pages
   useEffect(() => {
